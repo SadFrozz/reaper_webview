@@ -14,7 +14,7 @@
     #include <stdio.h> // Для sprintf
     
     #if __has_include("deps/WebView2.h")
-        #include "deps/WebView2.hh"
+        #include "deps/WebView2.h"
         #include "deps/wil/com.h"
     #else
         #include "WebView2.h"
