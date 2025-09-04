@@ -6,7 +6,6 @@
     #define REAPER_PLUGIN_VERSION "0.4"
     #define _WIN32_WINNT 0x0601
     #define WM_APP_NAVIGATE (WM_APP + 1)
-    #define WM_APP_RUNJS (WM_APP + 2)
 
     #include <windows.h>
     #include <string>
@@ -20,10 +19,11 @@
 #endif
 
 // SDK REAPER
+#include "WDL/wdltypes.h"  // Добавлено для WDL_INT64
 #include "sdk/reaper_plugin_functions.h"
 
 // --- Глобальные переменные ---
-REAPER_PLUGIN_INSTANCE g_hInst = NULL;
+void* g_hInst = NULL;  // Изменено с REAPER_PLUGIN_INSTANCE на void*
 HWND g_hwndParent = NULL;
 
 #ifdef _WIN32
@@ -39,7 +39,7 @@ HWND g_hwndParent = NULL;
 // --- Прототипы и действия ---
 void OpenWebViewWindow(std::string url);
 static gaccel_register_t g_action = { { 0, 0, 0 }, "WebView: Open (default)" };
-void Action_OpenWebView(COMMAND_T* t) { OpenWebViewWindow("https://www.reaper.fm/"); }
+void Action_OpenWebView(void* t) { OpenWebViewWindow("https://www.reaper.fm/"); }  // Изменен тип параметра
 
 void WEBVIEW_Navigate(const char* url) {
     if (url && strlen(url) > 0) {
@@ -64,33 +64,9 @@ void WEBVIEW_Navigate(const char* url) {
     }
 }
 
-void WEBVIEW_RunJS(const char* js) {
-    if (js && strlen(js) > 0) {
-        #ifdef _WIN32
-            if (!g_plugin_hwnd || !IsWindow(g_plugin_hwnd)) {
-                OpenWebViewWindow("about:blank");
-                char* js_copy = _strdup(js);
-                PostMessage(g_plugin_hwnd, WM_APP_RUNJS, 0, (LPARAM)js_copy);
-            } else {
-                char* js_copy = _strdup(js);
-                PostMessage(g_plugin_hwnd, WM_APP_RUNJS, 0, (LPARAM)js_copy);
-                ShowWindow(g_plugin_hwnd, SW_SHOW);
-                SetForegroundWindow(g_plugin_hwnd);
-            }
-        #else
-            if (!g_pluginWindow) {
-                OpenWebViewWindow("about:blank");
-            }
-            NSString* nsJS = [NSString stringWithUTF8String:js];
-            [g_delegate performSelectorOnMainThread:@selector(runJS:) withObject:nsJS waitUntilDone:NO];
-            [g_pluginWindow makeKeyAndOrderFront:nil];
-        #endif
-    }
-}
-
 // --- Точка входа плагина ---
 extern "C" {
-    REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_INSTANCE hInstance, reaper_plugin_info_t* rec) {
+    REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(void* hInstance, reaper_plugin_info_t* rec) {  // Изменен тип параметра
         if (rec) {
             g_hInst = hInstance;
             g_hwndParent = rec->hwnd_main;
@@ -99,7 +75,6 @@ extern "C" {
             rec->Register("action", (void*)Action_OpenWebView);
 
             rec->Register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
-            rec->Register("API_WEBVIEW_RunJS", (void*)WEBVIEW_RunJS);
             
             return 1;
         }
@@ -125,14 +100,14 @@ void OpenWebViewWindow(std::string url) {
 
     WNDCLASS wc = { 0 };
     wc.lpfnWndProc = WebViewWndProc;
-    wc.hInstance = g_hInst;
+    wc.hInstance = (HINSTANCE)g_hInst;  // Добавлено приведение типа
     wc.lpszClassName = L"MyWebViewPlugin_WindowClass";
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClass(&wc);
 
     g_plugin_hwnd = CreateWindowEx(0, L"MyWebViewPlugin_WindowClass", L"Интегрированный WebView (Windows)",
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
-        g_hwndParent, NULL, g_hInst, (LPVOID)url.c_str());
+        g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url.c_str());  // Добавлено приведение типа
 
     if (g_plugin_hwnd) {
         ShowWindow(g_plugin_hwnd, SW_SHOW);
@@ -172,15 +147,6 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         free(url);
         break;
     }
-    case WM_APP_RUNJS: {
-        char* js = (char*)lParam;
-        if (webview && js) {
-            std::wstring w_js(js, js + strlen(js));
-            webview->ExecuteScript(w_js.c_str(), nullptr);
-        }
-        free(js);
-        break;
-    }
     case WM_SIZE:
         if (webviewController != nullptr) { RECT bounds; GetClientRect(hwnd, &bounds); webviewController->put_Bounds(bounds); }
         break;
@@ -199,7 +165,6 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
 @interface WebViewDelegate : NSObject <NSWindowDelegate>
 - (void)navigate:(NSString*)urlString;
-- (void)runJS:(NSString*)jsString;
 @end
 
 @implementation WebViewDelegate
@@ -213,11 +178,6 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         NSURL* url = [NSURL URLWithString:urlString];
         NSURLRequest* request = [NSURLRequest requestWithURL:url];
         [g_webView loadRequest:request];
-    }
-}
-- (void)runJS:(NSString*)jsString {
-    if (g_webView) {
-        [g_webView evaluateJavaScript:jsString completionHandler:nil];
     }
 }
 @end
