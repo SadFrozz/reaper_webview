@@ -48,7 +48,6 @@ static void Action_OpenWebView(int command, int val, int valhw, int relmode, HWN
 // Регистрационная структура для действия - ИСПРАВЛЕННАЯ
 static gaccel_register_t g_accel_reg = {
     { 0, 0, 0 }, 
-    "WebView_OpenDefault",  // Уникальный идентификатор
     "WebView: Open (default)"  // Отображаемое имя
 };
 
