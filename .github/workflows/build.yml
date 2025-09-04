@@ -21,12 +21,18 @@ jobs:
     - name: Checkout plugin repository
       uses: actions/checkout@v4
 
-    # ❗️ ИЗМЕНЕНИЕ: Просто скачиваем SDK, ничего не перемещаем
     - name: Checkout REAPER SDK
       uses: actions/checkout@v4
       with:
         repository: 'justinfrankel/reaper-sdk'
         path: 'reaper-sdk'
+
+    # ❗️ ВАШЕ ПРЕДЛОЖЕНИЕ: Клонируем WDL как отдельную зависимость
+    - name: Checkout WDL library
+      uses: actions/checkout@v4
+      with:
+        repository: 'justinfrankel/WDL'
+        path: 'WDL'
 
     - name: Build with CMake via Preset
       uses: lukka/run-cmake@v10
@@ -47,12 +53,18 @@ jobs:
     - name: Checkout plugin repository
       uses: actions/checkout@v4
 
-    # ❗️ ИЗМЕНЕНИЕ: Просто скачиваем SDK, ничего не перемещаем
     - name: Checkout REAPER SDK
       uses: actions/checkout@v4
       with:
         repository: 'justinfrankel/reaper-sdk'
         path: 'reaper-sdk'
+
+    # ❗️ ВАШЕ ПРЕДЛОЖЕНИЕ: Клонируем WDL как отдельную зависимость
+    - name: Checkout WDL library
+      uses: actions/checkout@v4
+      with:
+        repository: 'justinfrankel/WDL'
+        path: 'WDL'
 
     - name: Build with CMake via Preset (Universal)
       uses: lukka/run-cmake@v10

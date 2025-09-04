@@ -23,6 +23,9 @@ elseif(APPLE)
 endif()
 
 # --- Общие настройки ---
-# ❗️ ИЗМЕНЕНИЕ: Указываем единственный правильный путь к заголовочным файлам
-target_include_directories(reaper_webview PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/reaper-sdk/sdk)
+# ❗️ Указываем пути к обоим репозиториям
+target_include_directories(reaper_webview PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/reaper-sdk/sdk
+    ${CMAKE_CURRENT_SOURCE_DIR}/WDL
+)
 set_target_properties(reaper_webview PROPERTIES PREFIX "")
