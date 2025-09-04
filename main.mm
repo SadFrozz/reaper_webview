@@ -38,8 +38,20 @@ HWND g_hwndParent = NULL;
 
 // --- Прототипы и действия ---
 void OpenWebViewWindow(std::string url);
-static gaccel_register_t g_action = { { 0, 0, 0 }, "WebView: Open (default)" };
-void Action_OpenWebView(void* t) { OpenWebViewWindow("https://www.reaper.fm/"); }
+
+// Правильно объявляем действие
+static void Action_OpenWebView(int command, int val, int valhw, int relmode, HWND hwnd)
+{
+    OpenWebViewWindow("https://www.reaper.fm/");
+}
+
+// Регистрационная структура для действия
+static gaccel_register_t g_accel_reg = {
+    { 0, 0, 0 }, 
+    "WebView_OpenDefault",  // Уникальный идентификатор
+    NULL, 
+    "WebView: Open (default)"  // Отображаемое имя
+};
 
 void WEBVIEW_Navigate(const char* url) {
     if (url && strlen(url) > 0) {
@@ -71,8 +83,16 @@ extern "C" {
             g_hInst = hInstance;
             g_hwndParent = rec->hwnd_main;
 
-            rec->Register("gaccel", &g_action);
-            rec->Register("action", (void*)Action_OpenWebView);
+            // Проверяем версию API
+            if (rec->caller_version != REAPER_PLUGIN_VERSION) {
+                return 0;
+            }
+
+            // Регистрируем действие
+            g_accel_reg.accel.cmd = rec->Register("command_id", (void*)Action_OpenWebView);
+            if (g_accel_reg.accel.cmd > 0) {
+                rec->Register("gaccel", &g_accel_reg);
+            }
 
             rec->Register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
             
@@ -130,8 +150,12 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         // Попытка динамической загрузки WebView2
         HMODULE hWebView2 = LoadLibraryA("WebView2Loader.dll");
         if (!hWebView2) {
-            MessageBoxA(hwnd, "WebView2Loader.dll not found. Please install WebView2 Runtime.", "Error", MB_ICONERROR);
-            break;
+            // Пытаемся найти в других местах
+            hWebView2 = LoadLibraryA("Microsoft.Web.WebView2.Loader.dll");
+            if (!hWebView2) {
+                MessageBoxA(hwnd, "WebView2 Runtime not found. Please install Microsoft Edge WebView2 Runtime.", "Error", MB_ICONERROR);
+                break;
+            }
         }
 
         CreateWebView2EnvironmentWithOptions_t pCreateWebView2EnvironmentWithOptions = 
@@ -146,14 +170,23 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         pCreateWebView2EnvironmentWithOptions(nullptr, nullptr, nullptr,
             Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
                 [hwnd, w_url, hWebView2](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+                    if (FAILED(result)) {
+                        MessageBoxA(hwnd, "Failed to create WebView2 environment", "Error", MB_ICONERROR);
+                        FreeLibrary(hWebView2);
+                        return S_OK;
+                    }
+
                     env->CreateCoreWebView2Controller(hwnd, Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                         [hwnd, w_url, hWebView2](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             if (controller != nullptr) {
                                 webviewController = controller;
                                 webviewController->get_CoreWebView2(&webview);
-                                RECT bounds; GetClientRect(hwnd, &bounds);
+                                RECT bounds; 
+                                GetClientRect(hwnd, &bounds);
                                 webviewController->put_Bounds(bounds);
                                 webview->Navigate(w_url.c_str());
+                            } else {
+                                MessageBoxA(hwnd, "Failed to create WebView2 controller", "Error", MB_ICONERROR);
                             }
                             FreeLibrary(hWebView2); // Освобождаем библиотеку после использования
                             return S_OK;
@@ -172,10 +205,18 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         break;
     }
     case WM_SIZE:
-        if (webviewController != nullptr) { RECT bounds; GetClientRect(hwnd, &bounds); webviewController->put_Bounds(bounds); }
+        if (webviewController != nullptr) { 
+            RECT bounds; 
+            GetClientRect(hwnd, &bounds); 
+            webviewController->put_Bounds(bounds); 
+        }
         break;
     case WM_DESTROY:
-        if (webviewController) webviewController->Close();
+        if (webviewController) {
+            webviewController->Close();
+            webviewController = nullptr;
+            webview = nullptr;
+        }
         g_plugin_hwnd = NULL;
         break;
     default:
@@ -200,8 +241,10 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 - (void)navigate:(NSString*)urlString {
     if (g_webView) {
         NSURL* url = [NSURL URLWithString:urlString];
-        NSURLRequest* request = [NSURLRequest requestWithURL:url];
-        [g_webView loadRequest:request];
+        if (url) {
+            NSURLRequest* request = [NSURLRequest requestWithURL:url];
+            [g_webView loadRequest:request];
+        }
     }
 }
 @end
@@ -230,7 +273,9 @@ void OpenWebViewWindow(std::string url) {
         [g_pluginWindow setReleasedWhenClosed:NO];
 
         NSString* nsURL = [NSString stringWithUTF8String:url.c_str()];
-        [g_delegate navigate:nsURL];
+        if (nsURL) {
+            [g_delegate navigate:nsURL];
+        }
     }
 }
 
