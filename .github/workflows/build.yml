@@ -21,18 +21,21 @@ jobs:
     - name: Checkout plugin repository
       uses: actions/checkout@v4
 
+    # ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Создаем общую папку для зависимостей
+    - name: Create dependencies directory
+      run: mkdir dependencies
+
     - name: Checkout REAPER SDK
       uses: actions/checkout@v4
       with:
         repository: 'justinfrankel/reaper-sdk'
-        path: 'reaper-sdk'
+        path: 'dependencies/reaper-sdk' # ❗️ Помещаем внутрь
 
-    # ❗️ ВАШЕ ПРЕДЛОЖЕНИЕ: Клонируем WDL как отдельную зависимость
     - name: Checkout WDL library
       uses: actions/checkout@v4
       with:
         repository: 'justinfrankel/WDL'
-        path: 'WDL'
+        path: 'dependencies/WDL' # ❗️ Помещаем внутрь
 
     - name: Build with CMake via Preset
       uses: lukka/run-cmake@v10
@@ -53,18 +56,21 @@ jobs:
     - name: Checkout plugin repository
       uses: actions/checkout@v4
 
+    # ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Создаем общую папку для зависимостей
+    - name: Create dependencies directory
+      run: mkdir dependencies
+
     - name: Checkout REAPER SDK
       uses: actions/checkout@v4
       with:
         repository: 'justinfrankel/reaper-sdk'
-        path: 'reaper-sdk'
+        path: 'dependencies/reaper-sdk' # ❗️ Помещаем внутрь
 
-    # ❗️ ВАШЕ ПРЕДЛОЖЕНИЕ: Клонируем WDL как отдельную зависимость
     - name: Checkout WDL library
       uses: actions/checkout@v4
       with:
         repository: 'justinfrankel/WDL'
-        path: 'WDL'
+        path: 'dependencies/WDL' # ❗️ Помещаем внутрь
 
     - name: Build with CMake via Preset (Universal)
       uses: lukka/run-cmake@v10

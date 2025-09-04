@@ -23,9 +23,9 @@ elseif(APPLE)
 endif()
 
 # --- Общие настройки ---
-# ❗️ Указываем пути к обоим репозиториям
+# ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Указываем пути к папкам внутри 'dependencies'
 target_include_directories(reaper_webview PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}/reaper-sdk/sdk
-    ${CMAKE_CURRENT_SOURCE_DIR}/WDL
+    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/reaper-sdk/sdk
+    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/WDL
 )
 set_target_properties(reaper_webview PROPERTIES PREFIX "")
