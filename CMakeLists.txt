@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
 project(ReaperWebViewPlugin)
 
+# Создание симлинков для корректной структуры зависимостей
+execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk/WDL)
+execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/WDL ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk/WDL/WDL)
+
 # --- Настройки для Windows ---
 if(WIN32)
     find_package(NuGet REQUIRED)
@@ -10,7 +14,7 @@ if(WIN32)
     target_include_directories(reaper_webview PRIVATE 
         ${CMAKE_CURRENT_BINARY_DIR}/packages/Microsoft.Web.WebView2.1.0.2210.55/build/native/include
         ${CMAKE_CURRENT_SOURCE_DIR}/dependencies
-        ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk/sdk
+        ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk
         ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/WDL
     )
     
@@ -20,13 +24,13 @@ if(WIN32)
 elseif(APPLE)
     # Добавляем необходимые флаги для Objective-C++
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -x objective-c++ -std=c++11")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fobjc-arc")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/WDL -fobjc-arc")
     
     add_library(reaper_webview MODULE main.mm)
 
     target_include_directories(reaper_webview PRIVATE 
         ${CMAKE_CURRENT_SOURCE_DIR}/dependencies
-        ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk/sdk
+        ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk
         ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/WDL
         ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/WDL/swell
     )

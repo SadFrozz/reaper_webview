@@ -5,7 +5,7 @@
 #ifdef _WIN32
     #define REAPER_PLUGIN_VERSION "0.4"
     #define _WIN32_WINNT 0x0601
-    #define WM_APP_NAVIGATE (WM_APP + 1)  // Fixed typo: NAVITATE -> NAVIGATE
+    #define WM_APP_NAVIGATE (WM_APP + 1)
 
     #include <windows.h>
     #include <string>
@@ -15,7 +15,7 @@
 #else
     #import <Cocoa/Cocoa.h>
     #import <WebKit/WebKit.h>
-    @class WebViewDelegate;
+    #include <string>
 #endif
 
 // SDK REAPER
@@ -32,7 +32,7 @@ HWND g_hwndParent = NULL;
 #else
     NSWindow* g_pluginWindow = nil;
     WKWebView* g_webView = nil;
-    WebViewDelegate* g_delegate = nil;
+    id g_delegate = nil;
 #endif
 
 // --- Прототипы и действия ---
@@ -56,7 +56,7 @@ void WEBVIEW_Navigate(const char* url) {
                 OpenWebViewWindow(url);
             } else {
                 NSString* nsURL = [NSString stringWithUTF8String:url];
-                [(WebViewDelegate*)g_delegate performSelectorOnMainThread:@selector(navigate:) withObject:nsURL waitUntilDone:NO];
+                [g_delegate performSelectorOnMainThread:@selector(navigate:) withObject:nsURL waitUntilDone:NO];
                 [g_pluginWindow makeKeyAndOrderFront:nil];
             }
         #endif
@@ -105,7 +105,7 @@ void OpenWebViewWindow(std::string url) {
     RegisterClass(&wc);
 
     g_plugin_hwnd = CreateWindowEx(0, L"MyWebViewPlugin_WindowClass", L"Интегрированный WebView (Windows)",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,  // Fixed typo: WS_OVERЛАППEDWINDOW -> WS_OVERLAPPEDWINDOW
+        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
         g_hwndParent, NULL, g_hInst, (LPVOID)url.c_str());
 
     if (g_plugin_hwnd) {
@@ -180,7 +180,6 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     }
 }
 @end
-
 
 void OpenWebViewWindow(std::string url) {
     if (g_pluginWindow) {

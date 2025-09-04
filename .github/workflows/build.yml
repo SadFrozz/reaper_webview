@@ -49,13 +49,18 @@ jobs:
         repository: 'justinfrankel/reaper-sdk'
         path: 'dependencies/sdk'
 
+    - name: Create symlinks for correct structure
+      run: |
+        # Создаем необходимые симлинки
+        ln -s ../../WDL dependencies/sdk/WDL
+        ln -s ../WDL dependencies/WDL
+
     - name: Verify directory structure
       run: |
         ls -la dependencies/
         ls -la dependencies/WDL/
         ls -la dependencies/sdk/
-        ls -la dependencies/sdk/sdk/
-        find dependencies/sdk -name "reaper_plugin_functions.h"
+        find dependencies -name "reaper_plugin.h" -o -name "swell.h"
 
     - name: Build with CMake via Preset
       uses: lukka/run-cmake@v10
