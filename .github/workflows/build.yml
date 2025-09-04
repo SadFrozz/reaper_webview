@@ -1,0 +1,71 @@
+name: Build REAPER Plugin (Multi-Arch)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      # ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Матрица для сборки x64 и x86
+      matrix:
+        include:
+          - arch: 'x64'
+            platform: 'x64'
+          - arch: 'Win32'
+            platform: 'x86'
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download REAPER SDK
+      run: |
+        curl -L -o reaper_sdk.zip https://www.reaper.fm/sdk/reaper_sdk.zip
+        Expand-Archive -Path reaper_sdk.zip -DestinationPath .
+        Move-Item -Path reaper_sdk/REAPER/sdk/* -DestinationPath sdk/
+      shell: pwsh
+
+    - name: Build with CMake (${{ matrix.arch }})
+      uses: lukka/run-cmake@v10
+      with:
+        cmakeListsTxtPath: '${{ github.workspace }}/CMakeLists.txt'
+        buildDirectory: '${{ github.workspace }}/build'
+        # ❗️ Передаем архитектуру из матрицы в CMake
+        cmakeAppendedArgs: '-A ${{ matrix.arch }}'
+
+    - name: Upload Windows Artifact (${{ matrix.platform }})
+      uses: actions/upload-artifact@v4
+      with:
+        # ❗️ Уникальное имя для каждого артефакта
+        name: reaper-webview-windows-${{ matrix.platform }}
+        path: build/Release/reaper_webview.dll
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download REAPER SDK
+      run: |
+        curl -L -o reaper_sdk.zip https://www.reaper.fm/sdk/reaper_sdk.zip
+        unzip -d . reaper_sdk.zip
+        mkdir sdk
+        mv reaper_sdk/REAPER/sdk/* sdk/
+
+    - name: Build with CMake (Universal)
+      uses: lukka/run-cmake@v10
+      with:
+        cmakeListsTxtPath: '${{ github.workspace }}/CMakeLists.txt'
+        buildDirectory: '${{ github.workspace }}/build'
+
+    - name: Upload macOS Artifact (Universal)
+      uses: actions/upload-artifact@v4
+      with:
+        name: reaper-webview-macos-universal
+        path: build/reaper_webview.dylib
