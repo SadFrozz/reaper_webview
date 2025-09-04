@@ -40,8 +40,8 @@ jobs:
       run: |
         # Создаем ожидаемую структуру папок
         mkdir -p dependencies/sdk
-        ln -sf ../reaper-sdk dependencies/sdk/sdk
-        ln -sf ../WDL dependencies/sdk/WDL
+        ln -sf ../reaper-sdk sdk/sdk
+        ln -sf ../WDL sdk/WDL
         
         # Создаем симлинки для ожидаемой структуры reaper-sdk
         cd dependencies/reaper-sdk
@@ -50,8 +50,7 @@ jobs:
 
     - name: Verify directory structure
       run: |
-        ls -la dependencies/
-        ls -la dependencies/sdk/
+        ls -la /sdk/
         find dependencies -name "reaper_plugin_functions.h" -o -name "swell.h"
         ls -la dependencies/reaper-sdk/  # Проверяем симлинк в reaper-sdk
 

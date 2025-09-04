@@ -19,8 +19,8 @@
 #endif
 
 // SDK REAPER
-#include "reaper_plugin_functions.h"
-#include "swell.h"
+#include "reaper-sdk/sdk/reaper_plugin_functions.h"
+#include "WDL/WDL/swell.h"
 
 // --- Глобальные переменные ---
 REAPER_PLUGIN_INSTANCE g_hInst = NULL;
