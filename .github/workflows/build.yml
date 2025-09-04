@@ -7,35 +7,49 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
     strategy:
       matrix:
+        os: [windows-latest, macos-latest]
         include:
-          - preset: 'windows-x64'
+          - os: windows-latest
+            preset: 'windows-x64'
             platform: 'x64'
-          - preset: 'windows-x86'
+            artifact_name: 'reaper_webview.dll'
+            artifact_path: 'build/Release/reaper_webview.dll'
+          - os: windows-latest
+            preset: 'windows-x86'
             platform: 'x86'
+            artifact_name: 'reaper_webview.dll'
+            artifact_path: 'build/Release/reaper_webview.dll'
+          - os: macos-latest
+            preset: 'macos-universal'
+            platform: 'universal'
+            artifact_name: 'reaper_webview.dylib'
+            artifact_path: 'build/reaper_webview.dylib'
+
+    runs-on: ${{ matrix.os }}
 
     steps:
     - name: Checkout plugin repository
       uses: actions/checkout@v4
 
-    # ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Создаем общую папку для зависимостей
+    # ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Создаем правильную структуру
     - name: Create dependencies directory
       run: mkdir dependencies
-
-    - name: Checkout REAPER SDK
-      uses: actions/checkout@v4
-      with:
-        repository: 'justinfrankel/reaper-sdk'
-        path: 'dependencies/reaper-sdk' # ❗️ Помещаем внутрь
 
     - name: Checkout WDL library
       uses: actions/checkout@v4
       with:
         repository: 'justinfrankel/WDL'
-        path: 'dependencies/WDL' # ❗️ Помещаем внутрь
+        path: 'dependencies/WDL'
+
+    - name: Checkout and place REAPER SDK
+      shell: bash
+      run: |
+        git clone --depth 1 https://github.com/justinfrankel/reaper-sdk.git reaper-sdk-tmp
+        mv reaper-sdk-tmp/sdk dependencies/sdk
+        rm -rf reaper-sdk-tmp
 
     - name: Build with CMake via Preset
       uses: lukka/run-cmake@v10
@@ -43,43 +57,8 @@ jobs:
         configurePreset: '${{ matrix.preset }}'
         buildPreset: '${{ matrix.preset }}'
 
-    - name: Upload Windows Artifact (${{ matrix.platform }})
+    - name: Upload Artifact (${{ matrix.platform }})
       uses: actions/upload-artifact@v4
       with:
-        name: reaper-webview-windows-${{ matrix.platform }}
-        path: build/Release/reaper_webview.dll
-
-  build-macos:
-    runs-on: macos-latest
-
-    steps:
-    - name: Checkout plugin repository
-      uses: actions/checkout@v4
-
-    # ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Создаем общую папку для зависимостей
-    - name: Create dependencies directory
-      run: mkdir dependencies
-
-    - name: Checkout REAPER SDK
-      uses: actions/checkout@v4
-      with:
-        repository: 'justinfrankel/reaper-sdk'
-        path: 'dependencies/reaper-sdk' # ❗️ Помещаем внутрь
-
-    - name: Checkout WDL library
-      uses: actions/checkout@v4
-      with:
-        repository: 'justinfrankel/WDL'
-        path: 'dependencies/WDL' # ❗️ Помещаем внутрь
-
-    - name: Build with CMake via Preset (Universal)
-      uses: lukka/run-cmake@v10
-      with:
-        configurePreset: 'macos-universal'
-        buildPreset: 'macos-universal'
-
-    - name: Upload macOS Artifact (Universal)
-      uses: actions/upload-artifact@v4
-      with:
-        name: reaper-webview-macos-universal
-        path: build/reaper_webview.dylib
+        name: reaper-webview-${{ matrix.os }}-${{ matrix.platform }}
+        path: ${{ matrix.artifact_path }}

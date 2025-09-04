@@ -23,10 +23,6 @@ elseif(APPLE)
 endif()
 
 # --- Общие настройки ---
-# ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Указываем корневую папку 'dependencies',
-# чтобы относительный путь ../WDL сработал правильно.
-target_include_directories(reaper_webview PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies 
-    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/reaper-sdk/sdk
-)
+# ❗️ Указываем путь к папке, содержащей и sdk, и WDL
+target_include_directories(reaper_webview PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dependencies)
 set_target_properties(reaper_webview PROPERTIES PREFIX "")
