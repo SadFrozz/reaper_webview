@@ -3,7 +3,7 @@
 // ================================================================= //
 
 #ifdef _WIN32
-    #define REAPER_PLUGIN_VERSION "0.4"
+    #undef REAPER_PLUGIN_VERSION  // Убираем конфликтующее определение
     #define _WIN32_WINNT 0x0601
     #define WM_APP_NAVIGATE (WM_APP + 1)
 
@@ -98,14 +98,14 @@ void OpenWebViewWindow(std::string url) {
         return;
     }
 
-    WNDCLASS wc = { 0 };
+    WNDCLASSA wc = { 0 };  // Используем ANSI версию
     wc.lpfnWndProc = WebViewWndProc;
     wc.hInstance = (HINSTANCE)g_hInst;
-    wc.lpszClassName = L"MyWebViewPlugin_WindowClass";
+    wc.lpszClassName = "MyWebViewPlugin_WindowClass";  // ANSI строка
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    RegisterClass(&wc);
+    RegisterClassA(&wc);
 
-    g_plugin_hwnd = CreateWindowEx(0, L"MyWebViewPlugin_WindowClass", L"Интегрированный WebView (Windows)",
+    g_plugin_hwnd = CreateWindowExA(0, "MyWebViewPlugin_WindowClass", "Интегрированный WebView (Windows)",
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
         g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url.c_str());
 
@@ -117,7 +117,7 @@ void OpenWebViewWindow(std::string url) {
 LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
     case WM_CREATE: {
-        const char* initial_url = (const char*)((LPCREATESTRUCT)lParam)->lpCreateParams;
+        const char* initial_url = (const char*)((LPCREATESTRUCTA)lParam)->lpCreateParams;
         std::wstring w_url(initial_url, initial_url + strlen(initial_url));
 
         CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, nullptr,

@@ -42,7 +42,8 @@ elseif(WIN32)
     target_compile_definitions(reaper_webview PRIVATE 
         _WIN32_WINNT=0x0601
         NOMINMAX
-        WIN32_LEAN_AND_MEAN)
+        WIN32_LEAN_AND_MEAN
+        _CRT_SECURE_NO_WARNINGS)  # Добавляем это для подавления предупреждений безопасности
     target_link_libraries(reaper_webview 
         comctl32 
         ole32 
