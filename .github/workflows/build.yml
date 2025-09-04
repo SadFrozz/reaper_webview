@@ -31,38 +31,23 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-    - name: Checkout plugin repository
-      uses: actions/checkout@v4
-
-    - name: Create dependencies directory
-      run: mkdir -p dependencies
-
-    - name: Checkout WDL library
+    - name: Checkout plugin repository with submodules
       uses: actions/checkout@v4
       with:
-        repository: 'justinfrankel/WDL'
-        path: 'dependencies/WDL'
+        submodules: recursive
 
-    - name: Checkout REAPER SDK
-      uses: actions/checkout@v4
-      with:
-        repository: 'justinfrankel/reaper-sdk'
-        path: 'dependencies/sdk'
-
-    # Исправленный шаг создания симлинков
-    - name: Create symlinks for correct structure
+    - name: Create correct directory structure
       run: |
-        # Удаляем существующие симлинки если есть
-        rm -f dependencies/sdk/WDL
-        # Создаем правильный симлинк
-        ln -s ../../WDL dependencies/sdk/WDL
-        
+        # Создаем правильную структуру папок
+        mkdir -p dependencies/sdk
+        ln -sf ../reaper-sdk dependencies/sdk/sdk
+        ln -sf ../WDL dependencies/sdk/WDL
+
     - name: Verify directory structure
       run: |
         ls -la dependencies/
-        ls -la dependencies/WDL/
         ls -la dependencies/sdk/
-        find dependencies -name "reaper_plugin.h" -o -name "swell.h"
+        find dependencies -name "reaper_plugin_functions.h" -o -name "swell.h"
 
     - name: Build with CMake via Preset
       uses: lukka/run-cmake@v10
