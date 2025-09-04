@@ -21,22 +21,16 @@ jobs:
     - name: Checkout plugin repository
       uses: actions/checkout@v4
 
+    # ❗️ ИЗМЕНЕНИЕ: Просто скачиваем SDK, ничего не перемещаем
     - name: Checkout REAPER SDK
       uses: actions/checkout@v4
       with:
         repository: 'justinfrankel/reaper-sdk'
         path: 'reaper-sdk'
 
-    - name: Prepare SDK headers
-      run: |
-        New-Item -ItemType Directory -Force -Path sdk
-        Move-Item -Path reaper-sdk/sdk/* -DestinationPath sdk/
-      shell: pwsh
-
     - name: Build with CMake via Preset
       uses: lukka/run-cmake@v10
       with:
-        # ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Используем пресеты
         configurePreset: '${{ matrix.preset }}'
         buildPreset: '${{ matrix.preset }}'
 
@@ -53,21 +47,16 @@ jobs:
     - name: Checkout plugin repository
       uses: actions/checkout@v4
 
+    # ❗️ ИЗМЕНЕНИЕ: Просто скачиваем SDK, ничего не перемещаем
     - name: Checkout REAPER SDK
       uses: actions/checkout@v4
       with:
         repository: 'justinfrankel/reaper-sdk'
         path: 'reaper-sdk'
-    
-    - name: Prepare SDK headers
-      run: |
-        mkdir sdk
-        mv reaper-sdk/sdk/* sdk/
 
     - name: Build with CMake via Preset (Universal)
       uses: lukka/run-cmake@v10
       with:
-        # ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Используем пресеты
         configurePreset: 'macos-universal'
         buildPreset: 'macos-universal'
 
