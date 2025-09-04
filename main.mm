@@ -1,5 +1,5 @@
 // ================================================================= //
-//        КРОССПЛАТФОРМЕННЫЙ WEBVIEW ПЛАГИН С API V3 (FIX)         //
+//        КРОССПЛАТФОРМЕННЫЙ WEBVIEW ПЛАГИН С API V3 (FIX 2)       //
 // ================================================================= //
 
 #ifdef _WIN32
@@ -11,7 +11,9 @@
     #include <string>
     #include <wrl.h>
     #include <wil/com.h>
-    #include "WebView2.h"
+    // Подключаем заголовочные файлы из папки deps
+    #include "deps/WebView2.h"
+    #include "deps/wil/com.h"
 #else
     #import <Cocoa/Cocoa.h>
     #import <WebKit/WebKit.h>
@@ -30,7 +32,7 @@ HWND g_hwndParent = NULL;
     HWND g_plugin_hwnd = NULL;
     wil::com_ptr<ICoreWebView2Controller> webviewController;
     wil::com_ptr<ICoreWebView2> webview;
-    HMODULE g_hWebView2Loader = NULL; // Храним хендл DLL
+    HMODULE g_hWebView2Loader = NULL;
 #else
     NSWindow* g_pluginWindow = nil;
     WKWebView* g_webView = nil;
@@ -39,18 +41,26 @@ HWND g_hwndParent = NULL;
 
 // --- Прототипы ---
 void OpenWebViewWindow(std::string url);
-void Action_OpenWebView(COMMAND_T*);
-int Action_OpenWebView_GetState(COMMAND_T*);
+
+// ИСПРАВЛЕНИЕ: Сигнатура функции должна соответствовать ожиданиям Reaper API
+static void Action_OpenWebView(int command, int val, int valhw, int relmode, HWND hwnd)
+{
+    OpenWebViewWindow("https://www.reaper.fm/");
+}
+
+// Возвращаемся к вашему оригинальному способу регистрации
+static gaccel_register_t g_accel_reg = {
+    { 0, 0, 0 },
+    "WebView: Open (default)"
+};
 
 
-// --- API-функции, экспортируемые плагином ---
 void WEBVIEW_Navigate(const char* url) {
     if (url && strlen(url) > 0) {
         #ifdef _WIN32
             if (!g_plugin_hwnd || !IsWindow(g_plugin_hwnd)) {
                 OpenWebViewWindow(url);
             } else {
-                // Копируем URL в кучу, чтобы безопасно передать через PostMessage
                 char* url_copy = _strdup(url);
                 PostMessage(g_plugin_hwnd, WM_APP_NAVIGATE, 0, (LPARAM)url_copy);
                 ShowWindow(g_plugin_hwnd, SW_SHOW);
@@ -61,7 +71,6 @@ void WEBVIEW_Navigate(const char* url) {
                 OpenWebViewWindow(url);
             } else {
                 NSString* nsURL = [NSString stringWithUTF8String:url];
-                // Вызываем навигацию в главном потоке
                 [g_delegate performSelectorOnMainThread:@selector(navigate:) withObject:nsURL waitUntilDone:NO];
                 [g_pluginWindow makeKeyAndOrderFront:nil];
             }
@@ -80,37 +89,19 @@ extern "C" {
         if (rec->caller_version != REAPER_PLUGIN_VERSION) {
             return 0;
         }
-
-        // РЕГИСТРАЦИЯ ACTION (более надежный способ)
-        static action_reg_t action;
-        action.name = "WebView: Open (default)";
-        action.id = "SWS_WEBVIEW_OPEN_DEFAULT"; // Уникальный строковый ID
-        action.doCommand = Action_OpenWebView;
-        action.getEnabled = Action_OpenWebView_GetState;
-
-        int cmdId = rec->Register("action", &action);
-        if (cmdId > 0) {
-             // Регистрируем синоним для старых скриптов, если нужно
-            rec->Register("command_id_lookup", (void*)"_SWS_WEBVIEW_OPEN_DEFAULT");
+        
+        // Регистрируем команду и получаем ее ID
+        g_accel_reg.accel.cmd = rec->Register("command_id", (void*)Action_OpenWebView);
+        if (g_accel_reg.accel.cmd > 0) {
+            // Регистрируем action в секции Actions
+            rec->Register("gaccel", &g_accel_reg);
         }
 
-
-        // РЕГИСТРАЦИЯ API
         rec->Register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
         
         return 1;
     }
 }
-
-// --- Реализация Action ---
-void Action_OpenWebView(COMMAND_T* ct) {
-    OpenWebViewWindow("https://www.reaper.fm/");
-}
-
-int Action_OpenWebView_GetState(COMMAND_T* ct) {
-    return 1; // Всегда доступно
-}
-
 
 // ================================================================= //
 //                   РЕАЛИЗАЦИЯ ДЛЯ КАЖДОЙ ПЛАТФОРМЫ                 //
@@ -119,7 +110,6 @@ int Action_OpenWebView_GetState(COMMAND_T* ct) {
 #ifdef _WIN32
 // ####################### WINDOWS IMPLEMENTATION #######################
 
-// Прототип функции для динамической загрузки
 typedef HRESULT (STDMETHODCALLTYPE* CreateWebView2EnvironmentWithOptions_t)(
     PCWSTR browserExecutableFolder,
     PCWSTR userDataFolder,
@@ -142,33 +132,28 @@ void OpenWebViewWindow(std::string url) {
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClassA(&wc);
 
-    // ИСПРАВЛЕНИЕ: Копируем URL в кучу, чтобы безопасно передать в WM_CREATE
     char* url_param = _strdup(url.c_str());
 
     g_plugin_hwnd = CreateWindowExA(0, "MyWebViewPlugin_WindowClass", "Интегрированный WebView (Windows)",
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
         g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url_param);
 
-    if (g_plugin_hwnd) {
-        ShowWindow(g_plugin_hwnd, SW_SHOW);
-    } else {
-        free(url_param); // Если окно не создалось, освобождаем память
+    if (!g_plugin_hwnd) {
+        free(url_param);
     }
 }
 
 LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
     case WM_CREATE: {
-        // ИСПРАВЛЕНИЕ: Получаем указатель на скопированную строку
         char* initial_url_c = (char*)((LPCREATESTRUCTA)lParam)->lpCreateParams;
         if (!initial_url_c) break;
 
         std::string initial_url_str(initial_url_c);
-        free(initial_url_c); // Освобождаем память сразу после копирования в std::string
+        free(initial_url_c);
 
         std::wstring w_url(initial_url_str.begin(), initial_url_str.end());
 
-        // Загружаем DLL
         g_hWebView2Loader = LoadLibraryA("WebView2Loader.dll");
         if (!g_hWebView2Loader) {
             MessageBoxA(hwnd, "WebView2 Runtime not found. Please install Microsoft Edge WebView2 Runtime.", "Error", MB_ICONERROR);
@@ -176,9 +161,9 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             break;
         }
 
-        auto pCreateWebView2EnvironmentWithOptions = 
+        auto pCreateWebView2EnvironmentWithOptions =
             (CreateWebView2EnvironmentWithOptions_t)GetProcAddress(g_hWebView2Loader, "CreateCoreWebView2EnvironmentWithOptions");
-        
+
         if (!pCreateWebView2EnvironmentWithOptions) {
             MessageBoxA(hwnd, "Failed to load WebView2 functions", "Error", MB_ICONERROR);
             DestroyWindow(hwnd);
@@ -199,10 +184,11 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                             if (controller != nullptr) {
                                 webviewController = controller;
                                 webviewController->get_CoreWebView2(&webview);
-                                RECT bounds; 
+                                RECT bounds;
                                 GetClientRect(hwnd, &bounds);
                                 webviewController->put_Bounds(bounds);
                                 webview->Navigate(w_url.c_str());
+                                ShowWindow(hwnd, SW_SHOW); // Показываем окно только после успешной инициализации
                             } else {
                                 MessageBoxA(hwnd, "Failed to create WebView2 controller", "Error", MB_ICONERROR);
                                 DestroyWindow(hwnd);
@@ -219,14 +205,14 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             std::wstring w_url(url, url + strlen(url));
             webview->Navigate(w_url.c_str());
         }
-        free(url); // ИСПРАВЛЕНИЕ: Освобождаем память, выделенную в WEBVIEW_Navigate
+        free(url);
         break;
     }
     case WM_SIZE:
-        if (webviewController != nullptr) { 
-            RECT bounds; 
-            GetClientRect(hwnd, &bounds); 
-            webviewController->put_Bounds(bounds); 
+        if (webviewController != nullptr) {
+            RECT bounds;
+            GetClientRect(hwnd, &bounds);
+            webviewController->put_Bounds(bounds);
         }
         break;
     case WM_DESTROY:
@@ -235,13 +221,12 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             webviewController = nullptr;
             webview = nullptr;
         }
-        // ИСПРАВЛЕНИЕ: Выгружаем DLL при уничтожении окна
         if (g_hWebView2Loader) {
             FreeLibrary(g_hWebView2Loader);
             g_hWebView2Loader = NULL;
         }
         g_plugin_hwnd = NULL;
-        PostQuitMessage(0); // Важно для корректного завершения цикла сообщений окна
+        PostQuitMessage(0);
         break;
     default:
         return DefWindowProc(hwnd, uMsg, wParam, lParam);
@@ -298,9 +283,9 @@ void OpenWebViewWindow(std::string url) {
 
         NSString* nsURL = [NSString stringWithUTF8String:url.c_str()];
         if (nsURL) {
-            [g_delegate navigate:nsURL];
+            // Вместо прямого вызова navigate, вызовем его через делегата, чтобы сохранить консистентность
+            [g_delegate performSelectorOnMainThread:@selector(navigate:) withObject:nsURL waitUntilDone:NO];
         }
     }
 }
-
 #endif
