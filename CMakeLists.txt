@@ -35,12 +35,15 @@ if(APPLE)
 elseif(WIN32)
     # Настройки для Windows
     set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
+    
+    # Добавляем пути к зависимостям WebView2 и WIL
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps)
+    
     target_compile_definitions(reaper_webview PRIVATE 
         _WIN32_WINNT=0x0601
         NOMINMAX
         WIN32_LEAN_AND_MEAN)
     target_link_libraries(reaper_webview 
-        wil
         comctl32 
         ole32 
         version 

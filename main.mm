@@ -19,11 +19,11 @@
 #endif
 
 // SDK REAPER
-#include "WDL/wdltypes.h"  // Добавлено для WDL_INT64
+#include "WDL/wdltypes.h"
 #include "sdk/reaper_plugin_functions.h"
 
 // --- Глобальные переменные ---
-void* g_hInst = NULL;  // Изменено с REAPER_PLUGIN_INSTANCE на void*
+void* g_hInst = NULL;
 HWND g_hwndParent = NULL;
 
 #ifdef _WIN32
@@ -39,7 +39,7 @@ HWND g_hwndParent = NULL;
 // --- Прототипы и действия ---
 void OpenWebViewWindow(std::string url);
 static gaccel_register_t g_action = { { 0, 0, 0 }, "WebView: Open (default)" };
-void Action_OpenWebView(void* t) { OpenWebViewWindow("https://www.reaper.fm/"); }  // Изменен тип параметра
+void Action_OpenWebView(void* t) { OpenWebViewWindow("https://www.reaper.fm/"); }
 
 void WEBVIEW_Navigate(const char* url) {
     if (url && strlen(url) > 0) {
@@ -66,7 +66,7 @@ void WEBVIEW_Navigate(const char* url) {
 
 // --- Точка входа плагина ---
 extern "C" {
-    REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(void* hInstance, reaper_plugin_info_t* rec) {  // Изменен тип параметра
+    REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(void* hInstance, reaper_plugin_info_t* rec) {
         if (rec) {
             g_hInst = hInstance;
             g_hwndParent = rec->hwnd_main;
@@ -100,14 +100,14 @@ void OpenWebViewWindow(std::string url) {
 
     WNDCLASS wc = { 0 };
     wc.lpfnWndProc = WebViewWndProc;
-    wc.hInstance = (HINSTANCE)g_hInst;  // Добавлено приведение типа
+    wc.hInstance = (HINSTANCE)g_hInst;
     wc.lpszClassName = L"MyWebViewPlugin_WindowClass";
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClass(&wc);
 
     g_plugin_hwnd = CreateWindowEx(0, L"MyWebViewPlugin_WindowClass", L"Интегрированный WebView (Windows)",
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
-        g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url.c_str());  // Добавлено приведение типа
+        g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url.c_str());
 
     if (g_plugin_hwnd) {
         ShowWindow(g_plugin_hwnd, SW_SHOW);

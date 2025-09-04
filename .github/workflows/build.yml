@@ -20,6 +20,21 @@ jobs:
         submodules: recursive
         token: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Install Windows dependencies
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        # Скачиваем и распаковываем WebView2 SDK
+        Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2" -OutFile "webview2.zip"
+        Expand-Archive -Path "webview2.zip" -DestinationPath "webview2-sdk"
+        # Скачиваем и распаковываем WIL
+        Invoke-WebRequest -Uri "https://github.com/microsoft/wil/archive/refs/heads/master.zip" -OutFile "wil.zip"
+        Expand-Archive -Path "wil.zip" -DestinationPath "wil"
+        # Копируем заголовочные файлы в нужные директории
+        New-Item -ItemType Directory -Path "deps" -Force
+        Copy-Item -Path "webview2-sdk/build/native/include/*" -Destination "deps/" -Recurse
+        Copy-Item -Path "wil/wil-master/include/*" -Destination "deps/" -Recurse
+
     - name: List files (Unix)
       if: runner.os != 'Windows'
       run: |
@@ -34,6 +49,7 @@ jobs:
         Get-ChildItem
         Get-ChildItem sdk/
         Get-ChildItem WDL/
+        Get-ChildItem deps/ -Recurse
 
     - name: Find SDK files (Unix)
       if: runner.os != 'Windows'
@@ -51,7 +67,7 @@ jobs:
 
     - name: Configure CMake (Windows)
       if: runner.os == 'Windows'
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=./deps
 
     - name: Build (Unix)
       if: runner.os != 'Windows'
@@ -68,14 +84,14 @@ jobs:
     - name: List build artifacts (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
-      run: Get-ChildItem build/
+      run: Get-ChildItem build/ -Recurse
 
     - name: Upload macOS artifact
       if: runner.os == 'macOS'
       uses: actions/upload-artifact@v4
       with:
         name: reaper-webview-macos-universal
-        path: build/libreaper_webview.dylib
+        path: build/reaper_webview.dylib
         if-no-files-found: error
         retention-days: 7
 
