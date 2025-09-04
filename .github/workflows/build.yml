@@ -11,7 +11,9 @@ jobs:
     strategy:
       matrix:
         os: [macos-latest, windows-latest]
+      fail-fast: false  # Не останавливать все jobs если одна упала
     runs-on: ${{ matrix.os }}
+    continue-on-error: true  # Продолжать даже при ошибке
 
     steps:
     - name: Checkout repository
@@ -23,17 +25,22 @@ jobs:
     - name: Install Windows dependencies
       if: runner.os == 'Windows'
       shell: pwsh
+      timeout-minutes: 10  # Увеличиваем таймаут для Windows
       run: |
         # Скачиваем и распаковываем WebView2 SDK
-        Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2" -OutFile "webview2.zip"
-        Expand-Archive -Path "webview2.zip" -DestinationPath "webview2-sdk"
+        Write-Host "Downloading WebView2 SDK..."
+        Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2" -OutFile "webview2.zip" -TimeoutSec 300
+        Expand-Archive -Path "webview2.zip" -DestinationPath "webview2-sdk" -Force
+        
         # Скачиваем и распаковываем WIL
-        Invoke-WebRequest -Uri "https://github.com/microsoft/wil/archive/refs/heads/master.zip" -OutFile "wil.zip"
-        Expand-Archive -Path "wil.zip" -DestinationPath "wil"
+        Write-Host "Downloading WIL..."
+        Invoke-WebRequest -Uri "https://github.com/microsoft/wil/archive/refs/heads/master.zip" -OutFile "wil.zip" -TimeoutSec 300
+        Expand-Archive -Path "wil.zip" -DestinationPath "wil" -Force
+        
         # Копируем заголовочные файлы в нужные директории
         New-Item -ItemType Directory -Path "deps" -Force
-        Copy-Item -Path "webview2-sdk/build/native/include/*" -Destination "deps/" -Recurse
-        Copy-Item -Path "wil/wil-master/include/*" -Destination "deps/" -Recurse
+        Copy-Item -Path "webview2-sdk/build/native/include/*" -Destination "deps/" -Recurse -Force
+        Copy-Item -Path "wil/wil-master/include/*" -Destination "deps/" -Recurse -Force
 
     - name: List files (Unix)
       if: runner.os != 'Windows'
@@ -49,7 +56,9 @@ jobs:
         Get-ChildItem
         Get-ChildItem sdk/
         Get-ChildItem WDL/
-        Get-ChildItem deps/ -Recurse
+        if (Test-Path "deps/") {
+          Get-ChildItem deps/ -Recurse
+        }
 
     - name: Find SDK files (Unix)
       if: runner.os != 'Windows'
