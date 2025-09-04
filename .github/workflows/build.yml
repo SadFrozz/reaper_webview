@@ -1,55 +1,76 @@
-name: Build REAPER Plugin (Multi-Arch)
+name: Build WebView Plugin
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
 
 jobs:
   build:
     strategy:
       matrix:
-        os: [windows-latest, macos-latest]
-        include:
-          - os: windows-latest
-            preset: 'windows-x64'
-            platform: 'x64'
-            artifact_name: 'reaper_webview.dll'
-            artifact_path: 'build/Release/reaper_webview.dll'
-          - os: windows-latest
-            preset: 'windows-x86'
-            platform: 'x86'
-            artifact_name: 'reaper_webview.dll'
-            artifact_path: 'build/Release/reaper_webview.dll'
-          - os: macos-latest
-            preset: 'macos-universal'
-            platform: 'universal'
-            artifact_name: 'reaper_webview.dylib'
-            artifact_path: 'build/reaper_webview.dylib'
-
+        os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
-    - name: Checkout plugin repository with submodules
+    - name: Checkout repository
       uses: actions/checkout@v4
       with:
         submodules: recursive
-    - name: Verify structure
-      run: |
-        ls -la
-        ls -la sdk/
-        ls -la WDL/
-        find . -name "reaper_plugin_functions.h" -o -name "swell.h"
-        
-    - name: Build with CMake via Preset
-      uses: lukka/run-cmake@v10
-      with:
-        configurePreset: '${{ matrix.preset }}'
-        buildPreset: '${{ matrix.preset }}'
+        token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Upload Artifact (${{ matrix.platform }})
+    - name: List files
+      run: |
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          dir
+          dir sdk/
+          dir WDL/
+        else
+          ls -la
+          ls -la sdk/
+          ls -la WDL/
+        fi
+
+    - name: Find SDK files
+      run: |
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          dir /s /b *.h | findstr "reaper_plugin_functions.h\|swell.h"
+        else
+          find . -name "reaper_plugin_functions.h" -o -name "swell.h"
+        fi
+
+    - name: Configure CMake
+      run: |
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+        else
+          cmake --preset macos-universal
+        fi
+
+    - name: Build
+      run: |
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          cmake --build build --config Release
+        else
+          cmake --build --preset macos-universal
+        fi
+
+    - name: List build artifacts
+      run: |
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          dir build\
+        else
+          ls -la build/
+        fi
+
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: reaper-webview-${{ matrix.os }}-${{ matrix.platform }}
-        path: ${{ matrix.artifact_path }}
+        name: reaper-webview-${{ runner.os }}-${{ matrix.os == 'macos-latest' && 'universal' || 'x64' }}
+        path: |
+          ${{ matrix.os == 'windows-latest' && 'build/Release/reaper_webview.dll' || 'build/reaper_webview.dylib' }}
+          ${{ matrix.os == 'windows-latest' && 'build/Release/reaper_webview.exp' || '' }}
+          ${{ matrix.os == 'windows-latest' && 'build/Release/reaper_webview.lib' || '' }}
+        if-no-files-found: error
+        retention-days: 7

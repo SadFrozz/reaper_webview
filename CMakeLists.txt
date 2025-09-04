@@ -1,32 +1,53 @@
 cmake_minimum_required(VERSION 3.10)
 project(reaper_webview)
 
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+# Подключаем стандартные модули
+include(CheckIncludeFile)
+include(CheckFunctionExists)
 
-set(CMAKE_SHARED_LIBRARY_SUFFIX ".dylib")
+# Настройка путей
+set(SDK_PATH ${CMAKE_CURRENT_SOURCE_DIR}/sdk)
+set(WDL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/WDL)
 
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# Добавляем include директории
+include_directories(${SDK_PATH})
+include_directories(${WDL_PATH})
+include_directories(${WDL_PATH}/swell)
 
-add_library(reaper_webview MODULE main.mm)
+# Добавляем исходники
+set(SOURCES main.mm)
 
-target_include_directories(reaper_webview PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/sdk
-    ${CMAKE_CURRENT_SOURCE_DIR}/WDL
-    ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell
-)
+# Создаем библиотеку
+add_library(reaper_webview MODULE ${SOURCES})
 
-set_target_properties(reaper_webview PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-    PREFIX ""
-)
-
+# Настройки для разных платформ
 if(APPLE)
-    target_link_libraries(reaper_webview
-        "-framework Cocoa"
-        "-framework WebKit"
-    )
-    set_target_properties(reaper_webview PROPERTIES
-        INSTALL_NAME_DIR "@rpath"
-    )
+    # Настройки для macOS
+    set_target_properties(reaper_webview PROPERTIES 
+        SUFFIX ".dylib"
+        BUNDLE FALSE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13")
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
+    find_library(COCOA_LIBRARY Cocoa)
+    find_library(WEBKIT_LIBRARY WebKit)
+    target_link_libraries(reaper_webview ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
+elseif(WIN32)
+    # Настройки для Windows
+    set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
+    target_compile_definitions(reaper_webview PRIVATE 
+        _WIN32_WINNT=0x0601
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN)
+    target_link_libraries(reaper_webview 
+        wil
+        comctl32 
+        ole32 
+        version 
+        shlwapi
+        user32)
 endif()
+
+# Установка выходного директория
+set_target_properties(reaper_webview PROPERTIES 
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
