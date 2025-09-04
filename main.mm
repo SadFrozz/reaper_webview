@@ -34,6 +34,11 @@
 void* g_hInst = NULL;
 HWND g_hwndParent = NULL;
 
+// В начале файла добавьте:
+#ifndef _WIN32
+    #define MessageBoxA(hwnd, text, caption, type) MessageBox(hwnd, text, caption, type)
+#endif
+
 #ifdef _WIN32
     HWND g_plugin_hwnd = NULL;
     wil::com_ptr<ICoreWebView2Controller> webviewController;
@@ -51,7 +56,11 @@ void OpenWebViewWindow(std::string url);
 static void Action_OpenWebView(int command, int val, int valhw, int relmode, HWND hwnd)
 {
     // ДИАГНОСТИКА 1: Проверяем, вызывается ли Action
-    MessageBoxA(g_hwndParent, "Debug 1: Action called.", "Tracer", MB_OK | MB_TOPMOST);
+    #ifdef _WIN32
+        MessageBoxA(g_hwndParent, "Debug 1: Action called.", "Tracer", MB_OK | MB_TOPMOST);
+    #else
+        MessageBox(g_hwndParent, "Debug 1: Action called.", "Tracer", MB_OK | MB_TOPMOST);
+    #endif
     OpenWebViewWindow("https://www.reaper.fm/");
 }
 
@@ -104,6 +113,16 @@ typedef HRESULT (STDMETHODCALLTYPE* CreateWebView2EnvironmentWithOptions_t)(PCWS
 LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
 
 void OpenWebViewWindow(std::string url) {
+    
+    #ifdef _WIN32
+        // Проверяем наличие WebView2 Runtime
+        HMODULE hWebView2 = LoadLibraryA("WebView2Loader.dll");
+        if (!hWebView2) {
+            MessageBoxA(g_hwndParent, "WebView2 Runtime not found. Please install Microsoft Edge WebView2 Runtime.", "Error", MB_ICONERROR);
+            return;
+        }
+        FreeLibrary(hWebView2);
+    #endif
     // ДИАГНОСТИКА 2: Проверяем, вызывается ли функция создания окна
     MessageBoxA(g_hwndParent, "Debug 2: OpenWebViewWindow called.", "Tracer", MB_OK | MB_TOPMOST);
 
@@ -129,9 +148,25 @@ void OpenWebViewWindow(std::string url) {
 
     char* url_param = _strdup(url.c_str());
 
-    g_plugin_hwnd = CreateWindowExA(0, "MyWebViewPlugin_WindowClass", "Интегрированный WebView (Windows)",
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
-        g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url_param);
+    g_plugin_hwnd = CreateWindowExA(
+        0, 
+        "MyWebViewPlugin_WindowClass", 
+        "Интегрированный WebView (Windows)",
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CHILD, // Добавляем WS_CHILD
+        CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
+        g_hwndParent, // Родительское окно - REAPER
+        NULL, 
+        (HINSTANCE)g_hInst, 
+        (LPVOID)url_param
+    );
+
+    if (g_plugin_hwnd) {
+        MSG msg;
+        while (GetMessage(&msg, g_plugin_hwnd, 0, 0)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
 
     // ДИАГНОСТИКА 4: Проверяем, создалось ли окно
     if (g_plugin_hwnd) {
