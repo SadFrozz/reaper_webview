@@ -89,6 +89,13 @@ extern "C" {
 #ifdef _WIN32
 // ####################### WINDOWS IMPLEMENTATION #######################
 
+// Прототипы функций WebView2 для динамической загрузки
+typedef HRESULT (STDMETHODCALLTYPE* CreateWebView2EnvironmentWithOptions_t)(
+    PCWSTR browserExecutableFolder,
+    PCWSTR userDataFolder,
+    ICoreWebView2EnvironmentOptions* environmentOptions,
+    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* environment_created_handler);
+
 LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
 
 void OpenWebViewWindow(std::string url) {
@@ -98,10 +105,10 @@ void OpenWebViewWindow(std::string url) {
         return;
     }
 
-    WNDCLASSA wc = { 0 };  // Используем ANSI версию
+    WNDCLASSA wc = { 0 };
     wc.lpfnWndProc = WebViewWndProc;
     wc.hInstance = (HINSTANCE)g_hInst;
-    wc.lpszClassName = "MyWebViewPlugin_WindowClass";  // ANSI строка
+    wc.lpszClassName = "MyWebViewPlugin_WindowClass";
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClassA(&wc);
 
@@ -120,11 +127,27 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         const char* initial_url = (const char*)((LPCREATESTRUCTA)lParam)->lpCreateParams;
         std::wstring w_url(initial_url, initial_url + strlen(initial_url));
 
-        CreateCoreWebView2EnvironmentWithOptions(nullptr, nullptr, nullptr,
+        // Попытка динамической загрузки WebView2
+        HMODULE hWebView2 = LoadLibraryA("WebView2Loader.dll");
+        if (!hWebView2) {
+            MessageBoxA(hwnd, "WebView2Loader.dll not found. Please install WebView2 Runtime.", "Error", MB_ICONERROR);
+            break;
+        }
+
+        CreateWebView2EnvironmentWithOptions_t pCreateWebView2EnvironmentWithOptions = 
+            (CreateWebView2EnvironmentWithOptions_t)GetProcAddress(hWebView2, "CreateCoreWebView2EnvironmentWithOptions");
+        
+        if (!pCreateWebView2EnvironmentWithOptions) {
+            MessageBoxA(hwnd, "Failed to load WebView2 functions", "Error", MB_ICONERROR);
+            FreeLibrary(hWebView2);
+            break;
+        }
+
+        pCreateWebView2EnvironmentWithOptions(nullptr, nullptr, nullptr,
             Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-                [hwnd, w_url](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+                [hwnd, w_url, hWebView2](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                     env->CreateCoreWebView2Controller(hwnd, Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [hwnd, w_url](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                        [hwnd, w_url, hWebView2](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             if (controller != nullptr) {
                                 webviewController = controller;
                                 webviewController->get_CoreWebView2(&webview);
@@ -132,6 +155,7 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                                 webviewController->put_Bounds(bounds);
                                 webview->Navigate(w_url.c_str());
                             }
+                            FreeLibrary(hWebView2); // Освобождаем библиотеку после использования
                             return S_OK;
                         }).Get());
                     return S_OK;

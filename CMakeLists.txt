@@ -43,13 +43,32 @@ elseif(WIN32)
         _WIN32_WINNT=0x0601
         NOMINMAX
         WIN32_LEAN_AND_MEAN
-        _CRT_SECURE_NO_WARNINGS)  # Добавляем это для подавления предупреждений безопасности
+        _CRT_SECURE_NO_WARNINGS)
+    
+    # Добавляем линковку с WebView2
     target_link_libraries(reaper_webview 
         comctl32 
         ole32 
         version 
         shlwapi
-        user32)
+        user32
+        oleaut32
+        advapi32)
+    
+    # Копируем WebView2Loader.dll или используем статическую линковку
+    # Для начала попробуем найти статическую библиотеку
+    find_library(WEBVIEW2_LIB 
+        NAMES WebView2LoaderStatic.lib WebView2Loader.lib
+        PATHS ${CMAKE_CURRENT_SOURCE_DIR}/webview2-sdk/build/native)
+    
+    if(WEBVIEW2_LIB)
+        message(STATUS "Found WebView2 library: ${WEBVIEW2_LIB}")
+        target_link_libraries(reaper_webview ${WEBVIEW2_LIB})
+    else()
+        message(WARNING "WebView2 library not found, trying to link dynamically")
+        # Динамическая линковка через LoadLibrary
+        target_compile_definitions(reaper_webview PRIVATE USE_WEBVIEW2_LOADER_DYNAMIC)
+    endif()
 endif()
 
 # Установка выходного директория
