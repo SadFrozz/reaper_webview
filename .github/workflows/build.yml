@@ -35,25 +35,13 @@ jobs:
       uses: actions/checkout@v4
       with:
         submodules: recursive
-
-    - name: Prepare dependencies
+    - name: Verify structure
       run: |
-        # Создаем ожидаемую структуру папок
-        mkdir -p dependencies/sdk
-        ln -sf ../reaper-sdk sdk/sdk
-        ln -sf ../WDL sdk/WDL
+        ls -la
+        ls -la sdk/
+        ls -la WDL/
+        find . -name "reaper_plugin_functions.h" -o -name "swell.h"
         
-        # Создаем симлинки для ожидаемой структуры reaper-sdk
-        cd dependencies/reaper-sdk
-        ln -sf ../../WDL WDL
-        cd ../..
-
-    - name: Verify directory structure
-      run: |
-        ls -la /sdk/
-        find dependencies -name "reaper_plugin_functions.h" -o -name "swell.h"
-        ls -la dependencies/reaper-sdk/  # Проверяем симлинк в reaper-sdk
-
     - name: Build with CMake via Preset
       uses: lukka/run-cmake@v10
       with:

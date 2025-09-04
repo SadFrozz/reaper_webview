@@ -1,6 +1,0 @@
-[submodule "dependencies/WDL"]
-	path = WDL
-	url = https://github.com/justinfrankel/WDL
-[submodule "dependencies/reaper-sdk"]
-	path = reaper-sdk
-	url = https://github.com/justinfrankel/reaper-sdk
