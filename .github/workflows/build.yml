@@ -86,6 +86,11 @@ jobs:
       shell: pwsh
       run: Get-ChildItem build/ -Recurse
 
+    - name: Rename macOS library
+      if: runner.os != 'Windows'
+      run: |
+        mv build/libreaper_webview.dylib build/reaper_webview.dylib
+
     - name: Upload macOS artifact
       if: runner.os == 'macOS'
       uses: actions/upload-artifact@v4
