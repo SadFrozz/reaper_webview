@@ -36,6 +36,30 @@ HWND g_hwndParent = NULL;
 
 // В начале файла добавьте:
 #ifndef _WIN32
+    // Реализация MessageBox для macOS
+    static int MessageBox(HWND hwnd, const char* text, const char* caption, int type) {
+        @autoreleasepool {
+            NSAlert *alert = [[NSAlert alloc] init];
+            [alert setMessageText:[NSString stringWithUTF8String:caption ? caption : ""]];
+            [alert setInformativeText:[NSString stringWithUTF8String:text ? text : ""]];
+            
+            if (type & MB_OK) {
+                [alert addButtonWithTitle:@"OK"];
+            }
+            if (type & MB_YESNO) {
+                [alert addButtonWithTitle:@"Yes"];
+                [alert addButtonWithTitle:@"No"];
+            }
+            
+            NSInteger result = [alert runModal];
+            
+            if (type & MB_YESNO) {
+                return (result == NSAlertFirstButtonReturn) ? IDYES : IDNO;
+            }
+            return IDOK;
+        }
+    }
+    
     #define MessageBoxA(hwnd, text, caption, type) MessageBox(hwnd, text, caption, type)
 #endif
 
@@ -56,11 +80,9 @@ void OpenWebViewWindow(std::string url);
 static void Action_OpenWebView(int command, int val, int valhw, int relmode, HWND hwnd)
 {
     // ДИАГНОСТИКА 1: Проверяем, вызывается ли Action
-    #ifdef _WIN32
-        MessageBoxA(g_hwndParent, "Debug 1: Action called.", "Tracer", MB_OK | MB_TOPMOST);
-    #else
-        MessageBox(g_hwndParent, "Debug 1: Action called.", "Tracer", MB_OK | MB_TOPMOST);
-    #endif
+    if (g_hwndParent) {
+        MessageBoxA(g_hwndParent, "Debug 1: Action called.", "Tracer", MB_OK);
+    }
     OpenWebViewWindow("https://www.reaper.fm/");
 }
 
