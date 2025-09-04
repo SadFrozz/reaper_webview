@@ -49,12 +49,14 @@ jobs:
         repository: 'justinfrankel/reaper-sdk'
         path: 'dependencies/sdk'
 
+    # Исправленный шаг создания симлинков
     - name: Create symlinks for correct structure
       run: |
-        # Создаем необходимые симлинки
+        # Удаляем существующие симлинки если есть
+        rm -f dependencies/sdk/WDL
+        # Создаем правильный симлинк
         ln -s ../../WDL dependencies/sdk/WDL
-        ln -s ../WDL dependencies/WDL
-
+        
     - name: Verify directory structure
       run: |
         ls -la dependencies/
