@@ -5,12 +5,12 @@
 #ifdef _WIN32
     #define REAPER_PLUGIN_VERSION "0.4"
     #define _WIN32_WINNT 0x0601
-    #define WM_APP_NAVITATE (WM_APP + 1)
+    #define WM_APP_NAVIGATE (WM_APP + 1)  // Fixed typo: NAVITATE -> NAVIGATE
 
     #include <windows.h>
     #include <string>
     #include <wrl.h>
-    #include <wil/com.h> // ❗️ ПЕРЕМЕСТИЛИ ЭТОТ INCLUDE ВНУТРЬ #ifdef
+    #include <wil/com.h>
     #include "WebView2.h"
 #else
     #import <Cocoa/Cocoa.h>
@@ -37,11 +37,9 @@ HWND g_hwndParent = NULL;
 
 // --- Прототипы и действия ---
 void OpenWebViewWindow(std::string url);
-// ❗️ ИЗМЕНЕНО НАЗВАНИЕ ДЕЙСТВИЯ
 static gaccel_register_t g_action = { { 0, 0, 0 }, "WebView: Open (default)" };
 void Action_OpenWebView(COMMAND_T* t) { OpenWebViewWindow("https://www.reaper.fm/"); }
 
-// ❗️ ИЗМЕНЕНО НАЗВАНИЕ ФУНКЦИИ
 void WEBVIEW_Navigate(const char* url) {
     if (url && strlen(url) > 0) {
         #ifdef _WIN32
@@ -75,7 +73,6 @@ extern "C" {
             rec->Register("gaccel", &g_action);
             rec->Register("action", (void*)Action_OpenWebView);
 
-            // ❗️ ИЗМЕНЕНО ИМЯ РЕГИСТРАЦИИ API
             rec->Register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
             
             return 1;
@@ -108,7 +105,7 @@ void OpenWebViewWindow(std::string url) {
     RegisterClass(&wc);
 
     g_plugin_hwnd = CreateWindowEx(0, L"MyWebViewPlugin_WindowClass", L"Интегрированный WebView (Windows)",
-        WS_OVERЛАППEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
+        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,  // Fixed typo: WS_OVERЛАППEDWINDOW -> WS_OVERLAPPEDWINDOW
         g_hwndParent, NULL, g_hInst, (LPVOID)url.c_str());
 
     if (g_plugin_hwnd) {
