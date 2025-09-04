@@ -20,6 +20,7 @@
 
 // SDK REAPER
 #include "reaper_plugin_functions.h"
+#include "swell.h"
 
 // --- Глобальные переменные ---
 REAPER_PLUGIN_INSTANCE g_hInst = NULL;
