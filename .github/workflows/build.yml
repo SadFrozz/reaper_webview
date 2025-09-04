@@ -44,12 +44,11 @@ jobs:
         repository: 'justinfrankel/WDL'
         path: 'dependencies/WDL'
 
-    - name: Checkout and place REAPER SDK
-      shell: bash
-      run: |
-        git clone --depth 1 https://github.com/justinfrankel/reaper-sdk.git reaper-sdk-tmp
-        mv reaper-sdk-tmp/sdk dependencies/sdk
-        rm -rf reaper-sdk-tmp
+    - name: Checkout REAPER SDK
+      uses: actions/checkout@v4
+      with:
+        repository: 'justinfrankel/reaper-sdk'
+        path: 'dependencies'
 
     - name: Build with CMake via Preset
       uses: lukka/run-cmake@v10
