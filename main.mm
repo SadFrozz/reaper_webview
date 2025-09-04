@@ -42,7 +42,7 @@ void Action_OpenWebView(COMMAND_T* t) {
     OpenWebViewWindow("https://www.reaper.fm/");
 }
 
-// ❗️ ИСПРАВЛЕНА СТРУКТУРА: Удален лишний идентификатор
+// ❗️ ИСПРАВЛЕНА СТРУКТУРА: Удален лишний идентификатор "WebView_OpenDefault"
 static gaccel_register_t g_action = {
     { 0, 0, 0 },
     "WebView: Open (default)"
@@ -64,6 +64,7 @@ void WEBVIEW_Navigate(const char* url) {
                 OpenWebViewWindow(url);
             } else {
                 NSString* nsURL = [NSString stringWithUTF8String:url];
+                // Указываем тип делегата для вызова метода
                 [(id<NSWindowDelegate>)g_delegate performSelectorOnMainThread:@selector(navigate:) withObject:nsURL waitUntilDone:NO];
                 [g_pluginWindow makeKeyAndOrderFront:nil];
             }
@@ -78,8 +79,11 @@ extern "C" {
             g_hInst = hInstance;
             g_hwndParent = rec->hwnd_main;
 
+            // Регистрируем структуру g_action, которая содержит cmd=0
             rec->Register("gaccel", &g_action);
+            // Связываем функцию с действием, REAPER сам заполнит cmd
             rec->Register("action", (void*)Action_OpenWebView);
+
             rec->Register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
             
             return 1;
