@@ -3,14 +3,13 @@
 // ================================================================= //
 
 #ifdef _WIN32
-    #define REAPER_PLUGIN_VERSION "0.5" // Обновляем версию
+    #define REAPER_PLUGIN_VERSION "0.5"
     #define _WIN32_WINNT 0x0601
     #define WM_APP_NAVIGATE (WM_APP + 1)
 
     #include <windows.h>
     #include <string>
     #include <wrl.h>
-    // Подключаем WIL из папки deps, как настроено в build.yml
     #include "wil/com.h"
     #include "WebView2.h"
 #else
@@ -23,7 +22,7 @@
 #include "reaper_plugin_functions.h"
 
 // --- Глобальные переменные ---
-REAPER_PLUGIN_INSTANCE g_hInst = NULL; // ❗️ ИСПРАВЛЕН ТИП
+REAPER_PLUGIN_INSTANCE g_hInst = NULL;
 HWND g_hwndParent = NULL;
 
 #ifdef _WIN32
@@ -39,15 +38,14 @@ HWND g_hwndParent = NULL;
 // --- Прототипы и действия ---
 void OpenWebViewWindow(std::string url);
 
-// ❗️ ИСПРАВЛЕНА СИГНАТУРА ФУНКЦИИ ДЕЙСТВИЯ
 void Action_OpenWebView(COMMAND_T* t) {
     OpenWebViewWindow("https://www.reaper.fm/");
 }
 
-// ❗️ ИСПРАВЛЕНА СТРУКТУРА ИНИЦИАЛИЗАЦИИ
+// ❗️ ИСПРАВЛЕНА СТРУКТУРА: Удален лишний идентификатор
 static gaccel_register_t g_action = {
-    { 0, 0, 0 },                     // accel
-    "WebView: Open (default)"        // desc
+    { 0, 0, 0 },
+    "WebView: Open (default)"
 };
 
 void WEBVIEW_Navigate(const char* url) {
@@ -75,18 +73,13 @@ void WEBVIEW_Navigate(const char* url) {
 
 // --- Точка входа плагина ---
 extern "C" {
-    // ❗️ ИСПРАВЛЕНА СИГНАТУРА ТОЧКИ ВХОДА
     REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_INSTANCE hInstance, reaper_plugin_info_t* rec) {
         if (rec) {
             g_hInst = hInstance;
             g_hwndParent = rec->hwnd_main;
 
-            // Регистрируем действие
             rec->Register("gaccel", &g_action);
-            // Связываем его с функцией
             rec->Register("action", (void*)Action_OpenWebView);
-
-            // Регистрируем API для Lua
             rec->Register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
             
             return 1;
@@ -95,9 +88,8 @@ extern "C" {
     }
 }
 
-// ================================================================= //
-//                   РЕАЛИЗАЦИЯ ДЛЯ КАЖДОЙ ПЛАТФОРМЫ                 //
-// ================================================================= //
+// ... Остальная часть файла с реализацией OpenWebViewWindow и т.д. ...
+// (здесь идет реализация OpenWebViewWindow и т.д.)
 
 #ifdef _WIN32
 // ####################### WINDOWS IMPLEMENTATION #######################
