@@ -11,9 +11,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(reaper_webview MODULE main.mm)
 
 target_include_directories(reaper_webview PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/reaper-sdk/sdk
-    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/WDL
-    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/WDL/swell
+    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk/sdk
+    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk/WDL
+    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk/WDL/swell
 )
 
 set_target_properties(reaper_webview PROPERTIES
