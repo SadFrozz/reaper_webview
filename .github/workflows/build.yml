@@ -42,7 +42,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: 'justinfrankel/WDL'
-        path: 'dependencies/WDL'
+        path: 'dependencies'
 
     - name: Checkout REAPER SDK
       uses: actions/checkout@v4
