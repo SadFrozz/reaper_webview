@@ -1,5 +1,5 @@
 // ================================================================= //
-//        КРОССПЛАТФОРМЕННЫЙ WEBVIEW ПЛАГИН С API V3 (FIX 2)       //
+//        КРОССПЛАТФОРМЕННЫЙ WEBVIEW ПЛАГИН С API V3 (FIX 3)       //
 // ================================================================= //
 
 #ifdef _WIN32
@@ -11,9 +11,14 @@
     #include <string>
     #include <wrl.h>
     #include <wil/com.h>
-    // Подключаем заголовочные файлы из папки deps
-    #include "deps/WebView2.h"
-    #include "deps/wil/com.h"
+    // Подключаем заголовочные файлы из папки deps, если она есть
+    #if __has_include("deps/WebView2.h")
+        #include "deps/WebView2.h"
+        #include "deps/wil/com.h"
+    #else
+        #include "WebView2.h"
+        #include <wil/com.h>
+    #endif
 #else
     #import <Cocoa/Cocoa.h>
     #import <WebKit/WebKit.h>
@@ -42,13 +47,11 @@ HWND g_hwndParent = NULL;
 // --- Прототипы ---
 void OpenWebViewWindow(std::string url);
 
-// ИСПРАВЛЕНИЕ: Сигнатура функции должна соответствовать ожиданиям Reaper API
 static void Action_OpenWebView(int command, int val, int valhw, int relmode, HWND hwnd)
 {
     OpenWebViewWindow("https://www.reaper.fm/");
 }
 
-// Возвращаемся к вашему оригинальному способу регистрации
 static gaccel_register_t g_accel_reg = {
     { 0, 0, 0 },
     "WebView: Open (default)"
@@ -90,10 +93,8 @@ extern "C" {
             return 0;
         }
         
-        // Регистрируем команду и получаем ее ID
         g_accel_reg.accel.cmd = rec->Register("command_id", (void*)Action_OpenWebView);
         if (g_accel_reg.accel.cmd > 0) {
-            // Регистрируем action в секции Actions
             rec->Register("gaccel", &g_accel_reg);
         }
 
@@ -138,8 +139,13 @@ void OpenWebViewWindow(std::string url) {
         WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
         g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url_param);
 
-    if (!g_plugin_hwnd) {
+    if (g_plugin_hwnd) {
+        // ИСПРАВЛЕНИЕ: Показываем окно сразу после создания.
+        ShowWindow(g_plugin_hwnd, SW_SHOW);
+        UpdateWindow(g_plugin_hwnd);
+    } else {
         free(url_param);
+        MessageBoxA(g_hwndParent, "Failed to create plugin window.", "Error", MB_ICONERROR);
     }
 }
 
@@ -188,7 +194,7 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                                 GetClientRect(hwnd, &bounds);
                                 webviewController->put_Bounds(bounds);
                                 webview->Navigate(w_url.c_str());
-                                ShowWindow(hwnd, SW_SHOW); // Показываем окно только после успешной инициализации
+                                // ИСПРАВЛЕНИЕ: ShowWindow отсюда убран
                             } else {
                                 MessageBoxA(hwnd, "Failed to create WebView2 controller", "Error", MB_ICONERROR);
                                 DestroyWindow(hwnd);
@@ -283,7 +289,6 @@ void OpenWebViewWindow(std::string url) {
 
         NSString* nsURL = [NSString stringWithUTF8String:url.c_str()];
         if (nsURL) {
-            // Вместо прямого вызова navigate, вызовем его через делегата, чтобы сохранить консистентность
             [g_delegate performSelectorOnMainThread:@selector(navigate:) withObject:nsURL waitUntilDone:NO];
         }
     }
