@@ -34,21 +34,26 @@ jobs:
     - name: Checkout plugin repository
       uses: actions/checkout@v4
 
-    # ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Создаем правильную структуру
     - name: Create dependencies directory
-      run: mkdir dependencies
+      run: mkdir -p dependencies
 
     - name: Checkout WDL library
       uses: actions/checkout@v4
       with:
         repository: 'justinfrankel/WDL'
-        path: 'dependencies'
+        path: 'dependencies/WDL'
 
     - name: Checkout REAPER SDK
       uses: actions/checkout@v4
       with:
         repository: 'justinfrankel/reaper-sdk'
-        path: 'dependencies'
+        path: 'dependencies/sdk'
+
+    - name: Verify directory structure
+      run: |
+        ls -la dependencies/
+        ls -la dependencies/WDL/
+        ls -la dependencies/sdk/
 
     - name: Build with CMake via Preset
       uses: lukka/run-cmake@v10
