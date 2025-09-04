@@ -10,7 +10,9 @@ if(WIN32)
     target_include_directories(reaper_webview PRIVATE 
         ${CMAKE_CURRENT_BINARY_DIR}/packages/Microsoft.Web.WebView2.1.0.2210.55/build/native/include
     )
-    target_link_libraries(reaper_webview PRIVATE user32 gdi32)
+    
+    # ❗️ ИЗМЕНЕНИЕ: Указываем полные имена библиотек для линкера
+    target_link_libraries(reaper_webview PRIVATE User32.lib Gdi32.lib)
 
 # --- Настройки для macOS ---
 elseif(APPLE)

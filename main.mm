@@ -1,16 +1,16 @@
 // ================================================================= //
-//        КРОССПЛАТФОРМЕННЫЙ WEBVIEW ПЛАГИН С API V2              //
+//        КРОССПЛАТФОРМЕННЫЙ WEBVIEW ПЛАГИН С API V3 (FIX)         //
 // ================================================================= //
 
 #ifdef _WIN32
-    #define REAPER_PLUGIN_VERSION "0.3"
+    #define REAPER_PLUGIN_VERSION "0.4"
     #define _WIN32_WINNT 0x0601
-    #define WM_APP_NAVIGATE (WM_APP + 1)
+    #define WM_APP_NAVITATE (WM_APP + 1)
 
     #include <windows.h>
     #include <string>
     #include <wrl.h>
-    #include <wil/com.h>
+    #include <wil/com.h> // ❗️ ПЕРЕМЕСТИЛИ ЭТОТ INCLUDE ВНУТРЬ #ifdef
     #include "WebView2.h"
 #else
     #import <Cocoa/Cocoa.h>
