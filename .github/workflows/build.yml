@@ -65,9 +65,29 @@ jobs:
       if: runner.os != 'Windows'
       run: cmake --preset macos-universal
 
+    - name: Check Windows dependencies
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Write-Host "Checking WebView2 headers..."
+        if (Test-Path "deps/WebView2.h") {
+          Write-Host "✓ WebView2.h found"
+        } else {
+          Write-Host "✗ WebView2.h missing"
+          exit 1
+        }
+        
+        Write-Host "Checking WIL headers..."
+        if (Test-Path "deps/wil") {
+          Write-Host "✓ WIL headers found"
+        } else {
+          Write-Host "✗ WIL headers missing"
+          exit 1
+        }
+
     - name: Configure CMake (Windows)
       if: runner.os == 'Windows'
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=./deps
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
     - name: Build (Unix)
       if: runner.os != 'Windows'
