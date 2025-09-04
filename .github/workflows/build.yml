@@ -12,16 +12,15 @@ jobs:
     strategy:
       matrix:
         include:
-          - arch: 'x64'
+          - preset: 'windows-x64'
             platform: 'x64'
-          - arch: 'Win32'
+          - preset: 'windows-x86'
             platform: 'x86'
 
     steps:
     - name: Checkout plugin repository
       uses: actions/checkout@v4
 
-    # ❗️ ИЗМЕНЕНИЕ: Клонируем SDK с GitHub вместо скачивания
     - name: Checkout REAPER SDK
       uses: actions/checkout@v4
       with:
@@ -29,15 +28,17 @@ jobs:
         path: 'reaper-sdk'
 
     - name: Prepare SDK headers
-      run: Move-Item -Path reaper-sdk/sdk/* -DestinationPath sdk/
+      run: |
+        New-Item -ItemType Directory -Force -Path sdk
+        Move-Item -Path reaper-sdk/sdk/* -DestinationPath sdk/
       shell: pwsh
 
-    - name: Build with CMake (${{ matrix.arch }})
+    - name: Build with CMake via Preset
       uses: lukka/run-cmake@v10
       with:
-        cmakeListsTxtPath: '${{ github.workspace }}/CMakeLists.txt'
-        buildDirectory: '${{ github.workspace }}/build'
-        cmakeAppendedArgs: '-A ${{ matrix.arch }}'
+        # ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Используем пресеты
+        configurePreset: '${{ matrix.preset }}'
+        buildPreset: '${{ matrix.preset }}'
 
     - name: Upload Windows Artifact (${{ matrix.platform }})
       uses: actions/upload-artifact@v4
@@ -52,7 +53,6 @@ jobs:
     - name: Checkout plugin repository
       uses: actions/checkout@v4
 
-    # ❗️ ИЗМЕНЕНИЕ: Клонируем SDK с GitHub вместо скачивания
     - name: Checkout REAPER SDK
       uses: actions/checkout@v4
       with:
@@ -64,11 +64,12 @@ jobs:
         mkdir sdk
         mv reaper-sdk/sdk/* sdk/
 
-    - name: Build with CMake (Universal)
+    - name: Build with CMake via Preset (Universal)
       uses: lukka/run-cmake@v10
       with:
-        cmakeListsTxtPath: '${{ github.workspace }}/CMakeLists.txt'
-        buildDirectory: '${{ github.workspace }}/build'
+        # ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Используем пресеты
+        configurePreset: 'macos-universal'
+        buildPreset: 'macos-universal'
 
     - name: Upload macOS Artifact (Universal)
       uses: actions/upload-artifact@v4

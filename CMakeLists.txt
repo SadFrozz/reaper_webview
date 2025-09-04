@@ -5,32 +5,19 @@ project(ReaperWebViewPlugin)
 if(WIN32)
     find_package(NuGet REQUIRED)
     nuget_install(PACKAGE Microsoft.Web.WebView2 VERSION 1.0.2210.55)
-
     add_library(reaper_webview SHARED main.mm)
     
     target_include_directories(reaper_webview PRIVATE 
         ${CMAKE_CURRENT_BINARY_DIR}/packages/Microsoft.Web.WebView2.1.0.2210.55/build/native/include
     )
-    
     target_link_libraries(reaper_webview PRIVATE user32 gdi32)
 
 # --- Настройки для macOS ---
 elseif(APPLE)
-    # ❗️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Собираем универсальный бинарник для Intel и ARM
-    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build architectures for macOS" FORCE)
-    
     set_source_files_properties(main.mm PROPERTIES COMPILE_FLAGS "-x objective-c++")
-    
     add_library(reaper_webview MODULE main.mm)
 
-    find_library(COCOA_FRAMEWORK Cocoa)
-    find_library(WEBKIT_FRAMEWORK WebKit)
-    
-    target_link_libraries(reaper_webview PRIVATE 
-        "-framework Cocoa" 
-        "-framework WebKit"
-    )
-    
+    target_link_libraries(reaper_webview PRIVATE "-framework Cocoa" "-framework WebKit")
     set_target_properties(reaper_webview PROPERTIES SUFFIX .dylib)
 endif()
 
