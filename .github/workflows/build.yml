@@ -54,6 +54,8 @@ jobs:
         ls -la dependencies/
         ls -la dependencies/WDL/
         ls -la dependencies/sdk/
+        ls -la dependencies/sdk/sdk/
+        find dependencies/sdk -name "reaper_plugin_functions.h"
 
     - name: Build with CMake via Preset
       uses: lukka/run-cmake@v10

@@ -10,7 +10,7 @@ if(WIN32)
     target_include_directories(reaper_webview PRIVATE 
         ${CMAKE_CURRENT_BINARY_DIR}/packages/Microsoft.Web.WebView2.1.0.2210.55/build/native/include
         ${CMAKE_CURRENT_SOURCE_DIR}/dependencies
-        ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk
+        ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk/sdk
         ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/WDL
     )
     
@@ -26,7 +26,7 @@ elseif(APPLE)
 
     target_include_directories(reaper_webview PRIVATE 
         ${CMAKE_CURRENT_SOURCE_DIR}/dependencies
-        ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk
+        ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk/sdk
         ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/WDL
         ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/WDL/swell
     )
