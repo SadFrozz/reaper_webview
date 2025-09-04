@@ -45,11 +45,10 @@ static void Action_OpenWebView(int command, int val, int valhw, int relmode, HWN
     OpenWebViewWindow("https://www.reaper.fm/");
 }
 
-// Регистрационная структура для действия
+// Регистрационная структура для действия - ИСПРАВЛЕННАЯ
 static gaccel_register_t g_accel_reg = {
     { 0, 0, 0 }, 
     "WebView_OpenDefault",  // Уникальный идентификатор
-    NULL, 
     "WebView: Open (default)"  // Отображаемое имя
 };
 
