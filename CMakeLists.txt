@@ -23,6 +23,11 @@ elseif(APPLE)
 endif()
 
 # --- Общие настройки ---
-# ❗️ Указываем путь к папке, содержащей и sdk, и WDL
-target_include_directories(reaper_webview PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dependencies)
+# ❗️ КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Указываем ОБА пути
+# 1. Путь к 'dependencies' - чтобы reaper_plugin.h нашёл ../WDL/swell.h
+# 2. Путь к 'dependencies/sdk' - чтобы main.mm нашёл reaper_plugin_functions.h
+target_include_directories(reaper_webview PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies
+    ${CMAKE_CURRENT_SOURCE_DIR}/dependencies/sdk
+)
 set_target_properties(reaper_webview PROPERTIES PREFIX "")
