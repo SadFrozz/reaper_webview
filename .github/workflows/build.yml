@@ -20,57 +20,70 @@ jobs:
         submodules: recursive
         token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: List files
+    - name: List files (Unix)
+      if: runner.os != 'Windows'
       run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          dir
-          dir sdk/
-          dir WDL/
-        else
-          ls -la
-          ls -la sdk/
-          ls -la WDL/
-        fi
+        ls -la
+        ls -la sdk/
+        ls -la WDL/
 
-    - name: Find SDK files
+    - name: List files (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
       run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          dir /s /b *.h | findstr "reaper_plugin_functions.h\|swell.h"
-        else
-          find . -name "reaper_plugin_functions.h" -o -name "swell.h"
-        fi
+        Get-ChildItem
+        Get-ChildItem sdk/
+        Get-ChildItem WDL/
 
-    - name: Configure CMake
+    - name: Find SDK files (Unix)
+      if: runner.os != 'Windows'
+      run: find . -name "reaper_plugin_functions.h" -o -name "swell.h"
+
+    - name: Find SDK files (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
       run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
-        else
-          cmake --preset macos-universal
-        fi
+        Get-ChildItem -Recurse -Include "reaper_plugin_functions.h", "swell.h" | Select-Object -ExpandProperty FullName
 
-    - name: Build
-      run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          cmake --build build --config Release
-        else
-          cmake --build --preset macos-universal
-        fi
+    - name: Configure CMake (Unix)
+      if: runner.os != 'Windows'
+      run: cmake --preset macos-universal
 
-    - name: List build artifacts
-      run: |
-        if [ "$RUNNER_OS" == "Windows" ]; then
-          dir build\
-        else
-          ls -la build/
-        fi
+    - name: Configure CMake (Windows)
+      if: runner.os == 'Windows'
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-    - name: Upload artifact
+    - name: Build (Unix)
+      if: runner.os != 'Windows'
+      run: cmake --build --preset macos-universal
+
+    - name: Build (Windows)
+      if: runner.os == 'Windows'
+      run: cmake --build build --config Release
+
+    - name: List build artifacts (Unix)
+      if: runner.os != 'Windows'
+      run: ls -la build/
+
+    - name: List build artifacts (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: Get-ChildItem build/
+
+    - name: Upload macOS artifact
+      if: runner.os == 'macOS'
       uses: actions/upload-artifact@v4
       with:
-        name: reaper-webview-${{ runner.os }}-${{ matrix.os == 'macos-latest' && 'universal' || 'x64' }}
-        path: |
-          ${{ matrix.os == 'windows-latest' && 'build/Release/reaper_webview.dll' || 'build/reaper_webview.dylib' }}
-          ${{ matrix.os == 'windows-latest' && 'build/Release/reaper_webview.exp' || '' }}
-          ${{ matrix.os == 'windows-latest' && 'build/Release/reaper_webview.lib' || '' }}
+        name: reaper-webview-macos-universal
+        path: build/libreaper_webview.dylib
+        if-no-files-found: error
+        retention-days: 7
+
+    - name: Upload Windows artifact
+      if: runner.os == 'Windows'
+      uses: actions/upload-artifact@v4
+      with:
+        name: reaper-webview-windows-x64
+        path: build/Release/reaper_webview.dll
         if-no-files-found: error
         retention-days: 7

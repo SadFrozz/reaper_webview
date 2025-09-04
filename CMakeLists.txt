@@ -24,6 +24,7 @@ add_library(reaper_webview MODULE ${SOURCES})
 if(APPLE)
     # Настройки для macOS
     set_target_properties(reaper_webview PROPERTIES 
+        OUTPUT_NAME "reaper_webview"
         SUFFIX ".dylib"
         BUNDLE FALSE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13")
