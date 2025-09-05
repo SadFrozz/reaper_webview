@@ -28,6 +28,7 @@
 
 REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
 HWND g_hwndParent = nullptr;
+HWND g_hwnd = nullptr;
 int g_command_id_open = 0;
 int g_command_id_refresh = 0;
 int g_command_id_openurl = 0;
@@ -71,11 +72,11 @@ bool HookCommandProc(int cmd, int flag) {
     }
 #if defined(_WIN32)
     if (cmd == g_command_id_refresh) {
-        if (g_plugin_hwnd && webview) webview->Reload();
+        if (g_hwnd && webview) webview->Reload();
         return true;
     }
     if (cmd == g_command_id_openurl) {
-        if (g_plugin_hwnd) {
+        if (g_hwnd) {
             char urlbuf[2048] = "https://";
             if (GetUserInputs("Open URL", 1, "URL:", urlbuf, sizeof(urlbuf))) {
                 WEBVIEW_Navigate(urlbuf);
@@ -136,8 +137,8 @@ void Action_OpenWebView() {
 // ================================================================= //
 LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
 void OpenWebViewWindow(const std::string& url) {
-    if (g_plugin_hwnd && IsWindow(g_plugin_hwnd)) {
-        DockWindowActivate(g_plugin_hwnd);
+    if (g_hwnd && IsWindow(g_hwnd)) {
+        DockWindowActivate(g_hwnd);
         return;
     }
     WNDCLASSW wc{0};
@@ -148,16 +149,17 @@ void OpenWebViewWindow(const std::string& url) {
     if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return;
     
     char* url_param = _strdup(url.c_str());
-    g_plugin_hwnd = CreateWindowExW(
+    g_hwnd = CreateWindowExW(
         0, wc.lpszClassName, L"WebView", WS_CHILD | WS_VISIBLE,
         0, 0, 0, 0, g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url_param);
 
-    if (g_plugin_hwnd) {
-        DockWindowAddEx(g_plugin_hwnd, "WebView", "FRZZ_WebView", true);
+    if (g_hwnd) {
+        DockWindowAddEx(g_hwnd, "WebView", "FRZZ_WebView", true);
     }
 }
+
 void WEBVIEW_Navigate(const char* url) {
-    if (g_plugin_hwnd && webview && url) {
+    if (g_hwnd && webview && url) {
         std::wstring w_url;
         int len = MultiByteToWideChar(CP_UTF8, 0, url, -1, NULL, 0);
         if (len > 0) {
@@ -221,7 +223,7 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             DockWindowRemove(hwnd);
             if (webviewController) { webviewController->Close(); webviewController = nullptr; webview = nullptr; }
             if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
-            g_plugin_hwnd = NULL;
+            g_hwnd = NULL;
             return 0;
         }
         case WM_SIZE: { if (webviewController) { RECT rc; GetClientRect(hwnd, &rc); webviewController->put_Bounds(rc); } return 0; }
@@ -281,21 +283,21 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             if (myView) {
                 NSRect frame = NSMakeRect(0, 0, LOWORD(lParam), HIWORD(lParam));
                 [myView setFrame:frame];
-                [myView->webView setFrame:frame];
+                if(myView->webView) [myView->webView setFrame:frame];
             }
             return 0;
         }
         case WM_DESTROY: {
             if (DockWindowRemove) DockWindowRemove(hwnd);
-            g_plugin_hwnd = nullptr;
+            g_hwnd = nullptr;
             return 0;
         }
     }
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 void OpenWebViewWindow(const std::string& url) {
-    if (g_plugin_hwnd) {
-        if (DockWindowActivate) DockWindowActivate(g_plugin_hwnd);
+    if (g_hwnd) {
+        if (DockWindowActivate) DockWindowActivate(g_hwnd);
         return;
     }
     WNDCLASS wc = { 0, };
@@ -303,16 +305,14 @@ void OpenWebViewWindow(const std::string& url) {
     wc.hInstance = g_hInst;
     wc.lpszClassName = "MyWebViewSwellClass";
     SWELL_RegisterClass(&wc);
-    // ИСПРАВЛЕНИЕ: Передаем URL напрямую в lParam
-    g_plugin_hwnd = CreateWindowEx(0, "MyWebViewSwellClass", "WebView", 0, 0, 0, 0, 0, g_hwndParent, 0, g_hInst, (void*)url.c_str());
-
-    if (g_plugin_hwnd) {
-        DockWindowAddEx(g_plugin_hwnd, "WebView", "FRZZ_WebView_macOS", true);
+    g_hwnd = CreateWindowEx(0, "MyWebViewSwellClass", "WebView", 0, 0, 0, 0, 0, g_hwndParent, 0, g_hInst, (void*)url.c_str());
+    if (g_hwnd) {
+        DockWindowAddEx(g_hwnd, "WebView", "FRZZ_WebView_macOS", true);
     }
 }
 void WEBVIEW_Navigate(const char* url) {
-    if (!g_plugin_hwnd) return;
-    MyNSView* myView = (MyNSView*)GetWindowLongPtr(g_plugin_hwnd, GWLP_USERDATA);
+    if (!g_hwnd) return;
+    MyNSView* myView = (MyNSView*)GetWindowLongPtr(g_hwnd, GWLP_USERDATA);
     if (myView && myView->webView && url) {
         @autoreleasepool {
             NSString* nsURL = [NSString stringWithUTF8String:url];
