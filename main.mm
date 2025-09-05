@@ -55,12 +55,9 @@ void Log(const char* format, ...) {
 }
 
 #ifdef _WIN32
-    HWND g_plugin_hwnd = nullptr;
     wil::com_ptr<ICoreWebView2Controller> webviewController;
     wil::com_ptr<ICoreWebView2> webview;
     HMODULE g_hWebView2Loader = nullptr;
-#else
-    HWND g_plugin_hwnd = nullptr;
 #endif
 
 void Action_OpenWebView();
@@ -138,9 +135,7 @@ void Action_OpenWebView() {
 //                      РЕАЛИЗАЦИЯ ДЛЯ WINDOWS                       //
 // ================================================================= //
 LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
-
 void OpenWebViewWindow(const std::string& url) {
-    Log("OpenWebViewWindow called for URL: %s", url.c_str());
     if (g_plugin_hwnd && IsWindow(g_plugin_hwnd)) {
         DockWindowActivate(g_plugin_hwnd);
         return;
@@ -150,24 +145,17 @@ void OpenWebViewWindow(const std::string& url) {
     wc.hInstance     = (HINSTANCE)g_hInst;
     wc.lpszClassName = L"MyWebViewPlugin_WindowClass";
     wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
-    if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-        Log("!!! FAILED to register window class. Error: %lu", GetLastError());
-        return;
-    }
-    Log("Window class registered successfully.");
+    if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return;
+    
     char* url_param = _strdup(url.c_str());
     g_plugin_hwnd = CreateWindowExW(
         0, wc.lpszClassName, L"WebView", WS_CHILD | WS_VISIBLE,
         0, 0, 0, 0, g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url_param);
-    if (!g_plugin_hwnd) {
-        Log("!!! FAILED to create window. Error: %lu", GetLastError());
-        free(url_param);
-        return;
-    }
-    DockWindowAddEx(g_plugin_hwnd, "WebView", "FRZZ_WebView", true);
-    Log("Window created (hwnd: %p) and registered in Docker.", g_plugin_hwnd);
-}
 
+    if (g_plugin_hwnd) {
+        DockWindowAddEx(g_plugin_hwnd, "WebView", "FRZZ_WebView", true);
+    }
+}
 void WEBVIEW_Navigate(const char* url) {
     if (g_plugin_hwnd && webview && url) {
         std::wstring w_url;
@@ -179,7 +167,6 @@ void WEBVIEW_Navigate(const char* url) {
         }
     }
 }
-
 LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_CREATE: {
@@ -231,7 +218,6 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         }
         case WM_CLOSE: { DestroyWindow(hwnd); return 0; }
         case WM_DESTROY: {
-            Log("WM_DESTROY received for hwnd %p. Cleaning up.", hwnd);
             DockWindowRemove(hwnd);
             if (webviewController) { webviewController->Close(); webviewController = nullptr; webview = nullptr; }
             if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
@@ -246,12 +232,8 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         case WM_CONTEXTMENU: {
             HMENU menu = CreatePopupMenu();
             if (menu) {
-                int pos = DockWindowGetShowing(hwnd);
-                MENUITEMINFOA info{sizeof(info), MIIM_ID | MIIM_STRING | MIIM_STATE };
-                info.dwTypeData = (char*)"Dock WebView in Docker";
-                info.fState = (pos == 1 ? MFS_CHECKED : 0);
-                info.wID = IDC_DOCK;
-                InsertMenuItemA(menu, 0, TRUE, &info);
+                bool is_docked = DockIsChildOfDock(hwnd, NULL);
+                AppendMenuA(menu, MF_STRING | (is_docked ? MFS_CHECKED : 0), IDC_DOCK, "Dock WebView in Docker");
                 AppendMenuA(menu, MF_STRING, IDCANCEL, "Close");
                 AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
                 AppendMenuA(menu, MF_STRING, g_command_id_refresh, "Refresh Page");
@@ -268,7 +250,6 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     }
     return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 }
-
 #else
 // ================================================================= //
 //                       РЕАЛИЗАЦИЯ ДЛЯ MACOS                        //
@@ -290,7 +271,7 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 [myView addSubview:wv];
                 [parentView addSubview:myView];
                 SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)myView);
-                const char* url = (const char*)((CREATESTRUCT*)lParam)->lpCreateParams;
+                const char* url = (const char*)lParam;
                 if (url) WEBVIEW_Navigate(url);
             }
             return 0;
@@ -322,7 +303,9 @@ void OpenWebViewWindow(const std::string& url) {
     wc.hInstance = g_hInst;
     wc.lpszClassName = "MyWebViewSwellClass";
     SWELL_RegisterClass(&wc);
+    // ИСПРАВЛЕНИЕ: Передаем URL напрямую в lParam
     g_plugin_hwnd = CreateWindowEx(0, "MyWebViewSwellClass", "WebView", 0, 0, 0, 0, 0, g_hwndParent, 0, g_hInst, (void*)url.c_str());
+
     if (g_plugin_hwnd) {
         DockWindowAddEx(g_plugin_hwnd, "WebView", "FRZZ_WebView_macOS", true);
     }
