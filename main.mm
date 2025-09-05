@@ -15,45 +15,48 @@
 #include "WDL/wdltypes.h"
 #include "sdk/reaper_plugin.h"
 
+// ----- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: -----
+// Определяем этот макрос перед подключением reaper_plugin_functions.h
+// Это создаст определения для всех функций API и решит проблему линковки.
+#define REAPERAPI_IMPLEMENT
+#include "sdk/reaper_plugin_functions.h"
+// ---------------------------------
+
+
 // ================================================================= //
 //                            ЛОГИРОВАНИЕ                            //
 // ================================================================= //
 
-void* g_hInst = nullptr;
+REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
 
-#ifdef _WIN32
 void Log(const char* format, ...) {
     char buf[4096];
     va_list args;
     va_start(args, format);
     vsnprintf(buf, sizeof(buf), format, args);
     va_end(args);
+    
+#ifdef _WIN32
     OutputDebugStringA("[reaper_webview] ");
     OutputDebugStringA(buf);
     OutputDebugStringA("\n");
-    static char logPath[MAX_PATH] = {0};
-    if (logPath[0] == '\0' && g_hInst) {
-        if (GetModuleFileNameA((HINSTANCE)g_hInst, logPath, MAX_PATH)) {
-            char* lastSlash = strrchr(logPath, '\\');
-            if (lastSlash) strcpy(lastSlash + 1, "reaper_webview_log.txt");
-            else logPath[0] = '-'; 
+
+    // Теперь GetResourcePath будет 100% работать, так как API инициализирован
+    if (GetResourcePath) {
+        char path[MAX_PATH];
+        strcpy(path, GetResourcePath());
+        strcat(path, "\\reaper_webview_log.txt");
+        FILE* fp = fopen(path, "a");
+        if (fp) {
+            fprintf(fp, "%s\n", buf);
+            fclose(fp);
         }
     }
-    if (logPath[0] != '\0' && logPath[0] != '-') {
-        FILE* fp = fopen(logPath, "a");
-        if (fp) { fprintf(fp, "%s\n", buf); fclose(fp); }
-    }
-}
 #else
-void Log(const char* format, ...) {
-    char buf[4096];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buf, sizeof(buf), format, args);
-    va_end(args);
     NSLog(@"[reaper_webview] %s", buf);
-}
 #endif
+}
+
 
 // ================================================================= //
 //                      ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ                        //
@@ -78,41 +81,42 @@ HWND g_hwndParent = nullptr;
 
 static void Action_OpenWebView(int, int, int, int, HWND);
 static void OpenWebViewWindow(const std::string& url);
-// ИСПРАВЛЕНИЕ: Убираем 'static', чтобы сделать функцию глобально видимой для API
 void WEBVIEW_Navigate(const char* url);
 
-static gaccel_register_t g_accel_reg = {
-    { 0, 0, 0 },
-    "WebView: Open (default)"
-};
+static gaccel_register_t g_accel_reg = { { 0, 0, 0 }, "WebView: Open (default)" };
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec)
 {
+    g_hInst = hInstance;
     if (!rec) return 0;
-    g_hInst     = hInstance;
-    g_hwndParent = rec->hwnd_main;
-
+    
     if (rec->caller_version != REAPER_PLUGIN_VERSION) return 0;
-    Log("Plugin loaded successfully.");
 
-    int cmdId = rec->Register("command_id", (void*)Action_OpenWebView);
+    // ----- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ 2: -----
+    // Загружаем все функции API из Reaper. Возвращает 0 при успехе.
+    if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) {
+        // Можно добавить вывод в MessageBox, если что-то пошло не так
+        return 0;
+    }
+    // ---------------------------------
+
+    g_hwndParent = rec->hwnd_main;
+    
+    Log("Plugin loaded successfully. API initialized.");
+
+    int cmdId = plugin_register("command_id", (void*)Action_OpenWebView); // Используем plugin_register, т.к. он теперь доступен
     if (cmdId > 0) {
         g_accel_reg.accel.cmd = cmdId;
-        rec->Register("gaccel", &g_accel_reg);
-        rec->Register("command_id_lookup", (void*)"_FRZZ_WEBVIEW_OPEN_DEFAULT");
+        plugin_register("gaccel", &g_accel_reg);
+        plugin_register("command_id_lookup", (void*)"_FRZZ_WEBVIEW_OPEN_DEFAULT");
         Log("Action 'WebView: Open (default)' registered with command ID %d", cmdId);
     } else {
         Log("!!! FAILED to register action.");
     }
-
-    // ИСПРАВЛЕНИЕ: Правильная двухэтапная регистрация API функции
-    // Шаг 1: Объявляем сигнатуру функции: "возвращаемый_тип, тип_аргумента_1, имя_аргумента_1, ..."
-    rec->Register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*,url");
     
-    // Шаг 2: Регистрируем саму функцию
-    rec->Register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
-
+    plugin_register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*,url");
+    plugin_register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
     Log("API function 'WEBVIEW_Navigate' registered.");
 
     return 1;
@@ -124,7 +128,6 @@ static void Action_OpenWebView(int, int, int, int, HWND)
     OpenWebViewWindow("https://www.reaper.fm/");
 }
 
-// ИСПРАВЛЕНИЕ: Убираем 'static'
 void WEBVIEW_Navigate(const char* url)
 {
     Log("API WEBVIEW_Navigate called with URL: %s", url);
@@ -150,69 +153,43 @@ void WEBVIEW_Navigate(const char* url)
 #endif
 }
 
-#ifdef _WIN32
 // ================================================================= //
 //                    РЕАЛИЗАЦИЯ ДЛЯ WINDOWS (ИЗМЕНЕНИЯ)             //
 // ================================================================= //
-
+#ifdef _WIN32
 LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
-
-void OpenWebViewWindow(const std::string& url)
-{
+void OpenWebViewWindow(const std::string& url) {
     Log("OpenWebViewWindow called for URL: %s", url.c_str());
-
     if (!LoadLibraryA("WebView2Loader.dll")) {
         Log("!!! FAILED: WebView2Loader.dll not found.");
         MessageBox(g_hwndParent, "WebView2 Runtime not found.\nPlease install Microsoft Edge WebView2 Runtime.", "Error", MB_ICONERROR);
         return;
     }
-
     if (g_plugin_hwnd && IsWindow(g_plugin_hwnd)) {
         Log("Window already exists, bringing to front.");
-        ShowWindow(g_plugin_hwnd, SW_SHOW);
-        SetForegroundWindow(g_plugin_hwnd);
-        return;
+        ShowWindow(g_plugin_hwnd, SW_SHOW); SetForegroundWindow(g_plugin_hwnd); return;
     }
-
     WNDCLASSA wc{0};
-    wc.lpfnWndProc   = WebViewWndProc;
-    wc.hInstance     = (HINSTANCE)g_hInst;
-    wc.lpszClassName = "MyWebViewPlugin_WindowClass";
-    wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
-
+    wc.lpfnWndProc = WebViewWndProc; wc.hInstance = (HINSTANCE)g_hInst; wc.lpszClassName = "MyWebViewPlugin_WindowClass"; wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     if (!RegisterClassA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
         Log("!!! FAILED to register window class. Error: %lu", GetLastError());
-        MessageBox(g_hwndParent, "Failed to register window class.", "Tracer Error", MB_ICONERROR);
-        return;
+        MessageBox(g_hwndParent, "Failed to register window class.", "Tracer Error", MB_ICONERROR); return;
     }
     Log("Window class registered successfully.");
-
     char* url_param = _strdup(url.c_str());
-
-    // ИЗМЕНЕНИЕ: Используем более явный стиль окна и снова указываем родителя
     g_plugin_hwnd = CreateWindowExA(
-        0, 
-        wc.lpszClassName, 
-        "Интегрированный WebView (Windows)",
-        WS_POPUPWINDOW | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_VISIBLE, // Явный стиль
+        0, wc.lpszClassName, "Интегрированный WebView (Windows)",
+        WS_POPUPWINDOW | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
-        g_hwndParent, // Указываем главное окно Reaper как родителя
-        NULL, 
-        (HINSTANCE)g_hInst, 
-        (LPVOID)url_param
-    );
-
+        g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url_param);
     if (!g_plugin_hwnd) {
         Log("!!! FAILED to create window. Error: %lu", GetLastError());
         MessageBox(g_hwndParent, "Failed to create window.", "Tracer Error", MB_ICONERROR);
-        free(url_param);
-        return;
+        free(url_param); return;
     }
     Log("Window created successfully (hwnd: %p).", g_plugin_hwnd);
 }
-
-LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
-{
+LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_CREATE: {
             Log("WM_CREATE received for hwnd %p.", hwnd);
@@ -254,16 +231,14 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             char* url = reinterpret_cast<char*>(lParam);
             Log("WM_APP_NAVIGATE received for URL: %s", url);
             if (webview && url) { std::wstring w_url(url, url + strlen(url)); webview->Navigate(w_url.c_str()); }
-            free(url);
-            return 0;
+            free(url); return 0;
         }
         case WM_SIZE: { if (webviewController) { RECT rc; GetClientRect(hwnd, &rc); webviewController->put_Bounds(rc); } return 0; }
         case WM_DESTROY: {
             Log("WM_DESTROY received for hwnd %p. Cleaning up.", hwnd);
             if (webviewController) { webviewController->Close(); webviewController = nullptr; webview = nullptr; }
             if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
-            g_plugin_hwnd = NULL;
-            return 0;
+            g_plugin_hwnd = NULL; return 0;
         }
         default: return DefWindowProc(hwnd, uMsg, wParam, lParam);
     }
