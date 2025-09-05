@@ -58,21 +58,14 @@ HWND g_hwndParent = nullptr;
 #endif
 
 // ================================================================= //
-//                ОБЪЯВЛЕНИЕ ФУНКЦИЙ С C-СВЯЗЫВАНИЕМ                //
+//                     ОСНОВНАЯ ЛОГИКА ПЛАГИНА                       //
 // ================================================================= //
 
-// ИСПРАВЛЕНИЕ: Оборачиваем функции для Reaper в extern "C"
-extern "C" {
-    void WEBVIEW_Navigate(const char* url);
-    void Action_OpenWebView(int command, int val, int valhw, int relmode, HWND hwnd);
-}
+void Action_OpenWebView(); 
+void WEBVIEW_Navigate(const char* url);
 
 static void OpenWebViewWindow(const std::string& url);
 static gaccel_register_t g_accel_reg = { { 0, 0, 0 }, "WebView: Open (default)" };
-
-// ================================================================= //
-//                       ТОЧКА ВХОДА ПЛАГИНА                         //
-// ================================================================= //
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec)
@@ -105,7 +98,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
 // ================================================================= //
 //                  РЕАЛИЗАЦИЯ ФУНКЦИЙ ДЛЯ REAPER                    //
 // ================================================================= //
-void Action_OpenWebView(int command, int val, int valhw, int relmode, HWND hwnd)
+void Action_OpenWebView()
 {
     Log("Action_OpenWebView triggered!");
     OpenWebViewWindow("https://www.reaper.fm/");
@@ -141,8 +134,7 @@ void WEBVIEW_Navigate(const char* url)
 
 #ifdef _WIN32
 LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
-void OpenWebViewWindow(const std::string& url)
-{
+void OpenWebViewWindow(const std::string& url) {
     Log("OpenWebViewWindow called for URL: %s", url.c_str());
     if (!LoadLibraryA("WebView2Loader.dll")) {
         Log("!!! FAILED: WebView2Loader.dll not found.");
