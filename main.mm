@@ -89,7 +89,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     Log("Plugin loaded successfully. API initialized.");
 
     // Шаг 1: Регистрируем действие и получаем его ID
-    g_command_id = plugin_register("command_id", (void*)"_FRZZ_WEBVIEW_OPEN_DEFAULT");
+    g_command_id = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN_DEFAULT");
     if (g_command_id) {
         // Шаг 2: Регистрируем описание для списка действий
         static gaccel_register_t gaccel = { { 0, 0, 0 }, "WebView: Open (default)" };
