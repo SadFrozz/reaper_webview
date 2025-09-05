@@ -1,4 +1,3 @@
-// src/main.mm
 #ifdef _WIN32
     #define WM_APP_NAVIGATE (WM_APP + 1)
     #include <windows.h>
@@ -15,97 +14,78 @@
 #include "WDL/wdltypes.h"
 #include "sdk/reaper_plugin.h"
 
-// ----- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: -----
-// Определяем этот макрос перед подключением reaper_plugin_functions.h
-// Это создаст определения для всех функций API и решит проблему линковки.
 #define REAPERAPI_IMPLEMENT
 #include "sdk/reaper_plugin_functions.h"
-// ---------------------------------
 
 
 // ================================================================= //
 //                            ЛОГИРОВАНИЕ                            //
 // ================================================================= //
-
 REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
-
 void Log(const char* format, ...) {
     char buf[4096];
     va_list args;
     va_start(args, format);
     vsnprintf(buf, sizeof(buf), format, args);
     va_end(args);
-    
 #ifdef _WIN32
     OutputDebugStringA("[reaper_webview] ");
     OutputDebugStringA(buf);
     OutputDebugStringA("\n");
-
-    // Теперь GetResourcePath будет 100% работать, так как API инициализирован
     if (GetResourcePath) {
         char path[MAX_PATH];
         strcpy(path, GetResourcePath());
         strcat(path, "\\reaper_webview_log.txt");
         FILE* fp = fopen(path, "a");
-        if (fp) {
-            fprintf(fp, "%s\n", buf);
-            fclose(fp);
-        }
+        if (fp) { fprintf(fp, "%s\n", buf); fclose(fp); }
     }
 #else
     NSLog(@"[reaper_webview] %s", buf);
 #endif
 }
 
-
 // ================================================================= //
 //                      ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ                        //
 // ================================================================= //
-
 HWND g_hwndParent = nullptr;
-
 #ifdef _WIN32
     HWND g_plugin_hwnd = nullptr;
     wil::com_ptr<ICoreWebView2Controller> webviewController;
     wil::com_ptr<ICoreWebView2> webview;
     HMODULE g_hWebView2Loader = nullptr;
 #else
-    NSWindow* g_pluginWindow = nil;
-    WKWebView* g_webView = nil;
-    id g_delegate = nil;
+    NSWindow* g_pluginWindow = nil; WKWebView* g_webView = nil; id g_delegate = nil;
 #endif
 
 // ================================================================= //
-//                       ОСНОВНАЯ ЛОГИКА ПЛАГИНА                       //
+//                ОБЪЯВЛЕНИЕ ФУНКЦИЙ С C-СВЯЗЫВАНИЕМ                //
 // ================================================================= //
 
-static void Action_OpenWebView(int, int, int, int, HWND);
-static void OpenWebViewWindow(const std::string& url);
-void WEBVIEW_Navigate(const char* url);
+// ИСПРАВЛЕНИЕ: Оборачиваем функции для Reaper в extern "C"
+extern "C" {
+    void WEBVIEW_Navigate(const char* url);
+    void Action_OpenWebView(int command, int val, int valhw, int relmode, HWND hwnd);
+}
 
+static void OpenWebViewWindow(const std::string& url);
 static gaccel_register_t g_accel_reg = { { 0, 0, 0 }, "WebView: Open (default)" };
+
+// ================================================================= //
+//                       ТОЧКА ВХОДА ПЛАГИНА                         //
+// ================================================================= //
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec)
 {
     g_hInst = hInstance;
     if (!rec) return 0;
+    if (rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc) return 0;
+    if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
     
-    if (rec->caller_version != REAPER_PLUGIN_VERSION) return 0;
-
-    // ----- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ 2: -----
-    // Загружаем все функции API из Reaper. Возвращает 0 при успехе.
-    if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) {
-        // Можно добавить вывод в MessageBox, если что-то пошло не так
-        return 0;
-    }
-    // ---------------------------------
-
     g_hwndParent = rec->hwnd_main;
-    
     Log("Plugin loaded successfully. API initialized.");
 
-    int cmdId = plugin_register("command_id", (void*)Action_OpenWebView); // Используем plugin_register, т.к. он теперь доступен
+    int cmdId = plugin_register("command_id", (void*)Action_OpenWebView);
     if (cmdId > 0) {
         g_accel_reg.accel.cmd = cmdId;
         plugin_register("gaccel", &g_accel_reg);
@@ -122,7 +102,10 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     return 1;
 }
 
-static void Action_OpenWebView(int, int, int, int, HWND)
+// ================================================================= //
+//                  РЕАЛИЗАЦИЯ ФУНКЦИЙ ДЛЯ REAPER                    //
+// ================================================================= //
+void Action_OpenWebView(int command, int val, int valhw, int relmode, HWND hwnd)
 {
     Log("Action_OpenWebView triggered!");
     OpenWebViewWindow("https://www.reaper.fm/");
@@ -138,8 +121,7 @@ void WEBVIEW_Navigate(const char* url)
     else {
         char* copy = _strdup(url);
         PostMessage(g_plugin_hwnd, WM_APP_NAVIGATE, 0, (LPARAM)copy);
-        ShowWindow(g_plugin_hwnd, SW_SHOW);
-        SetForegroundWindow(g_plugin_hwnd);
+        ShowWindow(g_plugin_hwnd, SW_SHOW); SetForegroundWindow(g_plugin_hwnd);
     }
 #else
     if (!g_pluginWindow)
@@ -156,9 +138,11 @@ void WEBVIEW_Navigate(const char* url)
 // ================================================================= //
 //                    РЕАЛИЗАЦИЯ ДЛЯ WINDOWS (ИЗМЕНЕНИЯ)             //
 // ================================================================= //
+
 #ifdef _WIN32
 LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
-void OpenWebViewWindow(const std::string& url) {
+void OpenWebViewWindow(const std::string& url)
+{
     Log("OpenWebViewWindow called for URL: %s", url.c_str());
     if (!LoadLibraryA("WebView2Loader.dll")) {
         Log("!!! FAILED: WebView2Loader.dll not found.");
