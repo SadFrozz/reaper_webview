@@ -5,10 +5,7 @@
     #include <string>
     #include <wrl.h>
     #include <wil/com.h>
-    #include "deps/WebView2.h"
-    #include <shlobj.h> // Для получения пути к документам
-    #include <pathcch.h> // Для работы с путями
-    #pragma comment(lib, "pathcch.lib")
+    #include "WebView2.h"
 #else
     #import <Cocoa/Cocoa.h>
     #import <WebKit/WebKit.h>
@@ -16,29 +13,49 @@
 #endif
 
 #include "WDL/wdltypes.h"
-#include "sdk/reaper_plugin_functions.h"
+#include "sdk/reaper_plugin.h"
+
 
 // ================================================================= //
 //                            ЛОГИРОВАНИЕ                            //
 // ================================================================= //
 
+void* g_hInst = nullptr; // Перемещаем g_hInst сюда, чтобы логгер имел к нему доступ
+
 #ifdef _WIN32
 void Log(const char* format, ...) {
+    // Форматируем сообщение
     char buf[4096];
     va_list args;
     va_start(args, format);
     vsnprintf(buf, sizeof(buf), format, args);
     va_end(args);
     
-    OutputDebugStringA(buf); // Вывод в отладчик (DebugView)
+    // 1. Выводим в отладочную консоль (для DebugView)
+    OutputDebugStringA("[reaper_webview] ");
+    OutputDebugStringA(buf);
     OutputDebugStringA("\n");
 
-    // Дублируем в файл для удобства
-    char path[MAX_PATH];
-    if (GetResourcePath) { // GetResourcePath - функция из SDK Reaper
-        strcpy(path, GetResourcePath());
-        strcat(path, "\\reaper_webview_log.txt");
-        FILE* fp = fopen(path, "a");
+    // 2. Выводим в файл рядом с DLL
+    static char logPath[MAX_PATH] = {0};
+
+    // При первом вызове определяем путь к лог-файлу
+    if (logPath[0] == '\0' && g_hInst) {
+        if (GetModuleFileNameA((HINSTANCE)g_hInst, logPath, MAX_PATH)) {
+            char* lastSlash = strrchr(logPath, '\\');
+            if (lastSlash) {
+                // Нашли последний слэш, заменяем имя DLL на имя лог-файла
+                strcpy(lastSlash + 1, "reaper_webview_log.txt");
+            } else {
+                // Непредвиденная ситуация, путь не содержит слэшей. Отключаем логирование в файл.
+                logPath[0] = '-'; 
+            }
+        }
+    }
+    
+    // Пишем в файл, если путь успешно определен
+    if (logPath[0] != '\0' && logPath[0] != '-') {
+        FILE* fp = fopen(logPath, "a");
         if (fp) {
             fprintf(fp, "%s\n", buf);
             fclose(fp);
@@ -62,8 +79,7 @@ void Log(const char* format, ...) {
 //                      ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ                        //
 // ================================================================= //
 
-void* g_hInst = nullptr;
-HWND  g_hwndParent = nullptr;
+HWND g_hwndParent = nullptr;
 
 #ifdef _WIN32
     HWND g_plugin_hwnd = nullptr;
@@ -93,18 +109,17 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec)
 {
     if (!rec) return 0;
-    g_hInst     = hInstance;
+    g_hInst     = hInstance; // Инициализируем g_hInst в самом начале
     g_hwndParent = rec->hwnd_main;
 
     if (rec->caller_version != REAPER_PLUGIN_VERSION) return 0;
-    
+
     Log("Plugin loaded successfully.");
 
     int cmdId = rec->Register("command_id", (void*)Action_OpenWebView);
     if (cmdId > 0) {
         g_accel_reg.accel.cmd = cmdId;
         rec->Register("gaccel", &g_accel_reg);
-        // ИСПРАВЛЕНИЕ: Регистрируем кастомный ID
         rec->Register("command_id_lookup", (void*)"_FRZZ_WEBVIEW_OPEN_DEFAULT");
         Log("Action 'WebView: Open (default)' registered with command ID %d", cmdId);
     } else {
@@ -142,7 +157,8 @@ static void WEBVIEW_Navigate(const char* url)
         OpenWebViewWindow(std::string(url));
     else {
         NSString* nsURL = [NSString stringWithUTF8String:url];
-        [g_delegate performSelectorOnMainThread:@selector(navigate:) withObject:nsURL waitUntilDone:NO];
+        [g_delegate performSelectorOnMainThread:@selector(navigate:)
+                                   withObject:nsURL waitUntilDone:NO];
         [g_pluginWindow makeKeyAndOrderFront:nil];
     }
 #endif
