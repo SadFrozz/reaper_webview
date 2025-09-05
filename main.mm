@@ -149,36 +149,54 @@ void WEBVIEW_Navigate(const char* url)
 
 #ifdef _WIN32
 LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
-void OpenWebViewWindow(const std::string& url) {
+void OpenWebViewWindow(const std::string& url)
+{
     Log("OpenWebViewWindow called for URL: %s", url.c_str());
-    if (!LoadLibraryA("WebView2Loader.dll")) {
-        Log("!!! FAILED: WebView2Loader.dll not found.");
-        MessageBox(g_hwndParent, "WebView2 Runtime not found.\nPlease install Microsoft Edge WebView2 Runtime.", "Error", MB_ICONERROR);
+
+    if (g_plugin_hwnd && IsWindow(g_plugin_hwnd)) {
+        DockWindowActivate(g_plugin_hwnd);
         return;
     }
-    if (g_plugin_hwnd && IsWindow(g_plugin_hwnd)) {
-        Log("Window already exists, bringing to front.");
-        ShowWindow(g_plugin_hwnd, SW_SHOW); SetForegroundWindow(g_plugin_hwnd); return;
-    }
-    WNDCLASSA wc{0};
-    wc.lpfnWndProc = WebViewWndProc; wc.hInstance = (HINSTANCE)g_hInst; wc.lpszClassName = "MyWebViewPlugin_WindowClass"; wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    if (!RegisterClassA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+    
+    // ИЗМЕНЕНИЕ: Используем WNDCLASSW для Unicode
+    WNDCLASSW wc{0};
+    wc.lpfnWndProc   = WebViewWndProc;
+    wc.hInstance     = (HINSTANCE)g_hInst;
+    // ИЗМЕНЕНИЕ: Используем L"..." для wide-char строки
+    wc.lpszClassName = L"MyWebViewPlugin_WindowClass";
+    wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
+
+    // ИЗМЕНЕНИЕ: Регистрируем Unicode-версию класса
+    if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
         Log("!!! FAILED to register window class. Error: %lu", GetLastError());
-        MessageBox(g_hwndParent, "Failed to register window class.", "Tracer Error", MB_ICONERROR); return;
+        return;
     }
     Log("Window class registered successfully.");
+
     char* url_param = _strdup(url.c_str());
-    g_plugin_hwnd = CreateWindowExA(
-        0, wc.lpszClassName, "Интегрированный WebView (Windows)",
-        WS_POPUPWINDOW | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
-        g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url_param);
+
+    // ИЗМЕНЕНИЕ: Используем CreateWindowExW для Unicode
+    g_plugin_hwnd = CreateWindowExW(
+        0, 
+        wc.lpszClassName,
+        L"Интегрированный WebView (Windows)", // ИЗМЕНЕНИЕ: L"..." для корректного отображения кириллицы
+        WS_CHILD | WS_VISIBLE, // ИЗМЕНЕНИЕ: Стиль для дочернего окна, которое можно стыковать
+        0, 0, 0, 0, // Позиция и размер для дочернего окна игнорируются, докер сам их установит
+        g_hwndParent, // Указываем главное окно Reaper как родителя
+        NULL, 
+        (HINSTANCE)g_hInst, 
+        (LPVOID)url_param
+    );
+
     if (!g_plugin_hwnd) {
         Log("!!! FAILED to create window. Error: %lu", GetLastError());
-        MessageBox(g_hwndParent, "Failed to create window.", "Tracer Error", MB_ICONERROR);
-        free(url_param); return;
+        free(url_param);
+        return;
     }
-    Log("Window created successfully (hwnd: %p).", g_plugin_hwnd);
+
+    // ИЗМЕНЕНИЕ: Регистрируем наше окно в докере Reaper
+    DockWindowAddEx(g_plugin_hwnd, "WebView", "FRZZ_WebView", true);
+    Log("Window created (hwnd: %p) and registered in Docker.", g_plugin_hwnd);
 }
 LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
@@ -239,6 +257,7 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         case WM_SIZE: { if (webviewController) { RECT rc; GetClientRect(hwnd, &rc); webviewController->put_Bounds(rc); } return 0; }
         case WM_DESTROY: {
             Log("WM_DESTROY received for hwnd %p. Cleaning up.", hwnd);
+            DockWindowRemove(hwnd);
             if (webviewController) { webviewController->Close(); webviewController = nullptr; webview = nullptr; }
             if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
             g_plugin_hwnd = NULL; return 0;
