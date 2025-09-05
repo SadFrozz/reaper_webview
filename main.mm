@@ -11,8 +11,6 @@
     #import <Cocoa/Cocoa.h>
     #import <WebKit/WebKit.h>
     #include <string>
-    // ИЗМЕНЕНИЕ: Подключаем SWELL для получения HWND из NSView
-    #include "WDL/swell/swell.h"
 #endif
 
 #include "WDL/wdltypes.h"
@@ -56,21 +54,37 @@ void Log(const char* format, ...) {
     NSWindow* g_pluginWindow = nil; 
     WKWebView* g_webView = nil; 
     id g_delegate = nil;
-    // ИЗМЕНЕНИЕ: Добавляем глобальную переменную для HWND на macOS
-    HWND g_plugin_hwnd_mac = nullptr;
 #endif
 
 void Action_OpenWebView();
 static void OpenWebViewWindow(const std::string& url);
 void WEBVIEW_Navigate(const char* url);
 
-bool HookCommandProc(int cmd, int flag) {
+bool HookCommandProc(int cmd, int flag)
+{
     if (cmd == g_command_id) {
         Action_OpenWebView();
         return true;
     }
+    // ИЗМЕНЕНИЕ: Обрабатываем новые команды
+    if (cmd == NamedCommandLookup("FRZZ_WEBVIEW_REFRESH")) {
+        if (g_plugin_hwnd && webview) webview->Reload();
+        return true;
+    }
+    if (cmd == NamedCommandLookup("FRZZ_WEBVIEW_OPENURL")) {
+        if (g_plugin_hwnd && webview) {
+            char urlbuf[2048] = "https://";
+            if (GetUserInputs("Open URL", 1, "URL:", urlbuf, sizeof(urlbuf))) {
+                WEBVIEW_Navigate(urlbuf);
+            }
+        }
+        return true;
+    }
     return false;
 }
+// ИЗМЕНЕНИЕ (Windows): Добавляем ID для команд контекстного меню
+#define IDC_REFRESH 40001
+#define IDC_OPENURL 40002
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec) {
@@ -103,6 +117,12 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     
     plugin_register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*,url");
     plugin_register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
+    plugin_register("command_id", (void*)"FRZZ_WEBVIEW_REFRESH");
+    plugin_register("gaccel", new gaccel_register_t{ { 0, 0, 0 }, "WebView: Refresh Page" });
+    
+    plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPENURL");
+    plugin_register("gaccel", new gaccel_register_t{ { 0, 0, 0 }, "WebView: Open URL..." });
+
     Log("API function 'WEBVIEW_Navigate' registered.");
 
     return 1;
@@ -226,6 +246,42 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                     }).Get());
             break;
         }
+        case WM_CONTEXTMENU: {
+            HMENU menu = CreatePopupMenu();
+            if (menu) {
+                // Добавляем стандартный пункт "Dock..."
+                int pos = DockWindowAddEx_GetPosition(hwnd); // -1=undocked, 0-3=docked
+                AddExtensionsMainMenu(); // Убедимся, что меню Extensions существует
+                if (HMENU ex_menu = GetSubMenu(GetMenu(g_hwndParent), 5)) { // 5 - это обычно индекс меню Extensions
+                    if (HMENU docker_menu = GetSubMenu(ex_menu, 0)) { // 0 - обычно "Docker"
+                        MENUITEMINFO info{sizeof(info), MIIM_ID | MIIM_STRING | MIIM_STATE, 0, (pos >= 0 ? MFS_CHECKED : 0), 0, docker_menu, 0, 0, 0, "Dock WebView in Docker", 0, 0};
+                        InsertMenuItem(menu, 0, TRUE, &info);
+                    }
+                }
+                
+                // Стандартный пункт "Close"
+                AppendMenu(menu, MF_STRING, IDCANCEL, "Close");
+                AppendMenu(menu, MF_SEPARATOR, 0, NULL);
+                
+                // Наши кастомные пункты
+                AppendMenu(menu, MF_STRING, IDC_REFRESH, "Refresh Page");
+                AppendMenu(menu, MF_STRING, IDC_OPENURL, "Open URL...");
+                
+                int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, LOWORD(lParam), HIWORD(lParam), 0, hwnd, NULL);
+                if (cmd == IDCANCEL) {
+                    SendMessage(hwnd, WM_CLOSE, 0, 0);
+                } else if (cmd == IDC_REFRESH) {
+                    if (webview) webview->Reload();
+                } else if (cmd == IDC_OPENURL) {
+                    char urlbuf[2048] = "https://";
+                    if (GetUserInputs("Open URL", 1, "URL:", urlbuf, sizeof(urlbuf))) {
+                        WEBVIEW_Navigate(urlbuf);
+                    }
+                }
+                DestroyMenu(menu);
+            }
+            return 0;
+        }
         case WM_DESTROY: {
             Log("WM_DESTROY received for hwnd %p. Cleaning up.", hwnd);
             DockWindowRemove(hwnd);
@@ -243,69 +299,115 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 //                  РЕАЛИЗАЦИЯ ДЛЯ MACOS (ИЗМЕНЕНИЯ)                 //
 // ================================================================= //
 
-@interface WebViewDelegate : NSObject <NSWindowDelegate>
-- (void)navigate:(NSString*)urlString;
+
+// Глобальная переменная для хранения нашего HWND, созданного через SWELL
+HWND g_swell_hwnd = nullptr;
+
+// Наш кастомный NSView, который будет содержать WebView
+@interface MyNSView : NSView
+@end
+@implementation MyNSView
+- (BOOL)isFlipped { return YES; } // Важно для правильного отображения WebView
 @end
 
-@implementation WebViewDelegate
-- (void)windowWillClose:(NSNotification *)notification {
-    Log("macOS window is closing.");
-
-    // ИЗМЕНЕНИЕ: Убираем окно из докера при закрытии
-    if (g_plugin_hwnd_mac && DockWindowRemove) {
-        DockWindowRemove(g_plugin_hwnd_mac);
-    }
-
-    g_pluginWindow = nil;
-    g_webView = nil;
-    g_delegate = nil;
-    g_plugin_hwnd_mac = nullptr;
-}
-
-- (void)navigate:(NSString*)urlString {
-    if (g_webView) {
-        NSURL* url = [NSURL URLWithString:urlString];
-        if (url) {
-            NSURLRequest* request = [NSURLRequest requestWithURL:url];
-            [g_webView loadRequest:request];
+// Функция обратного вызова для SWELL-окна
+LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    switch (uMsg) {
+        case WM_CREATE: {
+            Log("SWELL WM_CREATE called.");
+            // Получаем нативный NSView, который Reaper выделил для нашего HWND
+            NSView* parentView = (NSView*)Swell_GetNSView(hwnd);
+            if (parentView) {
+                NSRect frame = [parentView bounds];
+                
+                // Создаем наш NSView и WebView
+                MyNSView* myView = [[MyNSView alloc] initWithFrame:frame];
+                WKWebViewConfiguration* config = [[WKWebViewConfiguration alloc] init];
+                g_webView = [[WKWebView alloc] initWithFrame:frame configuration:config];
+                
+                // Встраиваем WebView в наш NSView, а наш NSView - в родительский от Reaper
+                [myView addSubview:g_webView];
+                [parentView addSubview:myView];
+                
+                // Сохраняем указатель на наш NSView в данных окна для последующего доступа
+                SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)myView);
+                
+                // Загружаем URL
+                if (lParam) {
+                    const char* url = (const char*)((LPCREATESTRUCT)lParam)->lpCreateParams;
+                    if (url) {
+                        NSString* nsURL = [NSString stringWithUTF8String:url];
+                        NSURL* URL = [NSURL URLWithString:nsURL];
+                        NSURLRequest* request = [NSURLRequest requestWithURL:URL];
+                        [g_webView loadRequest:request];
+                    }
+                }
+            }
+            return 0;
+        }
+        case WM_SIZE: {
+            // При изменении размера окна докера, меняем размер нашего NSView и WebView
+            MyNSView* myView = (MyNSView*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+            if (myView) {
+                NSRect frame = NSMakeRect(0, 0, LOWORD(lParam), HIWORD(lParam));
+                [myView setFrame:frame];
+                if (g_webView) {
+                    [g_webView setFrame:frame];
+                }
+            }
+            return 0;
+        }
+        case WM_DESTROY: {
+            Log("SWELL WM_DESTROY called.");
+            if (DockWindowRemove) DockWindowRemove(hwnd);
+            g_swell_hwnd = nullptr;
+            g_webView = nil; // Обнуляем, т.к. он будет удален вместе с myView
+            return 0;
         }
     }
+    return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
-@end
 
 void OpenWebViewWindow(const std::string& url) {
     Log("macOS OpenWebViewWindow called.");
-    if (g_pluginWindow) {
-        if (g_plugin_hwnd_mac && DockWindowActivate) DockWindowActivate(g_plugin_hwnd_mac);
-        else [g_pluginWindow makeKeyAndOrderFront:nil];
+
+    if (g_swell_hwnd) {
+        if (DockWindowActivate) DockWindowActivate(g_swell_hwnd);
         return;
     }
+    
+    // 1. Регистрируем SWELL-класс окна
+    WNDCLASS wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = SwellWndProc;
+    wc.hInstance = g_hInst;
+    wc.lpszClassName = "MyWebViewSwellClass";
+    SWELL_RegisterClass(&wc);
+
+    // 2. Создаем "пустое" SWELL-окно. Оно невидимо, но у него есть HWND.
+    g_swell_hwnd = CreateWindowEx(0, "MyWebViewSwellClass", "WebView", 0, 0, 0, 0, 0, 
+                                  g_hwndParent, 0, g_hInst, (void*)url.c_str());
+
+    if (!g_swell_hwnd) {
+        Log("!!! macOS: Failed to create SWELL window.");
+        return;
+    }
+    
+    // 3. Регистрируем это HWND в докере. Reaper сам покажет окно и встроит его.
+    if (DockWindowAddEx) {
+        DockWindowAddEx(g_swell_hwnd, "WebView", "FRZZ_WebView_macOS", true);
+        Log("macOS SWELL window (hwnd: %p) registered in Docker.", g_swell_hwnd);
+    }
+}
+
+void WEBVIEW_Navigate(const char* url) {
+    if (!g_webView || !url) return;
     @autoreleasepool {
-        NSRect frame = NSMakeRect(0, 0, 1280, 720);
-        g_pluginWindow = [[NSWindow alloc] initWithContentRect:frame
-                                                     styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable)
-                                                       backing:NSBackingStoreBuffered defer:NO];
-        [g_pluginWindow setTitle:@"Интегрированный WebView (macOS)"];
-        [g_pluginWindow center];
-        WKWebViewConfiguration* config = [[WKWebViewConfiguration alloc] init];
-        g_webView = [[WKWebView alloc] initWithFrame:frame configuration:config];
-        [g_pluginWindow setContentView:g_webView];
-        g_delegate = [[WebViewDelegate alloc] init];
-        [g_pluginWindow setDelegate:g_delegate];
-        [g_pluginWindow setReleasedWhenClosed:NO];
-        if (SWELL_GetHWNDFromView && DockWindowAddEx) {
-            g_plugin_hwnd_mac = SWELL_GetHWNDFromView([g_pluginWindow contentView]);
-            if (g_plugin_hwnd_mac) {
-                DockWindowAddEx(g_plugin_hwnd_mac, "WebView", "FRZZ_WebView_macOS", true);
-                Log("macOS window (hwnd: %p) registered in Docker.", g_plugin_hwnd_mac);
-            }
-        } else {
-            [g_pluginWindow makeKeyAndOrderFront:nil];
-        }
-        NSString* nsURL = [NSString stringWithUTF8String:url.c_str()];
-        if (nsURL) {
-            [g_delegate performSelectorOnMainThread:@selector(navigate:) withObject:nsURL waitUntilDone:NO];
-        }
+        NSString* nsURL = [NSString stringWithUTF8String:url];
+        NSURL* URL = [NSURL URLWithString:nsURL];
+        NSURLRequest* request = [NSURLRequest requestWithURL:URL];
+        [g_webView loadRequest:request];
     }
 }
 #endif
