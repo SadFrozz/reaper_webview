@@ -37,7 +37,6 @@ static void Action_OpenWebView(int, int, int, int, HWND);
 static void OpenWebViewWindow(const std::string& url);
 // ИСПРАВЛЕНИЕ 1: Добавляем предварительные объявления
 static void WEBVIEW_Navigate(const char* url);
-static gaccel_register_t g_accel_reg;
 
 
 // ИСПРАВЛЕНИЕ 1: Определяем g_accel_reg до его использования
