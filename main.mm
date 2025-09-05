@@ -30,36 +30,17 @@
 #include "WDL/wdltypes.h"
 #include "sdk/reaper_plugin_functions.h"
 
+// Добавьте этот include для SWELL функций
+#ifndef _WIN32
+#include "WDL/swell/swell.h"
+#endif
+
 // --- Глобальные переменные ---
 void* g_hInst = NULL;
 HWND g_hwndParent = NULL;
 
-// В начале файла добавьте:
+// Правильное определение MessageBox для macOS
 #ifndef _WIN32
-    // Реализация MessageBox для macOS
-    static int MessageBox(HWND hwnd, const char* text, const char* caption, int type) {
-        @autoreleasepool {
-            NSAlert *alert = [[NSAlert alloc] init];
-            [alert setMessageText:[NSString stringWithUTF8String:caption ? caption : ""]];
-            [alert setInformativeText:[NSString stringWithUTF8String:text ? text : ""]];
-            
-            if (type & MB_OK) {
-                [alert addButtonWithTitle:@"OK"];
-            }
-            if (type & MB_YESNO) {
-                [alert addButtonWithTitle:@"Yes"];
-                [alert addButtonWithTitle:@"No"];
-            }
-            
-            NSInteger result = [alert runModal];
-            
-            if (type & MB_YESNO) {
-                return (result == NSAlertFirstButtonReturn) ? IDYES : IDNO;
-            }
-            return IDOK;
-        }
-    }
-    
     #define MessageBoxA(hwnd, text, caption, type) MessageBox(hwnd, text, caption, type)
 #endif
 
