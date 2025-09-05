@@ -17,7 +17,6 @@
 #define REAPERAPI_IMPLEMENT
 #include "sdk/reaper_plugin_functions.h"
 
-
 // ================================================================= //
 //                            ЛОГИРОВАНИЕ                            //
 // ================================================================= //
@@ -48,6 +47,8 @@ void Log(const char* format, ...) {
 //                      ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ                        //
 // ================================================================= //
 HWND g_hwndParent = nullptr;
+int g_command_id = 0; // Глобальная переменная для хранения нашего Command ID
+
 #ifdef _WIN32
     HWND g_plugin_hwnd = nullptr;
     wil::com_ptr<ICoreWebView2Controller> webviewController;
@@ -58,14 +59,23 @@ HWND g_hwndParent = nullptr;
 #endif
 
 // ================================================================= //
-//                     ОСНОВНАЯ ЛОГИКА ПЛАГИНА                       //
+//                       ОСНОВНАЯ ЛОГИКА ПЛАГИНА                       //
 // ================================================================= //
 
-void Action_OpenWebView(); 
+void Action_OpenWebView();
+static void OpenWebViewWindow(const std::string& url);
 void WEBVIEW_Navigate(const char* url);
 
-static void OpenWebViewWindow(const std::string& url);
-static gaccel_register_t g_accel_reg = { { 0, 0, 0 }, "WebView: Open (default)" };
+// Эта функция будет перехватывать ВСЕ действия
+bool HookCommandProc(int cmd, int flag)
+{
+    // Проверяем, наше ли это действие
+    if (cmd == g_command_id) {
+        Action_OpenWebView();
+        return true; // Сообщаем Reaper, что мы обработали команду
+    }
+    return false; // Не наше действие, передаем дальше
+}
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec)
@@ -78,12 +88,17 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     g_hwndParent = rec->hwnd_main;
     Log("Plugin loaded successfully. API initialized.");
 
-    int cmdId = plugin_register("command_id", (void*)Action_OpenWebView);
-    if (cmdId > 0) {
-        g_accel_reg.accel.cmd = cmdId;
-        plugin_register("gaccel", &g_accel_reg);
-        plugin_register("command_id_lookup", (void*)"_FRZZ_WEBVIEW_OPEN_DEFAULT");
-        Log("Action 'WebView: Open (default)' registered with command ID %d", cmdId);
+    // Шаг 1: Регистрируем действие и получаем его ID
+    g_command_id = plugin_register("command_id", (void*)"_FRZZ_WEBVIEW_OPEN_DEFAULT");
+    if (g_command_id) {
+        // Шаг 2: Регистрируем описание для списка действий
+        static gaccel_register_t gaccel = { { 0, 0, 0 }, "WebView: Open (default)" };
+        gaccel.accel.cmd = g_command_id;
+        plugin_register("gaccel", &gaccel);
+
+        // Шаг 3: Регистрируем наш "перехватчик"
+        plugin_register("hookcommand", (void*)HookCommandProc);
+        Log("Action 'WebView: Open (default)' registered with command ID %d", g_command_id);
     } else {
         Log("!!! FAILED to register action.");
     }
@@ -95,9 +110,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     return 1;
 }
 
-// ================================================================= //
-//                  РЕАЛИЗАЦИЯ ФУНКЦИЙ ДЛЯ REAPER                    //
-// ================================================================= //
+// Теперь это простая функция без аргументов
 void Action_OpenWebView()
 {
     Log("Action_OpenWebView triggered!");
