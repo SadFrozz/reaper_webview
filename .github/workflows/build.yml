@@ -25,13 +25,18 @@ jobs:
     - name: Install Windows dependencies
       if: runner.os == 'Windows'
       shell: pwsh
-      timeout-minutes: 10  # Увеличиваем таймаут для Windows
+      timeout-minutes: 10
       run: |
         # Скачиваем и распаковываем WebView2 SDK
         Write-Host "Downloading WebView2 SDK..."
         Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2" -OutFile "webview2.zip" -TimeoutSec 300
         Expand-Archive -Path "webview2.zip" -DestinationPath "webview2-sdk" -Force
         
+        # ----- ДИАГНОСТИЧЕСКИЙ ШАГ -----
+        Write-Host "Listing contents of unpacked webview2-sdk..."
+        Get-ChildItem -Path webview2-sdk -Recurse
+        # --------------------------------
+
         # Скачиваем и распаковываем WIL
         Write-Host "Downloading WIL..."
         Invoke-WebRequest -Uri "https://github.com/microsoft/wil/archive/refs/heads/master.zip" -OutFile "wil.zip" -TimeoutSec 300
@@ -130,7 +135,7 @@ jobs:
         retention-days: 7
 
     - name: Copy WebView2Loader DLL
-      run: Copy-Item -Path "webview2-sdk/build/native/bin/x64/WebView2Loader.dll" -Destination "build/Release/"
+      run: Copy-Item -Path "webview2-sdk/runtimes/win-x64/native/WebView2Loader.dll" -Destination "build/Release/"
         
     - name: Upload Windows artifact
       if: runner.os == 'Windows'
