@@ -12,7 +12,7 @@
     #import <WebKit/WebKit.h>
     #include <string>
     // ИЗМЕНЕНИЕ: Подключаем SWELL для получения HWND из NSView
-    #include "../WDL/swell/swell.h"
+    #include "WDL/swell/swell.h"
 #endif
 
 #include "WDL/wdltypes.h"
@@ -203,7 +203,26 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             pCreate(nullptr, (userDataPath[0] ? userDataPath : nullptr), nullptr,
                 Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
                     [hwnd, w_url](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
-                        // ... (остальная часть без изменений)
+                        Log("WebView env callback fired. HRESULT: 0x%lX", result);
+                        if (FAILED(result)) { DestroyWindow(hwnd); return result; }
+                        
+                        env->CreateCoreWebView2Controller(hwnd, Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                            [hwnd, w_url](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                                Log("WebView controller callback fired. HRESULT: 0x%lX", result);
+                                if (controller) {
+                                    webviewController = controller;
+                                    webviewController->get_CoreWebView2(&webview);
+                                    RECT rc; GetClientRect(hwnd, &rc);
+                                    webviewController->put_Bounds(rc);
+                                    webview->Navigate(w_url.c_str());
+                                    Log("WebView controller created and navigation initiated.");
+                                } else { DestroyWindow(hwnd); }
+                                return S_OK;
+                            }).Get());
+
+                        // ----- ИСПРАВЛЕНИЕ: Добавляем недостающий return -----
+                        return S_OK;
+                        // ----------------------------------------------------
                     }).Get());
             break;
         }
@@ -256,17 +275,11 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
 void OpenWebViewWindow(const std::string& url) {
     Log("macOS OpenWebViewWindow called.");
-
-    // ИЗМЕНЕНИЕ: Если окно уже есть, просто активируем его в докере
     if (g_pluginWindow) {
-        if (g_plugin_hwnd_mac && DockWindowActivate) {
-            DockWindowActivate(g_plugin_hwnd_mac);
-        } else {
-            [g_pluginWindow makeKeyAndOrderFront:nil];
-        }
+        if (g_plugin_hwnd_mac && DockWindowActivate) DockWindowActivate(g_plugin_hwnd_mac);
+        else [g_pluginWindow makeKeyAndOrderFront:nil];
         return;
     }
-    
     @autoreleasepool {
         NSRect frame = NSMakeRect(0, 0, 1280, 720);
         g_pluginWindow = [[NSWindow alloc] initWithContentRect:frame
@@ -274,28 +287,21 @@ void OpenWebViewWindow(const std::string& url) {
                                                        backing:NSBackingStoreBuffered defer:NO];
         [g_pluginWindow setTitle:@"Интегрированный WebView (macOS)"];
         [g_pluginWindow center];
-
         WKWebViewConfiguration* config = [[WKWebViewConfiguration alloc] init];
         g_webView = [[WKWebView alloc] initWithFrame:frame configuration:config];
         [g_pluginWindow setContentView:g_webView];
-        
         g_delegate = [[WebViewDelegate alloc] init];
         [g_pluginWindow setDelegate:g_delegate];
         [g_pluginWindow setReleasedWhenClosed:NO];
-
-        // ИЗМЕНЕНИЕ: Логика для регистрации окна в докере
         if (SWELL_GetHWNDFromView && DockWindowAddEx) {
             g_plugin_hwnd_mac = SWELL_GetHWNDFromView([g_pluginWindow contentView]);
             if (g_plugin_hwnd_mac) {
-                // Регистрируем окно в докере Reaper
                 DockWindowAddEx(g_plugin_hwnd_mac, "WebView", "FRZZ_WebView_macOS", true);
                 Log("macOS window (hwnd: %p) registered in Docker.", g_plugin_hwnd_mac);
             }
         } else {
-            // Если что-то пошло не так, просто показываем как обычное окно
             [g_pluginWindow makeKeyAndOrderFront:nil];
         }
-        
         NSString* nsURL = [NSString stringWithUTF8String:url.c_str()];
         if (nsURL) {
             [g_delegate performSelectorOnMainThread:@selector(navigate:) withObject:nsURL waitUntilDone:NO];
