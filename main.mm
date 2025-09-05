@@ -1,5 +1,7 @@
 // src/main.mm
 #ifdef _WIN32
+    // ИСПРАВЛЕНИЕ 4: Возвращаем определение WM_APP_NAVIGATE
+    #define WM_APP_NAVIGATE (WM_APP + 1)
     #include <windows.h>
     #include <string>
     #include <wrl.h>
@@ -14,6 +16,7 @@
 #include "WDL/wdltypes.h"
 #include "sdk/reaper_plugin_functions.h"
 
+// ---------- Глобальные переменные ----------
 void* g_hInst = nullptr;
 HWND  g_hwndParent = nullptr;
 
@@ -25,11 +28,24 @@ HWND  g_hwndParent = nullptr;
 #else
     NSWindow* g_pluginWindow = nil;
     WKWebView* g_webView = nil;
+    // ИСПРАВЛЕНИЕ 2: Объявляем g_delegate
+    id g_delegate = nil;
 #endif
 
-// ---------- Публичные функции ----------
+// ---------- Предварительные объявления (Forward Declarations) ----------
 static void Action_OpenWebView(int, int, int, int, HWND);
 static void OpenWebViewWindow(const std::string& url);
+// ИСПРАВЛЕНИЕ 1: Добавляем предварительные объявления
+static void WEBVIEW_Navigate(const char* url);
+static gaccel_register_t g_accel_reg;
+
+
+// ИСПРАВЛЕНИЕ 1: Определяем g_accel_reg до его использования
+static gaccel_register_t g_accel_reg = {
+    { 0, 0, 0 }, // accel { flag, key, cmd }
+    "WebView: Open (default)" // desc
+};
+
 
 // ---------- Регистрация плагина ----------
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
@@ -42,15 +58,16 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance,
 
     if (rec->caller_version != REAPER_PLUGIN_VERSION) return 0;
 
-    /* Команда «Открыть WebView» */
-    int cmdId = rec->Register("command_id", Action_OpenWebView);
-    /* Зарегистрируем ускоритель, чтобы пользователь мог нажать Ctrl+Shift+W */
+    // Команда «Открыть WebView»
+    // ИСПРАВЛЕНИЕ 3: Добавляем явное приведение типа (void*)
+    int cmdId = rec->Register("command_id", (void*)Action_OpenWebView);
+    
+    // Зарегистрируем ускоритель
     g_accel_reg.accel.cmd = cmdId;
     if (cmdId > 0) rec->Register("gaccel", &g_accel_reg);
 
-    /* Экспортируем функцию для скриптов – имя должно совпадать с тем, что
-       вызывается в Lua/EEL. */
-    rec->Register("WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
+    // Экспортируем функцию для скриптов
+    rec->Register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
 
     return 1;
 }
@@ -95,26 +112,19 @@ static void WEBVIEW_Navigate(const char* url)
 
 LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
 
-/* Создаём независимое окно (не дочернее) и сразу возвращаем управление. */
 void OpenWebViewWindow(const std::string& url)
 {
-    /* Проверяем наличие WebView2 Runtime – один раз достаточно. */
     if (!LoadLibraryA("WebView2Loader.dll")) {
-        MessageBox(g_hwndParent,
-                   "WebView2 Runtime not found.\n"
-                   "Please install Microsoft Edge WebView2 Runtime.",
-                   "Error", MB_ICONERROR);
+        MessageBox(g_hwndParent, "WebView2 Runtime not found.\nPlease install Microsoft Edge WebView2 Runtime.", "Error", MB_ICONERROR);
         return;
     }
 
-    /* Если окно уже открыто – просто подчёркиваем его. */
     if (g_plugin_hwnd && IsWindow(g_plugin_hwnd)) {
         ShowWindow(g_plugin_hwnd, SW_SHOW);
         SetForegroundWindow(g_plugin_hwnd);
         return;
     }
 
-    /* Регистрация класса окна. */
     WNDCLASSA wc{0};
     wc.lpfnWndProc   = WebViewWndProc;
     wc.hInstance     = (HINSTANCE)g_hInst;
@@ -122,78 +132,55 @@ void OpenWebViewWindow(const std::string& url)
     wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
 
     if (!RegisterClassA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-        MessageBox(g_hwndParent,
-                   "Failed to register window class.",
-                   "Tracer Error", MB_ICONERROR);
+        MessageBox(g_hwndParent, "Failed to register window class.", "Tracer Error", MB_ICONERROR);
         return;
     }
 
-    /* Копируем URL – он будет передан в WebViewWndProc через lpCreateParams. */
     char* url_param = _strdup(url.c_str());
 
     g_plugin_hwnd = CreateWindowExA(
         0,
-        wc.lpszClassName,                       // имя класса
-        "Интегрированный WebView (Windows)",   // заголовок окна
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE,       // независимое окно
+        wc.lpszClassName,
+        "Интегрированный WebView (Windows)",
+        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
-        NULL,                                   // родитель – nullptr
+        NULL, // Родитель – nullptr, чтобы избежать проблем с модальностью
         NULL,
         (HINSTANCE)g_hInst,
-        (LPVOID)url_param                       // lpCreateParams
+        (LPVOID)url_param
     );
 
     if (!g_plugin_hwnd) {
-        MessageBox(g_hwndParent,
-                   "Failed to create window.",
-                   "Tracer Error", MB_ICONERROR);
+        MessageBox(g_hwndParent, "Failed to create window.", "Tracer Error", MB_ICONERROR);
         free(url_param);
         return;
     }
-
-    /* Оставляем цикл сообщений в отдельном потоке, чтобы не блокировать
-       основной поток плагина.  В данном примере он не нужен – Windows
-       сам обрабатывает сообщения через системный хук. */
 }
-
-/* ------------------------------------------------------------------------ */
-/* --------------------------- WINDOW PROCEDURE -------------------------- */
-/* ------------------------------------------------------------------------ */
 
 LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     switch (uMsg) {
         case WM_CREATE: {
-            /* Получаем URL из lpCreateParams. */
-            char* initial_url_c = reinterpret_cast<char*>(
-                ((LPCREATESTRUCTA)lParam)->lpCreateParams);
+            char* initial_url_c = reinterpret_cast<char*>(((LPCREATESTRUCTA)lParam)->lpCreateParams);
             if (!initial_url_c) break;
 
             std::string initial_url_str(initial_url_c);
-            free(initial_url_c);                     // освобождаем память
+            free(initial_url_c);
 
             std::wstring w_url(initial_url_str.begin(), initial_url_str.end());
 
-            /* Загружаем WebView2 и создаём контрол. */
             g_hWebView2Loader = LoadLibraryA("WebView2Loader.dll");
             if (!g_hWebView2Loader) {
-                MessageBox(hwnd,
-                           "WebView2 Runtime not found.",
-                           "Error", MB_ICONERROR);
+                MessageBox(hwnd, "WebView2 Runtime not found.", "Error", MB_ICONERROR);
                 DestroyWindow(hwnd);
                 return 0;
             }
 
-            using CreateEnv_t = HRESULT (STDMETHODCALLTYPE*)(PCWSTR, PCWSTR,
-                                  ICoreWebView2EnvironmentOptions*,
-                                  ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
-            auto pCreate = reinterpret_cast<CreateEnv_t>(
-                GetProcAddress(g_hWebView2Loader, "CreateCoreWebView2EnvironmentWithOptions"));
+            using CreateEnv_t = HRESULT (STDMETHODCALLTYPE*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
+            auto pCreate = reinterpret_cast<CreateEnv_t>(GetProcAddress(g_hWebView2Loader, "CreateCoreWebView2EnvironmentWithOptions"));
 
             if (!pCreate) {
-                MessageBox(hwnd,
-                           "Failed to load WebView2 functions.",
-                           "Error", MB_ICONERROR);
+                MessageBox(hwnd, "Failed to load WebView2 functions.", "Error", MB_ICONERROR);
                 DestroyWindow(hwnd);
                 return 0;
             }
@@ -202,35 +189,28 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
                     [hwnd, w_url](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                         if (FAILED(result)) {
-                            MessageBox(hwnd,
-                                       "Failed to create WebView2 environment.",
-                                       "Error", MB_ICONERROR);
+                            MessageBox(hwnd, "Failed to create WebView2 environment.", "Error", MB_ICONERROR);
                             DestroyWindow(hwnd);
                             return result;
                         }
-                        env->CreateCoreWebView2Controller(
-                            hwnd, Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                                [hwnd, w_url](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
-                                    if (!controller) {
-                                        MessageBox(hwnd,
-                                                   "Failed to create WebView2 controller.",
-                                                   "Error", MB_ICONERROR);
-                                        DestroyWindow(hwnd);
-                                        return S_OK;
-                                    }
-                                    webviewController = controller;
-                                    webviewController->get_CoreWebView2(&webview);
-
-                                    RECT rc; GetClientRect(hwnd, &rc);
-                                    webviewController->put_Bounds(rc);
-                                    webview->Navigate(w_url.c_str());
+                        env->CreateCoreWebView2Controller(hwnd, Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                            [hwnd, w_url](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                                if (!controller) {
+                                    MessageBox(hwnd, "Failed to create WebView2 controller.", "Error", MB_ICONERROR);
+                                    DestroyWindow(hwnd);
                                     return S_OK;
-                                }).Get()
+                                }
+                                webviewController = controller;
+                                webviewController->get_CoreWebView2(&webview);
+                                RECT rc; GetClientRect(hwnd, &rc);
+                                webviewController->put_Bounds(rc);
+                                webview->Navigate(w_url.c_str());
+                                return S_OK;
+                            }).Get()
                         );
                         return S_OK;
                     }).Get()
             );
-
             break;
         }
 
@@ -263,7 +243,7 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 g_hWebView2Loader = nullptr;
             }
             g_plugin_hwnd = NULL;
-            PostQuitMessage(0);
+            // PostQuitMessage(0); // Не нужно для немодальных окон в DLL
             return 0;
         }
 
@@ -298,7 +278,7 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 }
 @end
 
-void OpenWebViewWindow(std::string url) {
+void OpenWebViewWindow(const std::string& url) {
     if (g_pluginWindow) {
         [g_pluginWindow makeKeyAndOrderFront:nil];
         return;
