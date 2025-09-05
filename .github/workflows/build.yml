@@ -32,11 +32,6 @@ jobs:
         Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2" -OutFile "webview2.zip" -TimeoutSec 300
         Expand-Archive -Path "webview2.zip" -DestinationPath "webview2-sdk" -Force
         
-        # ----- ДИАГНОСТИЧЕСКИЙ ШАГ -----
-        Write-Host "Listing contents of unpacked webview2-sdk..."
-        Get-ChildItem -Path webview2-sdk -Recurse
-        # --------------------------------
-
         # Скачиваем и распаковываем WIL
         Write-Host "Downloading WIL..."
         Invoke-WebRequest -Uri "https://github.com/microsoft/wil/archive/refs/heads/master.zip" -OutFile "wil.zip" -TimeoutSec 300
@@ -46,34 +41,6 @@ jobs:
         New-Item -ItemType Directory -Path "deps" -Force
         Copy-Item -Path "webview2-sdk/build/native/include/*" -Destination "deps/" -Recurse -Force
         Copy-Item -Path "wil/wil-master/include/*" -Destination "deps/" -Recurse -Force
-
-    - name: List files (Unix)
-      if: runner.os != 'Windows'
-      run: |
-        ls -la
-        ls -la sdk/
-        ls -la WDL/
-
-    - name: List files (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        Get-ChildItem
-        Get-ChildItem sdk/
-        Get-ChildItem WDL/
-        if (Test-Path "deps/") {
-          Get-ChildItem deps/ -Recurse
-        }
-
-    - name: Find SDK files (Unix)
-      if: runner.os != 'Windows'
-      run: find . -name "reaper_plugin_functions.h" -o -name "swell.h"
-
-    - name: Find SDK files (Windows)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        Get-ChildItem -Recurse -Include "reaper_plugin_functions.h", "swell.h" | Select-Object -ExpandProperty FullName
 
     - name: Configure CMake (Unix)
       if: runner.os != 'Windows'
@@ -111,37 +78,33 @@ jobs:
       if: runner.os == 'Windows'
       run: cmake --build build --config Release
 
-    - name: List build artifacts (Unix)
-      if: runner.os != 'Windows'
-      run: ls -la build/
-
-    - name: List build artifacts (Windows)
+    # --- ИСПРАВЛЕННЫЙ БЛОК ДЛЯ WINDOWS ---
+    - name: Prepare Windows Artifact
       if: runner.os == 'Windows'
       shell: pwsh
-      run: Get-ChildItem build/ -Recurse
-
-    - name: Rename macOS library
-      if: runner.os != 'Windows'
       run: |
-        mv build/libreaper_webview.dylib build/reaper_webview.dylib
-
-    - name: Upload macOS artifact
-      if: runner.os == 'macOS'
-      uses: actions/upload-artifact@v4
-      with:
-        name: reaper-webview-macos-universal
-        path: build/reaper_webview.dylib
-        if-no-files-found: error
-        retention-days: 7
-
-    - name: Copy WebView2Loader DLL
-      run: Copy-Item -Path "webview2-sdk/runtimes/win-x64/native/WebView2Loader.dll" -Destination "build/Release/"
+        Write-Host "Copying WebView2Loader.dll to build directory..."
+        Copy-Item -Path "webview2-sdk/runtimes/win-x64/native/WebView2Loader.dll" -Destination "build/Release/"
         
     - name: Upload Windows artifact
       if: runner.os == 'Windows'
       uses: actions/upload-artifact@v4
       with:
         name: reaper-webview-windows-x64
-        path: build/Release/reaper_webview.dll
+        path: build/Release/  # Указываем всю папку, чтобы захватить оба файла
+        if-no-files-found: error
+        retention-days: 7
+        
+    # --- БЛОК ДЛЯ MACOS (без изменений, но теперь логически отделен) ---
+    - name: Prepare macOS Artifact
+      if: runner.os == 'macOS'
+      run: mv build/libreaper_webview.dylib build/reaper_webview.dylib
+      
+    - name: Upload macOS artifact
+      if: runner.os == 'macOS'
+      uses: actions/upload-artifact@v4
+      with:
+        name: reaper-webview-macos-universal
+        path: build/reaper_webview.dylib
         if-no-files-found: error
         retention-days: 7
