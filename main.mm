@@ -4,6 +4,8 @@
     #include <string>
     #include <wrl.h>
     #include <wil/com.h>
+    #include <Shlwapi.h> // Для PathAppendW
+    #pragma comment(lib, "shlwapi.lib")
     #include "WebView2.h"
 #else
     #import <Cocoa/Cocoa.h>
@@ -182,6 +184,18 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     switch (uMsg) {
         case WM_CREATE: {
             Log("WM_CREATE received for hwnd %p.", hwnd);
+            // ----- НОВЫЙ БЛОК: Создание пути для User Data Folder -----
+            wchar_t userDataPath[MAX_PATH];
+            if (GetResourcePathW) { // Используем W-версию функции, т.к. WebView2 требует wchar_t
+                GetResourcePathW(userDataPath, MAX_PATH);
+                PathAppendW(userDataPath, L"WebView2_UserData"); // Добавляем имя нашей папки
+                CreateDirectoryW(userDataPath, NULL); // Создаем папку, если ее нет
+                Log("WebView2 User Data Path will be: %S", userDataPath);
+            } else {
+                Log("!!! Could not get REAPER resource path. WebView2 might fail.");
+                userDataPath[0] = 0; // Пустой путь, если не удалось
+            }
+            // --------------------------------------------------------
             char* initial_url_c = reinterpret_cast<char*>(((LPCREATESTRUCTA)lParam)->lpCreateParams);
             if (!initial_url_c) { Log("!!! WM_CREATE: lpCreateParams is NULL."); break; }
             std::string initial_url_str(initial_url_c);
