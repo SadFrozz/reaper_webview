@@ -1,0 +1,110 @@
+name: Build WebView Plugin
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+      fail-fast: false  # Не останавливать все jobs если одна упала
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true  # Продолжать даже при ошибке
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install Windows dependencies
+      if: runner.os == 'Windows'
+      shell: pwsh
+      timeout-minutes: 10
+      run: |
+        # Скачиваем и распаковываем WebView2 SDK
+        Write-Host "Downloading WebView2 SDK..."
+        Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2" -OutFile "webview2.zip" -TimeoutSec 300
+        Expand-Archive -Path "webview2.zip" -DestinationPath "webview2-sdk" -Force
+        
+        # Скачиваем и распаковываем WIL
+        Write-Host "Downloading WIL..."
+        Invoke-WebRequest -Uri "https://github.com/microsoft/wil/archive/refs/heads/master.zip" -OutFile "wil.zip" -TimeoutSec 300
+        Expand-Archive -Path "wil.zip" -DestinationPath "wil" -Force
+        
+        # Копируем заголовочные файлы в нужные директории
+        New-Item -ItemType Directory -Path "deps" -Force
+        Copy-Item -Path "webview2-sdk/build/native/include/*" -Destination "deps/" -Recurse -Force
+        Copy-Item -Path "wil/wil-master/include/*" -Destination "deps/" -Recurse -Force
+
+    - name: Configure CMake (Unix)
+      if: runner.os != 'Windows'
+      run: cmake --preset macos-universal
+
+    - name: Check Windows dependencies
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Write-Host "Checking WebView2 headers..."
+        if (Test-Path "deps/WebView2.h") {
+          Write-Host "✓ WebView2.h found"
+        } else {
+          Write-Host "✗ WebView2.h missing"
+          exit 1
+        }
+        
+        Write-Host "Checking WIL headers..."
+        if (Test-Path "deps/wil") {
+          Write-Host "✓ WIL headers found"
+        } else {
+          Write-Host "✗ WIL headers missing"
+          exit 1
+        }
+
+    - name: Configure CMake (Windows)
+      if: runner.os == 'Windows'
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build (Unix)
+      if: runner.os != 'Windows'
+      run: cmake --build --preset macos-universal
+
+    - name: Build (Windows)
+      if: runner.os == 'Windows'
+      run: cmake --build build --config Release
+
+    # --- ИСПРАВЛЕННЫЙ БЛОК ДЛЯ WINDOWS ---
+    - name: Prepare Windows Artifact
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Write-Host "Copying WebView2Loader.dll to build directory..."
+        Copy-Item -Path "webview2-sdk/runtimes/win-x64/native/WebView2Loader.dll" -Destination "build/Release/"
+        
+    - name: Upload Windows artifact
+      if: runner.os == 'Windows'
+      uses: actions/upload-artifact@v4
+      with:
+        name: reaper-webview-windows-x64
+        path: build/Release/  # Указываем всю папку, чтобы захватить оба файла
+        if-no-files-found: error
+        retention-days: 7
+        
+    # --- БЛОК ДЛЯ MACOS (без изменений, но теперь логически отделен) ---
+    - name: Prepare macOS Artifact
+      if: runner.os == 'macOS'
+      run: mv build/libreaper_webview.dylib build/reaper_webview.dylib
+      
+    - name: Upload macOS artifact
+      if: runner.os == 'macOS'
+      uses: actions/upload-artifact@v4
+      with:
+        name: reaper-webview-macos-universal
+        path: build/reaper_webview.dylib
+        if-no-files-found: error
+        retention-days: 7
