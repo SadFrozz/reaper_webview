@@ -1,15 +1,21 @@
 // webview_mac.mm
 #define SWELL_TARGET_COCOA
+
+// --- Правильный порядок включений ---
+#include "sdk/reaper_plugin.h"
 #include "WDL/swell/swell.h"
+// ------------------------------------
+
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #include "webview.h"
 #include "resource.h"
+#include <string>
 
 // Глобальная переменная только для macOS
 WKWebView* g_webView = nullptr;
 
-void Log(const char* format, ...); // Объявление
+void Log(const char* format, ...); // Объявление из main.cpp
 
 void CreateWebView(HWND parent)
 {

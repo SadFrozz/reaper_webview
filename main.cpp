@@ -1,9 +1,30 @@
 // main.cpp
+// --- ШАГ 1: Системные заголовки для Windows ---
+#ifdef _WIN32
+  #include <windows.h>
+#endif
+
+// --- ШАГ 2: Основной заголовок REAPER (включает wdltypes.h) ---
 #include "sdk/reaper_plugin.h"
+
+// --- ШАГ 3: Заголовок SWELL ---
+#ifdef _WIN32
+  #include "WDL/swell/swell-win32.h"
+#else
+  #include "WDL/swell/swell.h"
+#endif
+
+// --- ШАГ 4: Заголовки проекта ---
 #include "webview.h"
 #include "resource.h"
+
+// --- ШАГ 5: Стандартные библиотеки и реализация REAPER API ---
 #include <cstdio>
 #include <string>
+
+#define REAPERAPI_IMPLEMENT
+#include "sdk/reaper_plugin_functions.h"
+
 
 // Глобальные переменные
 REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;

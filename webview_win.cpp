@@ -4,8 +4,11 @@
 #include <shlwapi.h>
 #pragma comment(lib, "shlwapi.lib")
 
+// --- Правильный порядок включений ---
 #include "sdk/reaper_plugin.h"
 #include "WDL/swell/swell-win32.h"
+// ------------------------------------
+
 #include <wrl.h>
 #include <wil/com.h>
 #include "WebView2.h"
@@ -18,7 +21,7 @@ wil::com_ptr<ICoreWebView2Controller> webviewController;
 wil::com_ptr<ICoreWebView2> webview;
 HMODULE g_hWebView2Loader = nullptr;
 
-void Log(const char* format, ...); // Объявление
+void Log(const char* format, ...); // Объявление из main.cpp
 
 void CreateWebView(HWND parent)
 {
