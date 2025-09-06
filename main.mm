@@ -21,17 +21,15 @@
 #define REAPERAPI_IMPLEMENT
 #include "sdk/reaper_plugin_functions.h"
 
-#define IDC_DOCK 40003
-
-// Глобальные переменные
 REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
 HWND g_hwndParent = nullptr;
-HWND g_hwnd = nullptr; // Единый HWND для обеих платформ
+HWND g_hwnd = nullptr;
 int g_command_id_open = 0;
 int g_command_id_refresh = 0;
 int g_command_id_openurl = 0;
 
-void WEBVIEW_Navigate(const char* url); // Предварительное объявление
+void WEBVIEW_Navigate(const char* url);
+static void OpenWebViewWindow(const std::string& url);
 
 #ifdef _WIN32
     wil::com_ptr<ICoreWebView2Controller> webviewController;
@@ -61,30 +59,43 @@ void Log(const char* format, ...) {
 #endif
 }
 
-void Action_OpenWebView();
-static void OpenWebViewWindow(const std::string& url);
+LRESULT screenset_callback(int action, const char *id, void *param, void *actionParm, int actionParmSize) {
+    if (action == SCREENSET_ACTION_GETHWND) {
+        if (!g_hwnd || !IsWindow(g_hwnd)) OpenWebViewWindow("https://www.reaper.fm/");
+        return (LRESULT)g_hwnd;
+    }
+    if (action == SCREENSET_ACTION_IS_DOCKED) {
+        return DockIsChildOfDock(g_hwnd, NULL) ? 1 : 0;
+    }
+    return 0;
+}
 
 bool HookCommandProc(int cmd, int flag) {
     if (cmd == g_command_id_open) {
-        Action_OpenWebView();
+        HWND hwnd = screenset_callback(SCREENSET_ACTION_GETHWND, "FRZZ_WebView", NULL, NULL, 0);
+        DockWindowActivate(hwnd);
         return true;
     }
     if (cmd == g_command_id_refresh) {
-        if (g_hwnd) WEBVIEW_Navigate("refresh");
+        if (!g_hwnd) {
+             MessageBoxA(g_hwndParent, "WebView is not running. Open any URL via the Action List or run a ReaScript using API functions starting with FRZZ_WEBVIEW.", "WebView Error", MB_OK);
+        } else {
+            WEBVIEW_Navigate("refresh");
+        }
         return true;
     }
     if (cmd == g_command_id_openurl) {
         char urlbuf[2048] = "https://";
         if (GetUserInputs("Open URL", 1, "URL:", urlbuf, sizeof(urlbuf))) {
-            WEBVIEW_Navigate(urlbuf);
+            if (!g_hwnd || !IsWindow(g_hwnd)) OpenWebViewWindow(urlbuf);
+            else WEBVIEW_Navigate(urlbuf);
         }
         return true;
     }
     return false;
 }
 
-// Helper-функция для регистрации действия
-static int RegisterAction(const char* id, const char* name, int* cmd_id_var) {
+void RegisterAction(const char* id, const char* name, int* cmd_id_var) {
     *cmd_id_var = NamedCommandLookup(id);
     if (!*cmd_id_var) {
         *cmd_id_var = plugin_register("command_id", (void*)id);
@@ -96,16 +107,15 @@ static int RegisterAction(const char* id, const char* name, int* cmd_id_var) {
             plugin_register("gaccel", &gaccel);
         }
     }
-    return *cmd_id_var;
 }
-
 
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec) {
     g_hInst = hInstance;
     if (!rec || rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc || REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
     g_hwndParent = rec->hwnd_main;
-    Log("Plugin loaded successfully. API initialized.");
+    
+    screenset_registerNew((char*)"FRZZ_WebView", (void*)screenset_callback, NULL);
     
     RegisterAction("FRZZ_WEBVIEW_OPEN_DEFAULT", "WebView: Open (default)", &g_command_id_open);
     RegisterAction("FRZZ_WEBVIEW_REFRESH_PAGE", "WebView: Refresh Page", &g_command_id_refresh);
@@ -120,10 +130,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     return 1;
 }
 
-void Action_OpenWebView() {
-    Log("Action_OpenWebView triggered!");
-    OpenWebViewWindow("https://www.reaper.fm/");
-}
+void Action_OpenWebView() { }
 
 #ifdef _WIN32
 // ================================================================= //
@@ -131,13 +138,12 @@ void Action_OpenWebView() {
 // ================================================================= //
 LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
 void OpenWebViewWindow(const std::string& url) {
-    if (g_hwnd && IsWindow(g_hwnd)) { DockWindowActivate(g_hwnd); return; }
+    if (g_hwnd && IsWindow(g_hwnd)) return;
     WNDCLASSW wc{0};
     wc.lpfnWndProc = WebViewWndProc; wc.hInstance = (HINSTANCE)g_hInst; wc.lpszClassName = L"MyWebViewPlugin_WindowClass"; wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return;
     char* url_param = _strdup(url.c_str());
     g_hwnd = CreateWindowExW(0, wc.lpszClassName, L"WebView", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url_param);
-    if (g_hwnd) DockWindowAddEx(g_hwnd, "WebView", "FRZZ_WebView", true);
 }
 void WEBVIEW_Navigate(const char* url) {
     if (g_hwnd && webview && url) {
@@ -197,30 +203,11 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         }
         case WM_CLOSE: { DestroyWindow(hwnd); return 0; }
         case WM_DESTROY: {
-            DockWindowRemove(hwnd);
             if (webviewController) { webviewController->Close(); webviewController = nullptr; webview = nullptr; }
             if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
             g_hwnd = NULL; return 0;
         }
         case WM_SIZE: { if (webviewController) { RECT rc; GetClientRect(hwnd, &rc); webviewController->put_Bounds(rc); } return 0; }
-        case WM_COMMAND: { if (LOWORD(wParam) == IDCANCEL) SendMessage(hwnd, WM_CLOSE, 0, 0); return 0; }
-        case WM_CONTEXTMENU: {
-            HMENU menu = CreatePopupMenu();
-            if (menu) {
-                bool is_docked = DockIsChildOfDock(hwnd, NULL);
-                AppendMenuA(menu, MF_STRING | (is_docked ? MFS_CHECKED : 0), IDC_DOCK, "Dock WebView in Docker");
-                AppendMenuA(menu, MF_STRING, IDCANCEL, "Close");
-                AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
-                AppendMenuA(menu, MF_STRING, g_command_id_refresh, "Refresh Page");
-                AppendMenuA(menu, MF_STRING, g_command_id_openurl, "Open URL...");
-                int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), 0, hwnd, NULL);
-                DestroyMenu(menu);
-                if (cmd == IDC_DOCK) DockWindowActivate(hwnd);
-                else if (cmd == IDCANCEL) SendMessage(hwnd, WM_CLOSE, 0, 0);
-                else if (cmd > 0) Main_OnCommand(cmd, 0);
-            }
-            return 0;
-        }
     }
     return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 }
@@ -258,44 +245,29 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             }
             return 0;
         }
-        case WM_DESTROY: {
-            if (DockWindowRemove) DockWindowRemove(hwnd);
-            g_hwnd = nullptr;
-            return 0;
-        }
+        case WM_DESTROY: { g_hwnd = nullptr; return 0; }
     }
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 void OpenWebViewWindow(const std::string& url) {
-    if (g_hwnd) {
-        if (DockWindowActivate) DockWindowActivate(g_hwnd);
-        return;
-    }
+    if (g_hwnd) return;
     WNDCLASS wc = { 0, };
     wc.lpfnWndProc = SwellWndProc;
     wc.hInstance = g_hInst;
     wc.lpszClassName = "MyWebViewSwellClass";
     SWELL_RegisterClass(&wc);
     g_hwnd = CreateWindowEx(0, "MyWebViewSwellClass", "WebView", 0, 0, 0, 0, 0, g_hwndParent, 0, g_hInst, (void*)url.c_str());
-    if (g_hwnd) {
-        DockWindowAddEx(g_hwnd, "WebView", "FRZZ_WebView_macOS", true);
-    }
 }
 void WEBVIEW_Navigate(const char* url) {
     if (!g_hwnd) return;
-    if (strcmp(url, "refresh") == 0) {
-        MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(g_hwnd, GWLP_USERDATA);
-        if (myView && myView->webView) [myView->webView reload];
-        return;
-    }
     MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(g_hwnd, GWLP_USERDATA);
-    if (myView && myView->webView && url) {
-        @autoreleasepool {
-            NSString* nsURL = [NSString stringWithUTF8String:url];
-            NSURL* URL = [NSURL URLWithString:nsURL];
-            NSURLRequest* request = [NSURLRequest requestWithURL:URL];
-            [myView->webView loadRequest:request];
-        }
+    if (!myView || !myView->webView || !url) return;
+    if (strcmp(url, "refresh") == 0) { [myView->webView reload]; return; }
+    @autoreleasepool {
+        NSString* nsURL = [NSString stringWithUTF8String:url];
+        NSURL* URL = [NSURL URLWithString:nsURL];
+        NSURLRequest* request = [NSURLRequest requestWithURL:URL];
+        [myView->webView loadRequest:request];
     }
 }
 #endif
