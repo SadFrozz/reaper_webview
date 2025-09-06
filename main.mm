@@ -83,6 +83,22 @@ bool HookCommandProc(int cmd, int flag) {
     return false;
 }
 
+// Helper-функция для регистрации действия
+static int RegisterAction(const char* id, const char* name, int* cmd_id_var) {
+    *cmd_id_var = NamedCommandLookup(id);
+    if (!*cmd_id_var) {
+        *cmd_id_var = plugin_register("command_id", (void*)id);
+        if (*cmd_id_var) {
+            static gaccel_register_t gaccel = { { 0, 0, 0 }, "" };
+            gaccel.accel.cmd = *cmd_id_var;
+            gaccel.desc = name;
+            plugin_register("gaccel", &gaccel);
+        }
+    }
+    return *cmd_id_var;
+}
+
+
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec) {
     g_hInst = hInstance;
@@ -90,22 +106,11 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     g_hwndParent = rec->hwnd_main;
     Log("Plugin loaded successfully. API initialized.");
     
-    g_command_id_open = NamedCommandLookup("FRZZ_WEBVIEW_OPEN_DEFAULT");
-    if (!g_command_id_open) {
-        g_command_id_open = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN_DEFAULT");
-        if (g_command_id_open) {
-            static gaccel_register_t gaccel = { { 0, 0, 0 }, "WebView: Open (default)" };
-            gaccel.accel.cmd = g_command_id_open;
-            plugin_register("gaccel", &gaccel);
-        }
-    }
-    
-    g_command_id_refresh = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_REFRESH_PAGE");
-    plugin_register("gaccel", new gaccel_register_t{ { 0, 0, 0 }, "WebView: Refresh Page" });
-    g_command_id_openurl = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN_URL");
-    plugin_register("gaccel", new gaccel_register_t{ { 0, 0, 0 }, "WebView: Open URL..." });
+    RegisterAction("FRZZ_WEBVIEW_OPEN_DEFAULT", "WebView: Open (default)", &g_command_id_open);
+    RegisterAction("FRZZ_WEBVIEW_REFRESH_PAGE", "WebView: Refresh Page", &g_command_id_refresh);
+    RegisterAction("FRZZ_WEBVIEW_OPEN_URL", "WebView: Open URL...", &g_command_id_openurl);
 
-    if (g_command_id_open || g_command_id_refresh || g_command_id_openurl) {
+    if (g_command_id_open) {
         plugin_register("hookcommand", (void*)HookCommandProc);
     }
     
@@ -282,7 +287,7 @@ void WEBVIEW_Navigate(const char* url) {
         if (myView && myView->webView) [myView->webView reload];
         return;
     }
-    MyNSView* myView = (MyNSView*)SWELL_GetWindowLong(g_hwnd, GWLP_USERDATA);
+    MyNSView* myView = (MyNSView*)SWELL_GetWindowLong(g_hwnd, GWL_USERDATA);
     if (myView && myView->webView && url) {
         @autoreleasepool {
             NSString* nsURL = [NSString stringWithUTF8String:url];
