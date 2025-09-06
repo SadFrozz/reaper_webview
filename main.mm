@@ -1,20 +1,18 @@
 // =================================================================================
-// Includes and Platform Definitions
+// Includes and Platform Definitions (ИСПРАВЛЕННЫЙ ПОРЯДОК)
 // =================================================================================
 
-// ИСПРАВЛЕНО: reaper_plugin.h подключается первым для получения базовых типов wdltypes.h
+// 1. Базовые типы WDL ДОЛЖНЫ быть первыми, чтобы избежать конфликтов.
+#include "WDL/wdltypes.h"
+
+// 2. Основной заголовок плагина REAPER, который использует типы WDL.
 #include "sdk/reaper_plugin.h"
 #include <string>
 
-// ИСПРАВЛЕНО: Правильный блок определения таргета и подключения зависимостей
+// 3. Платформо-специфичные определения и подключения SWELL.
 #ifdef _WIN32
-    // Определяем таргет ДО подключения любых заголовочных файлов SWELL
     #define SWELL_TARGET_WIN32
-    
-    // Подключаем саму реализацию SWELL для Windows
-    #include "WDL/swell/swell-win32.h"
-    
-    // Теперь подключаем остальные Windows-специфичные заголовки
+    #include "WDL/swell/swell-win32.h" // Этот заголовок сам подключает <windows.h> в правильном порядке
     #include <wrl.h>
     #include <wil/com.h>
     #include <Shlwapi.h>
@@ -23,12 +21,12 @@
     #include "WebView2.h"
 #else
     #define SWELL_TARGET_COCOA
+    #include "WDL/swell/swell.h" // Основной заголовок SWELL для macOS/Linux
     #import <Cocoa/Cocoa.h>
     #import <WebKit/WebKit.h>
-    // Подключаем главный заголовок SWELL для остальных платформ
-    #include "WDL/swell/swell.h"
 #endif
 
+// 4. Реализация функций REAPER API. Должна быть после всех определений.
 #define REAPERAPI_IMPLEMENT
 #include "sdk/reaper_plugin_functions.h"
 
@@ -38,18 +36,16 @@
 // =================================================================================
 REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
 HWND g_hwndParent = nullptr;
-HWND g_hwnd = nullptr; // This will be our SWELL window
+HWND g_hwnd = nullptr;
 int g_command_id_open = 0;
 int g_command_id_refresh = 0;
 int g_command_id_openurl = 0;
 
 #ifdef _WIN32
-    // Windows-specific WebView2 objects
     wil::com_ptr<ICoreWebView2Controller> webviewController;
     wil::com_ptr<ICoreWebView2> webview;
     HMODULE g_hWebView2Loader = nullptr;
 #else
-    // macOS-specific Objective-C view container
     @interface MyNSView : NSView { @public WKWebView* webView; } @end
     @implementation MyNSView
     - (BOOL)isFlipped { return YES; }
@@ -78,7 +74,7 @@ void Log(const char* format, ...) {
 
 
 // =================================================================================
-// REAPER Integration (Screensets & Commands) - Cross-platform
+// REAPER Integration (Screensets & Commands)
 // =================================================================================
 LRESULT screenset_callback(int action, const char *id, void *param, void *actionParm, int actionParmSize) {
     if (action == SCREENSET_ACTION_GETHWND) {
@@ -132,13 +128,10 @@ void RegisterAction(const char* id, const char* name, int* cmd_id_var) {
 
 
 // =================================================================================
-// Unified Window Management using SWELL
+// Unified Window Management
 // =================================================================================
 void OpenWebViewWindow(const std::string& url) {
-    if (g_hwnd && IsWindow(g_hwnd)) {
-        Log("Window already exists.");
-        return;
-    }
+    if (g_hwnd && IsWindow(g_hwnd)) return;
 
     WNDCLASS wc = { 0, };
     wc.lpfnWndProc = SwellWndProc;
@@ -146,15 +139,18 @@ void OpenWebViewWindow(const std::string& url) {
     wc.lpszClassName = "SWELL_WebView_Class";
     SWELL_RegisterClass(&wc);
 
-    // ИСПРАВЛЕНО: Используем strdup вместо _strdup для кросс-платформенности
-    char* url_param = strdup(url.c_str()); 
+    // ИСПРАВЛЕНО: Используем _strdup на Windows и strdup на других платформах
+    #ifdef _WIN32
+        char* url_param = _strdup(url.c_str());
+    #else
+        char* url_param = strdup(url.c_str());
+    #endif
+
     g_hwnd = CreateWindowEx(0, "SWELL_WebView_Class", "WebView", WS_CHILD | WS_VISIBLE, 0, 0, 800, 600, g_hwndParent, NULL, g_hInst, (LPVOID)url_param);
 
     if (!g_hwnd) {
         Log("SWELL CreateWindowEx failed.");
         free(url_param);
-    } else {
-        Log("SWELL window created. HWND: %p", g_hwnd);
     }
 }
 
@@ -166,10 +162,7 @@ void WEBVIEW_Navigate(const char* url) {
     
 #ifdef _WIN32
     if (webview) {
-        if (strcmp(url, "refresh") == 0) {
-            webview->Reload();
-            return;
-        }
+        if (strcmp(url, "refresh") == 0) { webview->Reload(); return; }
         std::wstring w_url;
         int len = MultiByteToWideChar(CP_UTF8, 0, url, -1, NULL, 0);
         if (len > 0) {
@@ -179,13 +172,11 @@ void WEBVIEW_Navigate(const char* url) {
         }
     }
 #else
-    MyNSView* myView = (MyNSView*)SWELL_GetWindowLong(g_hwnd, 0);
+    // ИСПРАВЛЕНО: Используем SWELL_GetWindowLongPtr для 64-битной совместимости
+    MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(g_hwnd, 0);
     if (!myView || !myView->webView) return;
     
-    if (strcmp(url, "refresh") == 0) {
-        [myView->webView reload];
-        return;
-    }
+    if (strcmp(url, "refresh") == 0) { [myView->webView reload]; return; }
     
     @autoreleasepool {
         NSString* nsURL = [NSString stringWithUTF8String:url];
@@ -199,9 +190,8 @@ void WEBVIEW_Navigate(const char* url) {
 LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_CREATE: {
-            Log("WM_CREATE received for hwnd %p.", hwnd);
             char* initial_url_c = (char*)((CREATESTRUCT*)lParam)->lpCreateParams;
-            if (!initial_url_c) { Log("!!! WM_CREATE: lpCreateParams is NULL."); return -1; }
+            if (!initial_url_c) return -1;
             std::string initial_url(initial_url_c);
             free(initial_url_c);
             
@@ -211,18 +201,17 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 char narrowPath[MAX_PATH];
                 strcpy(narrowPath, GetResourcePath());
                 MultiByteToWideChar(CP_UTF8, 0, narrowPath, -1, userDataPath, MAX_PATH);
-                // ИСПРАВЛЕНО: PathAppendW требует строку (L""), а не символ (L'')
                 PathAppendW(userDataPath, L"\\WebView2_UserData");
                 CreateDirectoryW(userDataPath, NULL);
             }
             std::wstring w_url(initial_url.begin(), initial_url.end());
             
             g_hWebView2Loader = LoadLibraryA("WebView2Loader.dll");
-            if (!g_hWebView2Loader) { Log("Failed to load WebView2Loader.dll"); DestroyWindow(hwnd); return -1; }
+            if (!g_hWebView2Loader) { DestroyWindow(hwnd); return -1; }
             
             using CreateEnv_t = HRESULT (STDMETHODCALLTYPE*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
             auto pCreate = reinterpret_cast<CreateEnv_t>(GetProcAddress(g_hWebView2Loader, "CreateCoreWebView2EnvironmentWithOptions"));
-            if (!pCreate) { Log("Failed to get CreateCoreWebView2EnvironmentWithOptions"); DestroyWindow(hwnd); return -1; }
+            if (!pCreate) { DestroyWindow(hwnd); return -1; }
             
             pCreate(nullptr, (userDataPath[0] ? userDataPath : nullptr), nullptr,
                 Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
@@ -251,7 +240,8 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 myView->webView = wv;
                 [myView addSubview:wv];
                 [parentView addSubview:myView];
-                SWELL_SetWindowLong(hwnd, 0, (LONG_PTR)myView);
+                // ИСПРАВЛЕНО: Используем SWELL_SetWindowLongPtr для 64-битной совместимости
+                SWELL_SetWindowLongPtr(hwnd, 0, (LONG_PTR)myView);
                 WEBVIEW_Navigate(initial_url.c_str());
             }
         #endif
@@ -261,7 +251,7 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         #ifdef _WIN32
             if (webviewController) { RECT rc; GetClientRect(hwnd, &rc); webviewController->put_Bounds(rc); }
         #else
-            MyNSView* myView = (MyNSView*)SWELL_GetWindowLong(hwnd, 0);
+            MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(hwnd, 0);
             if (myView) {
                 NSRect frame = NSMakeRect(0, 0, LOWORD(lParam), HIWORD(lParam));
                 [myView setFrame:frame];
@@ -272,23 +262,14 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
         }
         case WM_SETFOCUS: {
         #ifdef _WIN32
-            if (webviewController) {
-                webviewController->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
-            }
+            if (webviewController) webviewController->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
         #endif
             return 0;
         }
-        case WM_CLOSE: {
-            DestroyWindow(hwnd);
-            return 0;
-        }
         case WM_DESTROY: {
-            Log("WM_DESTROY received for hwnd %p.", hwnd);
         #ifdef _WIN32
             if (webviewController) { webviewController->Close(); webviewController = nullptr; webview = nullptr; }
             if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
-        #else
-            // SWELL/Cocoa handles view deallocation automatically
         #endif
             g_hwnd = NULL;
             return 0;
@@ -305,7 +286,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec) {
     g_hInst = hInstance;
     if (!rec) {
-        // UnregisterClass is a Win32 specific call, SWELL handles this for other platforms
         #ifdef _WIN32
         UnregisterClass("SWELL_WebView_Class", g_hInst);
         #endif

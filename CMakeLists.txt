@@ -8,7 +8,7 @@ set(WDL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/WDL)
 # Добавляем include директории
 include_directories(${SDK_PATH})
 include_directories(${WDL_PATH})
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps) # Для WebView2 и WIL
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps)
 
 # Добавляем исходники
 set(SOURCES main.mm)
@@ -26,7 +26,6 @@ if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13")
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
 
-    # Добавляем список исходных файлов SWELL
     set(SWELL_SOURCES
         ${WDL_PATH}/swell/swell.cpp
         ${WDL_PATH}/swell/swell-ini.cpp
@@ -48,7 +47,6 @@ if(APPLE)
     )
     target_sources(reaper_webview PRIVATE ${SWELL_SOURCES})
 
-    # Линкуем необходимые фреймворки
     target_link_libraries(reaper_webview PRIVATE
         "-framework Cocoa"
         "-framework WebKit"
@@ -60,7 +58,6 @@ elseif(WIN32)
     # Настройки для Windows
     set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
 
-    # ИСПРАВЛЕНО: Убрано определение SWELL_TARGET_WIN32, так как оно теперь в .mm файле
     target_compile_definitions(reaper_webview PRIVATE
         _WIN32_WINNT=0x0601
         NOMINMAX
@@ -68,15 +65,9 @@ elseif(WIN32)
         _CRT_SECURE_NO_WARNINGS
     )
     
-    # Добавляем линковку с Win32 API
     target_link_libraries(reaper_webview
-        comctl32
-        ole32
-        version
-        shlwapi
-        user32
-        oleaut32
-        advapi32)
+        comctl32 ole32 version shlwapi user32 oleaut32 advapi32
+    )
     
 endif()
 
