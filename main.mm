@@ -1,34 +1,42 @@
 // =================================================================================
-// Includes and Platform Definitions (ИСПРАВЛЕННЫЙ ПОРЯДОК)
+// Includes and Platform Definitions (НОВЫЙ, ПРАВИЛЬНЫЙ ПОРЯДОК)
 // =================================================================================
 
-// 1. Базовые типы WDL ДОЛЖНЫ быть первыми, чтобы избежать конфликтов.
-#include "WDL/wdltypes.h"
-
-// 2. Основной заголовок плагина REAPER, который использует типы WDL.
-#include "sdk/reaper_plugin.h"
-#include <string>
-
-// 3. Платформо-специфичные определения и подключения SWELL.
+// --- ШАГ 1: Сначала подключаются системные заголовки для конкретной платформы.
 #ifdef _WIN32
-    #define SWELL_TARGET_WIN32
-    #include "WDL/swell/swell-win32.h" // Этот заголовок сам подключает <windows.h> в правильном порядке
-    #include <wrl.h>
-    #include <wil/com.h>
-    #include <Shlwapi.h>
-    #pragma comment(lib, "shlwapi.lib")
-    #include <windowsx.h>
-    #include "WebView2.h"
-#else
-    #define SWELL_TARGET_COCOA
-    #include "WDL/swell/swell.h" // Основной заголовок SWELL для macOS/Linux
-    #import <Cocoa/Cocoa.h>
-    #import <WebKit/WebKit.h>
+  #include <windows.h>
+  #include <shlwapi.h>
+  #pragma comment(lib, "shlwapi.lib")
+  #include <windowsx.h>
 #endif
 
-// 4. Реализация функций REAPER API. Должна быть после всех определений.
+// --- ШАГ 2: Затем подключаются базовые типы WDL. Это критически важно.
+#include "WDL/wdltypes.h"
+
+// --- ШАГ 3: После базовых типов можно подключать основной заголовок REAPER SDK.
+#include "sdk/reaper_plugin.h"
+
+// --- ШАГ 4: Теперь, когда все типы определены, подключаем реализацию SWELL.
+#ifdef _WIN32
+  #include "WDL/swell/swell-win32.h" // Реализация SWELL для Windows
+  // И специфичные для WebView2 заголовки
+  #include <wrl.h>
+  #include <wil/com.h>
+  #include "WebView2.h"
+#else
+  #define SWELL_TARGET_COCOA // Определяем таргет для macOS
+  #include "WDL/swell/swell.h"     // Декларации SWELL для macOS
+  // И специфичные для платформы фреймворки
+  #import <Cocoa/Cocoa.h>
+  #import <WebKit/WebKit.h>
+#endif
+
+// --- ШАГ 5: В самом конце подключаем реализацию REAPER API.
 #define REAPERAPI_IMPLEMENT
 #include "sdk/reaper_plugin_functions.h"
+
+// --- Стандартные C++ заголовки
+#include <string>
 
 
 // =================================================================================
@@ -139,7 +147,6 @@ void OpenWebViewWindow(const std::string& url) {
     wc.lpszClassName = "SWELL_WebView_Class";
     SWELL_RegisterClass(&wc);
 
-    // ИСПРАВЛЕНО: Используем _strdup на Windows и strdup на других платформах
     #ifdef _WIN32
         char* url_param = _strdup(url.c_str());
     #else
@@ -172,7 +179,6 @@ void WEBVIEW_Navigate(const char* url) {
         }
     }
 #else
-    // ИСПРАВЛЕНО: Используем SWELL_GetWindowLongPtr для 64-битной совместимости
     MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(g_hwnd, 0);
     if (!myView || !myView->webView) return;
     
@@ -240,7 +246,6 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 myView->webView = wv;
                 [myView addSubview:wv];
                 [parentView addSubview:myView];
-                // ИСПРАВЛЕНО: Используем SWELL_SetWindowLongPtr для 64-битной совместимости
                 SWELL_SetWindowLongPtr(hwnd, 0, (LONG_PTR)myView);
                 WEBVIEW_Navigate(initial_url.c_str());
             }
