@@ -13,6 +13,16 @@
     #import <WebKit/WebKit.h>
     #include <string>
     #include "WDL/swell/swell.h"
+    // FIX macOS: 1. Move SWELL includes to the top.
+    // FIX macOS: 2. Add mergesort.h for __listview_mergesort_internal.
+    #include "WDL/mergesort.h"
+    #include "WDL/swell/swell-miscdlg.mm"
+    // FIX macOS: 3. Suppress narrowing warning locally for swell-wnd.mm
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wc++11-narrowing"
+    #include "WDL/swell/swell-wnd.mm"
+    #pragma clang diagnostic pop
+    #include "WDL/swell/swell-menu.mm"
 #endif
 
 #include "WDL/wdltypes.h"
@@ -27,6 +37,9 @@ HWND g_hwnd = nullptr;
 int g_command_id_open = 0;
 int g_command_id_refresh = 0;
 int g_command_id_openurl = 0;
+#ifdef _WIN32
+const WCHAR* g_wndClassName = L"MyWebViewPlugin_WindowClass";
+#endif
 
 void WEBVIEW_Navigate(const char* url);
 static void OpenWebViewWindow(const std::string& url);
@@ -44,8 +57,10 @@ void Log(const char* format, ...) {
     OutputDebugStringA("[reaper_webview] "); OutputDebugStringA(buf); OutputDebugStringA("\n");
     if (GetResourcePath) {
         char path[MAX_PATH];
-        strcpy(path, GetResourcePath()); strcat(path, "\\reaper_webview_log.txt");
-        FILE* fp = fopen(path, "a"); if (fp) { fprintf(fp, "%s\n", buf); fclose(fp); }
+        if (GetResourcePath() && GetResourcePath()[0]) {
+            strcpy(path, GetResourcePath()); strcat(path, "\\reaper_webview_log.txt");
+            FILE* fp = fopen(path, "a"); if (fp) { fprintf(fp, "%s\n", buf); fclose(fp); }
+        }
     }
 #else
     NSLog(@"[reaper_webview] %s", buf);
@@ -102,10 +117,22 @@ void RegisterAction(const char* id, const char* name, int* cmd_id_var) {
     }
 }
 
+// FIX Windows: Add cleanup function for when the plugin unloads
+void UnregisterPlugin() {
+#ifdef _WIN32
+    UnregisterClassW(g_wndClassName, (HINSTANCE)g_hInst);
+#endif
+}
+
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec) {
     g_hInst = hInstance;
-    if (!rec || rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc || REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
+    if (!rec) {
+        UnregisterPlugin();
+        return 0;
+    }
+    if (rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc || REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
+    
     g_hwndParent = rec->hwnd_main;
     screenset_registerNew((char*)"FRZZ_WebView", screenset_callback, NULL);
     RegisterAction("FRZZ_WEBVIEW_OPEN_DEFAULT", "WebView: Open (default)", &g_command_id_open);
@@ -123,12 +150,26 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
 // ================================================================= //
 LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
 void OpenWebViewWindow(const std::string& url) {
-    if (g_hwnd && IsWindow(g_hwnd)) return;
+    Log("Attempting to open WebView window...");
+    if (g_hwnd && IsWindow(g_hwnd)) {
+        Log("Window already exists.");
+        return;
+    }
     WNDCLASSW wc{0};
-    wc.lpfnWndProc = WebViewWndProc; wc.hInstance = (HINSTANCE)g_hInst; wc.lpszClassName = L"MyWebViewPlugin_WindowClass"; wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return;
+    wc.lpfnWndProc = WebViewWndProc; wc.hInstance = (HINSTANCE)g_hInst; wc.lpszClassName = g_wndClassName; wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        Log("RegisterClassW failed. Error code: %lu", GetLastError());
+        return;
+    }
     char* url_param = _strdup(url.c_str());
-    g_hwnd = CreateWindowExW(0, wc.lpszClassName, L"WebView", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url_param);
+    g_hwnd = CreateWindowExW(0, g_wndClassName, L"WebView", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url_param);
+    
+    if (!g_hwnd) {
+        Log("CreateWindowExW failed. Error code: %lu", GetLastError());
+        free(url_param);
+    } else {
+        Log("CreateWindowExW succeeded. HWND: %p", g_hwnd);
+    }
 }
 void WEBVIEW_Navigate(const char* url) {
     if (g_hwnd && webview && url) {
@@ -142,7 +183,7 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         case WM_CREATE: {
             Log("WM_CREATE received for hwnd %p.", hwnd);
             wchar_t userDataPath[MAX_PATH] = {0};
-            if (GetResourcePath) {
+            if (GetResourcePath && GetResourcePath()[0]) {
                 char narrowPath[MAX_PATH];
                 strcpy(narrowPath, GetResourcePath());
                 MultiByteToWideChar(CP_UTF8, 0, narrowPath, -1, userDataPath, MAX_PATH);
@@ -153,16 +194,16 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 Log("!!! Could not get REAPER resource path. WebView2 might fail.");
             }
             char* initial_url_c = reinterpret_cast<char*>(((LPCREATESTRUCTW)lParam)->lpCreateParams);
-            if (!initial_url_c) { Log("!!! WM_CREATE: lpCreateParams is NULL."); break; }
+            if (!initial_url_c) { Log("!!! WM_CREATE: lpCreateParams is NULL."); return -1; }
             std::string initial_url_str(initial_url_c);
             free(initial_url_c);
             std::wstring w_url(initial_url_str.begin(), initial_url_str.end());
             Log("WM_CREATE: Initial URL is %s", initial_url_str.c_str());
             g_hWebView2Loader = LoadLibraryA("WebView2Loader.dll");
-            if (!g_hWebView2Loader) { DestroyWindow(hwnd); return 0; }
+            if (!g_hWebView2Loader) { Log("Failed to load WebView2Loader.dll"); DestroyWindow(hwnd); return -1; }
             using CreateEnv_t = HRESULT (STDMETHODCALLTYPE*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
             auto pCreate = reinterpret_cast<CreateEnv_t>(GetProcAddress(g_hWebView2Loader, "CreateCoreWebView2EnvironmentWithOptions"));
-            if (!pCreate) { DestroyWindow(hwnd); return 0; }
+            if (!pCreate) { Log("Failed to get CreateCoreWebView2EnvironmentWithOptions"); DestroyWindow(hwnd); return -1; }
             Log("WM_CREATE: Starting WebView2 environment creation...");
             pCreate(nullptr, (userDataPath[0] ? userDataPath : nullptr), nullptr,
                 Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
@@ -184,13 +225,15 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                             }).Get());
                         return S_OK;
                     }).Get());
-            break;
+            return 0;
         }
         case WM_CLOSE: { DestroyWindow(hwnd); return 0; }
         case WM_DESTROY: {
+            Log("WM_DESTROY received for hwnd %p.", hwnd);
             if (webviewController) { webviewController->Close(); webviewController = nullptr; webview = nullptr; }
             if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
-            g_hwnd = NULL; return 0;
+            g_hwnd = NULL; 
+            return 0;
         }
         case WM_SIZE: { if (webviewController) { RECT rc; GetClientRect(hwnd, &rc); webviewController->put_Bounds(rc); } return 0; }
     }
@@ -218,7 +261,10 @@ LRESULT SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 [myView addSubview:wv];
                 [parentView addSubview:myView];
                 SWELL_SetWindowLong(hwnd, 0, (LONG_PTR)myView);
-                if (lParam) WEBVIEW_Navigate((const char*)lParam);
+                if (lParam) {
+                    const char* url_c_str = (const char*)lParam;
+                    WEBVIEW_Navigate(url_c_str);
+                }
             }
             return 0;
         }
@@ -256,10 +302,4 @@ void WEBVIEW_Navigate(const char* url) {
         [myView->webView loadRequest:request];
     }
 }
-
-// FIX: Corrected SWELL implementation file names
-#include "WDL/swell/swell-miscdlg.mm"
-#include "WDL/swell/swell-wnd.mm"
-#include "WDL/swell/swell-menu.mm"
-
 #endif
