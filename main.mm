@@ -1,29 +1,27 @@
-// ИСПРАВЛЕНО: Удален #define REAPER_PLUGIN_VERSION, так как он определяется в reaper_plugin.h
-// и вызывал предупреждение о переопределении.
-
 // --- Платформо-зависимые включения ---
 #ifdef _WIN32
     #include <windows.h>
     #include <string>
     #include <wil/com.h>
     #include <WebView2.h>
-    #include <wrl.h> // ИСПРАВЛЕНО: Добавлен необходимый заголовок для Microsoft::WRL::Callback
+    #include <wrl.h> // Для Microsoft::WRL::Callback
 #else
     #include <Cocoa/Cocoa.h>
     #include <WebKit/WebKit.h>
 #endif
 
 #include "reaper_plugin.h"
-#include "swell.h" // SWELL должен быть включен после системных заголовков
+#include "swell.h"
 
 // --- Стандартные библиотеки ---
 #include <string>
 #include <vector>
 #include <filesystem>
 #include <fstream>
-#include <cstdio> // для snprintf
+#include <cstdio>
 
 // --- Глобальные переменные ---
+static reaper_plugin_info_t* g_rec = NULL; // Указатель на структуру с функциями REAPER API
 static HINSTANCE g_hInst = NULL;
 static HWND g_hwndParent = NULL;
 static HWND g_hwndWebView = NULL;
@@ -37,33 +35,28 @@ static HWND g_hwndWebView = NULL;
 
 // --- Логирование для отладки ---
 void Log(const std::string& message) {
-    static std::ofstream logFile;
-    if (!logFile.is_open()) {
-        const char* resourcePath = GetResourcePath(); // ИСПРАВЛЕНО: Вызов функции REAPER API
-        if (resourcePath) {
-            std::string path = std::string(resourcePath) + "/reaper_webview_log.txt";
-            logFile.open(path, std::ios_base::app);
+    if (!g_rec ||!g_rec->GetResourcePath) return;
+    const char* resourcePath = g_rec->GetResourcePath();
+    if (resourcePath) {
+        std::string path = std::string(resourcePath) + "/reaper_webview_log.txt";
+        std::ofstream logFile(path, std::ios_base::app);
+        if (logFile.is_open()) {
+            logFile << message << std::endl;
         }
-    }
-    if (logFile.is_open()) {
-        logFile << message << std::endl;
     }
 }
 
-// --- Платформенно-специфичная логика инициализации WebView ---
-
+// --- Платформенно-специфичная логика ---
 #ifdef _WIN32
 void InitializeWebView2(HWND hwnd) {
     Log("Attempting to initialize WebView2...");
-    const char* resourcePath = GetResourcePath();
-    if (!resourcePath) {
-        Log("Failed to get REAPER resource path.");
-        return;
-    }
+    const char* resourcePath = g_rec->GetResourcePath();
+    if (!resourcePath) { Log("Failed to get REAPER resource path."); return; }
+    
     std::string userDataPathStr = std::string(resourcePath) + "\\WebView2_UserData";
     std::wstring userDataPathW(userDataPathStr.begin(), userDataPathStr.end());
 
-    using namespace Microsoft::WRL; // ИСПРАВЛЕНО: Добавлено пространство имен для Callback
+    using namespace Microsoft::WRL;
 
     CreateCoreWebView2EnvironmentWithOptions(nullptr, userDataPathW.c_str(), nullptr,
         Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
@@ -81,9 +74,9 @@ void InitializeWebView2(HWND hwnd) {
                         webviewController->put_Bounds(bounds);
                         webview->Navigate(L"https://www.reaper.fm/");
                         return S_OK;
-                    }).Get()); // ИСПРАВЛЕНО:.Get() вызывается для объекта Callback
+                    }).Get());
                 return S_OK;
-            }).Get()); // ИСПРАВЛЕНО:.Get() вызывается для объекта Callback
+            }).Get());
 }
 #else // macOS
 void InitializeWKWebView(HWND hwnd) {
@@ -91,7 +84,6 @@ void InitializeWKWebView(HWND hwnd) {
     if (!parentView) { Log("macOS: Parent NSView is null."); return; }
     Log("macOS: Initializing WKWebView...");
 
-    // ИСПРАВЛЕНО: Корректный синтаксис Objective-C
     NSRect frame = [parentView bounds];
     WKWebViewConfiguration* config = init];
     nsWebView = initWithFrame:frame configuration:config];
@@ -118,7 +110,6 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 #endif
             return 0;
         case WM_SIZE:
-            Log("WM_SIZE received.");
 #ifdef _WIN32
             if (webviewController) {
                 RECT bounds;
@@ -147,8 +138,8 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 // --- Функции-действия для REAPER ---
 void OpenWebView() {
     if (g_hwndWebView && IsWindow(g_hwndWebView)) {
-        Log("Window already exists, showing.");
-        DockWindowActivate(g_hwndWebView);
+        Log("Window already exists, activating.");
+        if (g_rec && g_rec->DockWindowActivate) g_rec->DockWindowActivate(g_hwndWebView);
         return;
     }
     Log("Attempting to open WebView window...");
@@ -161,13 +152,13 @@ void OpenWebView() {
     g_hwndWebView = SWELL_CreateWindow(
         "REAPER_WebView_SWELL", "REAPER WebView",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-        -1, -1, 800, 600, // x/y -1 для док-окон
+        -1, -1, 800, 600,
         g_hwndParent, NULL, g_hInst, NULL
     );
 
     if (!g_hwndWebView) { Log("SWELL_CreateWindow failed."); return; }
     Log("SWELL_CreateWindow succeeded.");
-    DockWindowAdd(g_hwndWebView, "WebView", 0, true);
+    if (g_rec && g_rec->DockWindowAdd) g_rec->DockWindowAdd(g_hwndWebView, "WebView", 0, true);
 }
 
 void RefreshWebView() {
@@ -194,12 +185,12 @@ static COMMAND_T g_commandTable = {
 extern "C" {
     REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec) {
         if (rec) {
+            g_rec = rec;
             g_hInst = hInstance;
             g_hwndParent = rec->hwnd_main;
 
             if (rec->caller_version!= REAPER_PLUGIN_VERSION_INT) return 0;
 
-            // ИСПРАВЛЕНО: Корректная регистрация команд через rec->Register
             g_commandTable.doCommand = OpenWebView;
             g_commandTable.cmd = rec->Register("command_id", (void*)"FRZZ_WEBVIEW_OPEN");
             rec->Register("gaccel", &g_commandTable);

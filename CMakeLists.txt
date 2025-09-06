@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(reaper_webview)
 
-# Устанавливаем стандарт C++
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -10,41 +9,32 @@ set(SDK_PATH ${CMAKE_CURRENT_SOURCE_DIR}/sdk)
 set(WDL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/WDL)
 
 # Добавляем include директории
-include_directories(${SDK_PATH})
-include_directories(${WDL_PATH})
-include_directories(${WDL_PATH}/swell)
+include_directories(${SDK_PATH} ${WDL_PATH} ${WDL_PATH}/swell)
 
-# ИСХОДНИКИ SWELL (теперь для всех платформ)
-set(SWELL_SOURCES
-    ${WDL_PATH}/swell/swell.cpp
-    ${WDL_PATH}/swell/swell-ini.cpp
-    ${WDL_PATH}/swell/swell-misc-generic.cpp
-    ${WDL_PATH}/swell/swell-gdi-generic.cpp
-    ${WDL_PATH}/swell/swell-dlg-generic.cpp
-    ${WDL_PATH}/swell/swell-menu-generic.cpp
-    ${WDL_PATH}/swell/swell-kb-generic.cpp
-    ${WDL_PATH}/swell/swell-wnd-generic.cpp
-)
-
-# Добавляем исходники проекта
+# Исходный файл плагина
 set(SOURCES main.mm)
 
-# Создаем библиотеку
 add_library(reaper_webview MODULE ${SOURCES})
 
-# Добавляем исходники SWELL к проекту
-target_sources(reaper_webview PRIVATE ${SWELL_SOURCES})
-
-# Настройки для разных платформ
+# --- Настройки для macOS ---
 if(APPLE)
-    # Настройки для macOS
     set_target_properties(reaper_webview PROPERTIES
         OUTPUT_NAME "reaper_webview"
         SUFFIX ".dylib"
         BUNDLE FALSE)
 
-    # Добавляем платформо-специфичные исходники SWELL для macOS
+    # Исходники SWELL для macOS (общие + специфичные)
     target_sources(reaper_webview PRIVATE
+        # Общие (generic) файлы
+        ${WDL_PATH}/swell/swell.cpp
+        ${WDL_PATH}/swell/swell-ini.cpp
+        ${WDL_PATH}/swell/swell-misc-generic.cpp
+        ${WDL_PATH}/swell/swell-gdi-generic.cpp
+        ${WDL_PATH}/swell/swell-dlg-generic.cpp
+        ${WDL_PATH}/swell/swell-menu-generic.cpp
+        ${WDL_PATH}/swell/swell-kb-generic.cpp
+        ${WDL_PATH}/swell/swell-wnd-generic.cpp
+        # Специфичные для macOS
         ${WDL_PATH}/swell/swell-dlg.mm
         ${WDL_PATH}/swell/swell-gdi.mm
         ${WDL_PATH}/swell/swell-kb.mm
@@ -56,17 +46,19 @@ if(APPLE)
         ${WDL_PATH}/swell/swell-modstub.mm
     )
 
-    # Линкуем все необходимые фреймворки
+    # Линкуем фреймворки
     target_link_libraries(reaper_webview PRIVATE
         "-framework Cocoa"
         "-framework WebKit"
-        "-framework AppKit"
-        "-framework Carbon"
     )
 
+# --- Настройки для Windows ---
 elseif(WIN32)
-    # Настройки для Windows
     set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
+
+    # На Windows SWELL - это в основном заголовочные файлы,
+    # компилировать его исходники не нужно, так как они конфликтуют с WinAPI.
+    # Достаточно только include_directories.
 
     # Добавляем пути к зависимостям WebView2 и WIL
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps)
@@ -77,31 +69,14 @@ elseif(WIN32)
         WIN32_LEAN_AND_MEAN
         _CRT_SECURE_NO_WARNINGS)
 
-    # Добавляем линковку с системными библиотеками
-    target_link_libraries(reaper_webview
-        comctl32
-        ole32
-        version
-        shlwapi
-        user32
-        oleaut32
-        advapi32)
+    # Линковка с системными библиотеками
+    target_link_libraries(reaper_webview PRIVATE
+        user32 gdi32 shell32 ole32 oleaut32 comctl32 shlwapi version)
 
     # Линковка с WebView2
-    find_library(WEBVIEW2_LIB
-        NAMES WebView2LoaderStatic.lib WebView2Loader.lib
-        PATHS ${CMAKE_CURRENT_SOURCE_DIR}/webview2-sdk/build/native)
+    add_library(WebView2LoaderStatic STATIC IMPORTED)
+    set_target_properties(WebView2LoaderStatic PROPERTIES
+        IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/webview2-sdk/build/native/x64/WebView2LoaderStatic.lib")
+    target_link_libraries(reaper_webview PRIVATE WebView2LoaderStatic)
 
-    if(WEBVIEW2_LIB)
-        message(STATUS "Found WebView2 library: ${WEBVIEW2_LIB}")
-        target_link_libraries(reaper_webview PRIVATE ${WEBVIEW2_LIB})
-    else()
-        message(WARNING "WebView2 library not found, trying to link dynamically")
-        target_compile_definitions(reaper_webview PRIVATE USE_WEBVIEW2_LOADER_DYNAMIC)
-    endif()
 endif()
-
-# Установка выходного директория
-set_target_properties(reaper_webview PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
