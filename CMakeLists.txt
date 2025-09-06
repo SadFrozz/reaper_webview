@@ -29,9 +29,6 @@ if(APPLE)
         BUNDLE FALSE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13")
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
-    find_library(COCOA_LIBRARY Cocoa)
-    find_library(WEBKIT_LIBRARY WebKit)
-    target_link_libraries(reaper_webview ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
 
     # <--- ИЗМЕНЕНИЕ: Добавляем список исходных файлов SWELL ---
     set(SWELL_SOURCES
