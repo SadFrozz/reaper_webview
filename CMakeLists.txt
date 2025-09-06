@@ -6,20 +6,38 @@ set(WDL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/WDL)
 
 include_directories(${SDK_PATH} ${WDL_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/deps)
 
-# Исходники теперь включают только необходимые модули
-set(SOURCES
-    main.cpp
-)
+set(SOURCES main.mm)
 
+# Для Windows включаем файл ресурсов
 if(WIN32)
-    list(APPEND SOURCES webview_win.cpp main.rc)
-elseif(APPLE)
-    list(APPEND SOURCES webview_mac.mm "${WDL_PATH}/swell/swell-modstub.mm")
+    list(APPEND SOURCES main.rc)
+endif()
+
+# Для macOS включаем все необходимые исходники SWELL
+if(APPLE)
+    set(SWELL_SOURCES
+        "${WDL_PATH}/swell/swell.cpp"
+        "${WDL_PATH}/swell/swell-ini.cpp"
+        "${WDL_PATH}/swell/swell-misc-generic.cpp"
+        "${WDL_PATH}/swell/swell-gdi-generic.cpp"
+        "${WDL_PATH}/swell/swell-dlg-generic.cpp"
+        "${WDL_PATH}/swell/swell-menu-generic.cpp"
+        "${WDL_PATH}/swell/swell-kb-generic.cpp"
+        "${WDL_PATH}/swell/swell-wnd-generic.cpp"
+        "${WDL_PATH}/swell/swell-dlg.mm"
+        "${WDL_PATH}/swell/swell-gdi.mm"
+        "${WDL_PATH}/swell/swell-kb.mm"
+        "${WDL_PATH}/swell/swell-menu.mm"
+        "${WDL_PATH}/swell/swell-misc.mm"
+        "${WDL_PATH}/swell/swell-miscdlg.mm"
+        "${WDL_PATH}/swell/swell-wnd.mm"
+        "${WDL_PATH}/swell/swell-appstub.mm"
+        "${WDL_PATH}/swell/swell-modstub.mm"
+    )
+    list(APPEND SOURCES ${SWELL_SOURCES})
 endif()
 
 add_library(reaper_webview MODULE ${SOURCES})
-
-target_compile_definitions(reaper_webview PRIVATE SWELL_PROVIDED_BY_APP)
 
 if(APPLE)
     set_target_properties(reaper_webview PROPERTIES OUTPUT_NAME "reaper_webview" SUFFIX ".dylib" BUNDLE FALSE)
@@ -29,7 +47,7 @@ if(APPLE)
 
 elseif(WIN32)
     set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
-    target_compile_definitions(reaper_webview PRIVATE _WIN32_WINNT=0x0601 NOMINMAX)
+    target_compile_definitions(reaper_webview PRIVATE _WIN32_WINNT=0x0601 NOMINMAX _CRT_SECURE_NO_WARNINGS)
     target_link_libraries(reaper_webview comctl32 ole32 version shlwapi user32 oleaut32 advapi32)
 endif()
 

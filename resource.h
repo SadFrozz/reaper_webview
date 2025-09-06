@@ -1,3 +1,2 @@
-// resource.h
-#define IDD_WEBVIEW_MAIN 101
-#define IDC_WEBVIEW_PLACEHOLDER 1001
+#define IDD_DIALOG1 101
+#define IDC_PLACEHOLDER 1001

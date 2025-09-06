@@ -1,9 +1,7 @@
-// main.rc
 #include "resource.h"
-#include "sdk/reaper_plugin.h" // Для SWELL_DLGVER
+#include "sdk/reaper_plugin.h"
 
-IDD_WEBVIEW_MAIN SWELL_DLG_TYPE "WebView"
+IDD_DIALOG1 SWELL_DLG_TYPE "WebView"
 BEGIN
-  // Этот элемент управления типа "User" будет заменен на WebView при инициализации.
-  CONTROL "", IDC_WEBVIEW_PLACEHOLDER, "User", 0, 0, 0, 100, 100
+  CONTROL "", IDC_PLACEHOLDER, "User", 0, 0, 0, 100, 100
 END
