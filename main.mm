@@ -1,217 +1,272 @@
-// ===================================================================
-// ЗАГОЛОВКИ
-// ===================================================================
-
-// Сначала системные заголовки для Windows
 #ifdef _WIN32
-  #include <windows.h>
-  #include <windowsx.h>
-  #include <shlwapi.h>
-  #pragma comment(lib, "shlwapi.lib")
+    #include <windows.h>
+    #include <string>
+    #include <wrl.h>
+    #include <wil/com.h>
+    #include <Shlwapi.h>
+    #pragma comment(lib, "shlwapi.lib")
+    #include <windowsx.h>
+    #include "WebView2.h"
+#else
+    #define SWELL_TARGET_COCOA
+    #import <Cocoa/Cocoa.h>
+    #import <WebKit/WebKit.h>
+    #include <string>
+    #include "WDL/swell/swell.h"
 #endif
 
-// Затем REAPER SDK, который корректно настраивает типы
+#include "WDL/wdltypes.h"
 #include "sdk/reaper_plugin.h"
 
-// Теперь SWELL и специфичные для платформы зависимости
-#ifdef _WIN32
-  #include "WDL/swell/swell-win32.h"
-  #include <wrl.h>
-  #include <wil/com.h>
-  #include "WebView2.h"
-#else
-  #define SWELL_TARGET_COCOA
-  #import <Cocoa/Cocoa.h>
-  #import <WebKit/WebKit.h>
-  #include "WDL/swell/swell.h"
-#endif
-
-// Заголовки проекта и стандартные библиотеки
-#include "resource.h"
-#include <string>
-#include <cstdio>
-
-// Реализация функций REAPER API в самом конце
 #define REAPERAPI_IMPLEMENT
 #include "sdk/reaper_plugin_functions.h"
 
-// ===================================================================
-// ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
-// ===================================================================
 REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
-HWND g_hwnd = nullptr;
 HWND g_hwndParent = nullptr;
-int g_command_id = 0;
+HWND g_hwnd = nullptr;
+int g_command_id_open = 0;
+int g_command_id_refresh = 0;
+int g_command_id_openurl = 0;
+#ifdef _WIN32
+const WCHAR* g_wndClassName = L"MyWebViewPlugin_WindowClass";
+#endif
+
+void WEBVIEW_Navigate(const char* url);
+static void OpenWebViewWindow(const std::string& url);
 
 #ifdef _WIN32
     wil::com_ptr<ICoreWebView2Controller> webviewController;
     wil::com_ptr<ICoreWebView2> webview;
     HMODULE g_hWebView2Loader = nullptr;
-#else
-    WKWebView* g_webView = nullptr;
 #endif
 
-// ===================================================================
-// ПРОЦЕДУРЫ И ФУНКЦИИ
-// ===================================================================
-LRESULT CALLBACK DlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-
-void NavigateWebView(const char* url) {
-    if (!g_hwnd || !url) return;
+void Log(const char* format, ...) {
+    char buf[4096];
+    va_list args; va_start(args, format); vsnprintf(buf, sizeof(buf), format, args); va_end(args);
 #ifdef _WIN32
-    if (webview) {
-        if (strcmp(url, "refresh") == 0) { webview->Reload(); return; }
-        std::wstring w_url;
-        int len = MultiByteToWideChar(CP_UTF8, 0, url, -1, NULL, 0);
-        if (len > 0) {
-            w_url.resize(len - 1);
-            MultiByteToWideChar(CP_UTF8, 0, url, -1, &w_url[0], len);
-            webview->Navigate(w_url.c_str());
-        }
-    }
+    OutputDebugStringA("[reaper_webview] "); OutputDebugStringA(buf); OutputDebugStringA("\n");
 #else
-    if (g_webView) {
-        if (strcmp(url, "refresh") == 0) { [g_webView reload]; return; }
-        @autoreleasepool {
-            NSString* nsURL = [NSString stringWithUTF8String:url];
-            NSURL* URL = [NSURL URLWithString:nsURL];
-            NSURLRequest* request = [NSURLRequest requestWithURL:URL];
-            [g_webView loadRequest:request];
-        }
-    }
+    NSLog(@"[reaper_webview] %s", buf);
 #endif
 }
 
-void ToggleWindow()
-{
-    if (g_hwnd && IsWindow(g_hwnd))
-    {
-        DestroyWindow(g_hwnd);
-        g_hwnd = NULL;
+LRESULT screenset_callback(int action, const char *id, void *param, void *actionParm, int actionParmSize) {
+    if (action == SCREENSET_ACTION_GETHWND) {
+        if (!g_hwnd || !IsWindow(g_hwnd)) OpenWebViewWindow("https://www.reaper.fm/");
+        return (LRESULT)g_hwnd;
     }
-    else
-    {
-        g_hwnd = CreateDialog(g_hInst, MAKEINTRESOURCE(IDD_DIALOG1), g_hwndParent, DlgProc);
-        ShowWindow(g_hwnd, SW_SHOW);
+    if (action == SCREENSET_ACTION_IS_DOCKED) {
+        return DockIsChildOfDock(g_hwnd, NULL) ? 1 : 0;
     }
+    return 0;
 }
 
-bool HookCommandProc(int command, int flag)
-{
-    if (command == g_command_id) {
-        ToggleWindow();
-        return true; 
+bool HookCommandProc(int cmd, int flag) {
+    if (cmd == g_command_id_open) {
+        HWND hwnd_to_activate = g_hwnd;
+        if (!hwnd_to_activate || !IsWindow(hwnd_to_activate)) {
+            hwnd_to_activate = (HWND)screenset_callback(SCREENSET_ACTION_GETHWND, "FRZZ_WebView", NULL, NULL, 0);
+        }
+        if (hwnd_to_activate) DockWindowActivate(hwnd_to_activate);
+        return true;
+    }
+    if (cmd == g_command_id_refresh) {
+        if (g_hwnd) WEBVIEW_Navigate("refresh");
+        else MessageBox(g_hwndParent, "WebView is not running.", "WebView Error", MB_OK);
+        return true;
+    }
+    if (cmd == g_command_id_openurl) {
+        char urlbuf[2048] = "https://";
+        if (GetUserInputs("Open URL", 1, "URL:", urlbuf, sizeof(urlbuf))) {
+            if (!g_hwnd || !IsWindow(g_hwnd)) OpenWebViewWindow(urlbuf);
+            else WEBVIEW_Navigate(urlbuf);
+        }
+        return true;
     }
     return false;
 }
 
-LRESULT CALLBACK DlgProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
-{
-    switch (uMsg)
-    {
-        case WM_INITDIALOG:
-        {
+void RegisterAction(const char* id, const char* name, int* cmd_id_var) {
+    *cmd_id_var = NamedCommandLookup(id);
+    if (!*cmd_id_var) {
+        *cmd_id_var = plugin_register("command_id", (void*)id);
+        if (*cmd_id_var) {
+            static gaccel_register_t gaccel;
+            memset(&gaccel, 0, sizeof(gaccel_register_t));
+            gaccel.accel.cmd = *cmd_id_var;
+            gaccel.desc = name;
+            plugin_register("gaccel", &gaccel);
+        }
+    }
+}
+
+extern "C" REAPER_PLUGIN_DLL_EXPORT int
+REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec) {
+    g_hInst = hInstance;
+    if (!rec) {
+      #ifdef _WIN32
+        UnregisterClassW(g_wndClassName, (HINSTANCE)g_hInst);
+      #endif
+        return 0;
+    }
+    if (rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc || REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
+    
+    g_hwndParent = rec->hwnd_main;
+    screenset_registerNew((char*)"FRZZ_WebView", screenset_callback, NULL);
+    RegisterAction("FRZZ_WEBVIEW_OPEN_DEFAULT", "WebView: Open (default)", &g_command_id_open);
+    RegisterAction("FRZZ_WEBVIEW_REFRESH_PAGE", "WebView: Refresh Page", &g_command_id_refresh);
+    RegisterAction("FRZZ_WEBVIEW_OPEN_URL", "WebView: Open URL...", &g_command_id_openurl);
+    plugin_register("hookcommand", (void*)HookCommandProc);
+    plugin_register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*,url");
+    plugin_register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
+    return 1;
+}
+
 #ifdef _WIN32
+// ================================================================= //
+//                      РЕАЛИЗАЦИЯ ДЛЯ WINDOWS (ВАША ОРИГИНАЛЬНАЯ)    //
+// ================================================================= //
+LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
+void OpenWebViewWindow(const std::string& url) {
+    if (g_hwnd && IsWindow(g_hwnd)) return;
+    WNDCLASSW wc{0};
+    wc.lpfnWndProc = WebViewWndProc; wc.hInstance = (HINSTANCE)g_hInst; wc.lpszClassName = g_wndClassName; wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return;
+    char* url_param = _strdup(url.c_str());
+    g_hwnd = CreateWindowExW(0, g_wndClassName, L"WebView", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url_param);
+    if (!g_hwnd) free(url_param);
+}
+void WEBVIEW_Navigate(const char* url) {
+    if (g_hwnd && webview && url) {
+        if (strcmp(url, "refresh") == 0) { webview->Reload(); return; }
+        std::wstring w_url; int len = MultiByteToWideChar(CP_UTF8, 0, url, -1, NULL, 0);
+        if (len > 0) { w_url.resize(len - 1); MultiByteToWideChar(CP_UTF8, 0, url, -1, &w_url[0], len); webview->Navigate(w_url.c_str()); }
+    }
+}
+LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+        case WM_CREATE: {
             wchar_t userDataPath[MAX_PATH] = {0};
             if (GetResourcePath && GetResourcePath()[0]) {
-                MultiByteToWideChar(CP_UTF8, 0, GetResourcePath(), -1, userDataPath, MAX_PATH);
-                PathAppendW(userDataPath, L"\\WebView2_UserData");
+                char narrowPath[MAX_PATH];
+                strcpy(narrowPath, GetResourcePath());
+                MultiByteToWideChar(CP_UTF8, 0, narrowPath, -1, userDataPath, MAX_PATH);
+                PathAppendW(userDataPath, L"WebView2_UserData");
                 CreateDirectoryW(userDataPath, NULL);
             }
+            char* initial_url_c = reinterpret_cast<char*>(((LPCREATESTRUCTW)lParam)->lpCreateParams);
+            if (!initial_url_c) return -1;
+            std::string initial_url_str(initial_url_c);
+            free(initial_url_c);
+            std::wstring w_url(initial_url_str.begin(), initial_url_str.end());
             g_hWebView2Loader = LoadLibraryA("WebView2Loader.dll");
-            if (!g_hWebView2Loader) return TRUE;
-
-            using CreateEnv_t = HRESULT(STDMETHODCALLTYPE*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
+            if (!g_hWebView2Loader) { DestroyWindow(hwnd); return -1; }
+            using CreateEnv_t = HRESULT (STDMETHODCALLTYPE*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
             auto pCreate = reinterpret_cast<CreateEnv_t>(GetProcAddress(g_hWebView2Loader, "CreateCoreWebView2EnvironmentWithOptions"));
-            if (!pCreate) return TRUE;
-            
-            pCreate(nullptr, userDataPath, nullptr,
+            if (!pCreate) { DestroyWindow(hwnd); return -1; }
+            pCreate(nullptr, (userDataPath[0] ? userDataPath : nullptr), nullptr,
                 Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-                    [hwnd](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
-                        if (FAILED(result)) return result;
+                    [hwnd, w_url](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+                        if (FAILED(result)) { DestroyWindow(hwnd); return result; }
                         env->CreateCoreWebView2Controller(hwnd, Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                            [hwnd](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                            [hwnd, w_url](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                                 if (controller) {
                                     webviewController = controller;
                                     webviewController->get_CoreWebView2(&webview);
-                                    webviewController->put_IsVisible(TRUE);
                                     RECT rc; GetClientRect(hwnd, &rc);
                                     webviewController->put_Bounds(rc);
-                                    NavigateWebView("https://reaper.fm");
-                                }
+                                    webviewController->put_IsVisible(TRUE);
+                                    webview->Navigate(w_url.c_str());
+                                } else { DestroyWindow(hwnd); }
                                 return S_OK;
                             }).Get());
                         return S_OK;
                     }).Get());
-#else
-            @autoreleasepool {
-                HWND placeholder = GetDlgItem(hwnd, IDC_PLACEHOLDER);
-                NSView* parentView = (NSView*)SWELL_GetViewForHWND(placeholder);
-                if (!parentView) return TRUE;
-
-                NSRect frame = [parentView bounds];
-                WKWebViewConfiguration* config = [[[WKWebViewConfiguration alloc] init] autorelease];
-                g_webView = [[[WKWebView alloc] initWithFrame:frame configuration:config] autorelease];
-                [g_webView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
-                
-                [parentView addSubview:g_webView];
-                NavigateWebView("https://reaper.fm");
-            }
-#endif
+            return 0;
         }
-        return TRUE;
-
-        case WM_SIZE:
-#ifdef _WIN32
-            if (webviewController) {
-                RECT rc; GetClientRect(hwnd, &rc);
-                webviewController->put_Bounds(rc);
-            }
-#endif
-            break;
-
-        case WM_COMMAND:
-            if (LOWORD(wParam) == IDCANCEL || LOWORD(wParam) == IDOK) {
-                DestroyWindow(hwnd);
-                g_hwnd = NULL;
-            }
-            break;
-
+        case WM_SETFOCUS:
+            if (webviewController) webviewController->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+            return 0;
+        case WM_CLOSE: DestroyWindow(hwnd); return 0;
         case WM_DESTROY:
-#ifdef _WIN32
             if (webviewController) { webviewController->Close(); webviewController = nullptr; webview = nullptr; }
             if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
-#else
-            g_webView = nil;
-#endif
-            g_hwnd = NULL;
-            break;
+            g_hwnd = NULL; 
+            return 0;
+        case WM_SIZE: if (webviewController) { RECT rc; GetClientRect(hwnd, &rc); webviewController->put_Bounds(rc); } return 0;
     }
-    return FALSE;
+    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+}
+#else
+// ================================================================= //
+//                       РЕАЛИЗАЦИЯ ДЛЯ MACOS (ИСПРАВЛЕННАЯ)          //
+// ================================================================= //
+@interface MyNSView : NSView { @public WKWebView* webView; } @end
+@implementation MyNSView
+- (BOOL)isFlipped { return YES; }
+- (void)dealloc { [webView release]; [super dealloc]; }
+@end
+
+LRESULT SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+        case WM_CREATE: {
+            MyNSView* myView = [[[MyNSView alloc] initWithFrame:NSMakeRect(0,0,100,100)] autorelease];
+            WKWebViewConfiguration* config = [[[WKWebViewConfiguration alloc] init] autorelease];
+            WKWebView* wv = [[[WKWebView alloc] initWithFrame:[myView bounds] configuration:config] autorelease];
+            [wv setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+            myView->webView = wv;
+            [myView addSubview:wv];
+            SWELL_SetWindowLong(hwnd, 0, (LONG_PTR)myView);
+            
+            // Связываем наш NSView с HWND
+            NSView* parentView = (NSView*)SWELL_GetViewForHWND(hwnd);
+            [parentView addSubview:myView];
+            [myView setFrame:[parentView bounds]];
+            
+            if (lParam) {
+                char* url_c_str = (char*)((CREATESTRUCT*)lParam)->lpCreateParams;
+                if (url_c_str) WEBVIEW_Navigate(url_c_str);
+            }
+            return 0;
+        }
+        case WM_SIZE: {
+            MyNSView* myView = (MyNSView*)SWELL_GetWindowLong(hwnd, 0);
+            if (myView) {
+                NSView* parentView = (NSView*)SWELL_GetViewForHWND(hwnd);
+                [myView setFrame:[parentView bounds]];
+            }
+            return 0;
+        }
+        case WM_DESTROY: { g_hwnd = nullptr; return 0; }
+    }
+    return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
-// ===================================================================
-// ТОЧКА ВХОДА
-// ===================================================================
-extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t *rec)
-{
-    g_hInst = hInstance;
-    if (!rec || rec->caller_version != REAPER_PLUGIN_VERSION || !REAPERAPI_LoadAPI(rec->GetFunc)) return 0;
+void OpenWebViewWindow(const std::string& url) {
+    if (g_hwnd) return;
+    WNDCLASS wc = { 0, };
+    wc.lpfnWndProc = SwellWndProc;
+    wc.hInstance = g_hInst;
+    wc.lpszClassName = "MyWebViewSwellClass";
+    SWELL_RegisterClass(&wc);
     
-    g_hwndParent = rec->hwnd_main;
-    
-    g_command_id = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN");
-    if (!g_command_id) return 0;
-
-    static gaccel_register_t gaccel;
-    memset(&gaccel, 0, sizeof(gaccel_register_t));
-    gaccel.desc = "WebView: Open/close WebView window";
-    gaccel.accel.cmd = g_command_id;
-    plugin_register("gaccel", &gaccel);
-
-    plugin_register("hookcommand", (void*)HookCommandProc);
-    plugin_register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*,url");
-    plugin_register("API_WEBVIEW_Navigate", (void*)NavigateWebView);
-
-    return 1;
+    char* url_param = strdup(url.c_str());
+    g_hwnd = CreateWindowEx(0, "MyWebViewSwellClass", "WebView", 0, 0, 0, 800, 600, g_hwndParent, 0, g_hInst, (void*)url_param);
+    free(url_param);
 }
+
+void WEBVIEW_Navigate(const char* url) {
+    if (!g_hwnd) return;
+    MyNSView* myView = (MyNSView*)SWELL_GetWindowLong(g_hwnd, 0);
+    if (!myView || !myView->webView || !url) return;
+    
+    if (strcmp(url, "refresh") == 0) { [myView->webView reload]; return; }
+    
+    @autoreleasepool {
+        NSString* nsURL = [NSString stringWithUTF8String:url];
+        NSURL* URL = [NSURL URLWithString:nsURL];
+        NSURLRequest* request = [NSURLRequest requestWithURL:URL];
+        [myView->webView loadRequest:request];
+    }
+}
+#endif
