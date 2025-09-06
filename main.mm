@@ -26,12 +26,12 @@
 // Глобальные переменные
 REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
 HWND g_hwndParent = nullptr;
-HWND g_hwnd = nullptr; // Единый HWND для обеих платформ
+HWND g_hwnd = nullptr;
 int g_command_id_open = 0;
 int g_command_id_refresh = 0;
 int g_command_id_openurl = 0;
 
-void WEBVIEW_Navigate(const char* url); // Предварительное объявление
+void WEBVIEW_Navigate(const char* url);
 
 #ifdef _WIN32
     wil::com_ptr<ICoreWebView2Controller> webviewController;
@@ -238,15 +238,15 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 myView->webView = wv;
                 [myView addSubview:wv];
                 [parentView addSubview:myView];
-                SWELL_SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)myView);
+                SWELL_SetWindowLong(hwnd, GWL_USERDATA, (LONG_PTR)myView);
                 if (lParam) WEBVIEW_Navigate((const char*)lParam);
             }
             return 0;
         }
         case WM_SIZE: {
-            MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(hwnd, GWLP_USERDATA);
+            MyNSView* myView = (MyNSView*)SWELL_GetWindowLong(hwnd, GWL_USERDATA);
             if (myView) {
-                NSRect frame = NSMakeRect(0, 0, LOWORD(wParam), HIWORD(wParam)); // Используем wParam для SWELL/macOS
+                NSRect frame = NSMakeRect(0, 0, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
                 [myView setFrame:frame];
                 if(myView->webView) [myView->webView setFrame:frame];
             }
@@ -278,11 +278,11 @@ void OpenWebViewWindow(const std::string& url) {
 void WEBVIEW_Navigate(const char* url) {
     if (!g_hwnd) return;
     if (strcmp(url, "refresh") == 0) {
-        MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(g_hwnd, GWLP_USERDATA);
+        MyNSView* myView = (MyNSView*)SWELL_GetWindowLong(g_hwnd, GWL_USERDATA);
         if (myView && myView->webView) [myView->webView reload];
         return;
     }
-    MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(g_hwnd, GWLP_USERDATA);
+    MyNSView* myView = (MyNSView*)SWELL_GetWindowLong(g_hwnd, GWLP_USERDATA);
     if (myView && myView->webView && url) {
         @autoreleasepool {
             NSString* nsURL = [NSString stringWithUTF8String:url];
