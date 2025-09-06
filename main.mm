@@ -31,27 +31,8 @@ int g_command_id_open = 0;
 int g_command_id_refresh = 0;
 int g_command_id_openurl = 0;
 
-void Log(const char* format, ...) {
-    char buf[4096];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buf, sizeof(buf), format, args);
-    va_end(args);
-#ifdef _WIN32
-    OutputDebugStringA("[reaper_webview] ");
-    OutputDebugStringA(buf);
-    OutputDebugStringA("\n");
-    if (GetResourcePath) {
-        char path[MAX_PATH];
-        strcpy(path, GetResourcePath());
-        strcat(path, "\\reaper_webview_log.txt");
-        FILE* fp = fopen(path, "a");
-        if (fp) { fprintf(fp, "%s\n", buf); fclose(fp); }
-    }
-#else
-    NSLog(@"[reaper_webview] %s", buf);
-#endif
-}
+void Log(const char* format, ...); // Предварительное объявление
+void WEBVIEW_Navigate(const char* url); // Предварительное объявление
 
 #ifdef _WIN32
     wil::com_ptr<ICoreWebView2Controller> webviewController;
@@ -83,7 +64,6 @@ void Log(const char* format, ...) {
 
 void Action_OpenWebView();
 static void OpenWebViewWindow(const std::string& url);
-void WEBVIEW_Navigate(const char* url);
 
 // Универсальный обработчик команд
 bool HookCommandProc(int cmd, int flag) {
@@ -231,7 +211,7 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 DestroyMenu(menu);
                 if (cmd == IDC_DOCK) DockWindowActivate(hwnd);
                 else if (cmd == IDCANCEL) SendMessage(hwnd, WM_CLOSE, 0, 0);
-                else if (cmd > 0) Main_OnCommand(cmd, 0); // Используем Main_OnCommand для вызова действий
+                else if (cmd > 0) Main_OnCommand(cmd, 0);
             }
             return 0;
         }
@@ -258,13 +238,13 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 myView->webView = wv;
                 [myView addSubview:wv];
                 [parentView addSubview:myView];
-                SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)myView);
+                SWELL_SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)myView); // Используем SWELL_SetWindowLongPtr
                 if (lParam) WEBVIEW_Navigate((const char*)lParam);
             }
             return 0;
         }
         case WM_SIZE: {
-            MyNSView* myView = (MyNSView*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+            MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(hwnd, GWLP_USERDATA); // Используем SWELL_GetWindowLongPtr
             if (myView) {
                 NSRect frame = NSMakeRect(0, 0, LOWORD(lParam), HIWORD(lParam));
                 [myView setFrame:frame];
@@ -298,14 +278,11 @@ void OpenWebViewWindow(const std::string& url) {
 void WEBVIEW_Navigate(const char* url) {
     if (!g_hwnd) return;
     if (strcmp(url, "refresh") == 0) {
-        // Логика обновления для macOS
-        MyNSView* myView = (MyNSView*)GetWindowLongPtr(g_hwnd, GWLP_USERDATA);
-        if (myView && myView->webView) {
-             [myView->webView reload];
-        }
+        MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(g_hwnd, GWLP_USERDATA);
+        if (myView && myView->webView) [myView->webView reload];
         return;
     }
-    MyNSView* myView = (MyNSView*)GetWindowLongPtr(g_hwnd, GWLP_USERDATA);
+    MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(g_hwnd, GWLP_USERDATA);
     if (myView && myView->webView && url) {
         @autoreleasepool {
             NSString* nsURL = [NSString stringWithUTF8String:url];
