@@ -9,20 +9,13 @@
     #include <windowsx.h>
     #include "WebView2.h"
 #else
+    // Правильный подход: просто определяем таргет для SWELL.
+    // Все исходники SWELL будут добавлены в CMakeLists.txt.
+    #define SWELL_TARGET_COCOA
     #import <Cocoa/Cocoa.h>
     #import <WebKit/WebKit.h>
     #include <string>
     #include "WDL/swell/swell.h"
-    // FIX macOS: 1. Move SWELL includes to the top.
-    // FIX macOS: 2. Add mergesort.h for __listview_mergesort_internal.
-    #include "WDL/mergesort.h"
-    #include "WDL/swell/swell-miscdlg.mm"
-    // FIX macOS: 3. Suppress narrowing warning locally for swell-wnd.mm
-    #pragma clang diagnostic push
-    #pragma clang diagnostic ignored "-Wc++11-narrowing"
-    #include "WDL/swell/swell-wnd.mm"
-    #pragma clang diagnostic pop
-    #include "WDL/swell/swell-menu.mm"
 #endif
 
 #include "WDL/wdltypes.h"
@@ -117,7 +110,6 @@ void RegisterAction(const char* id, const char* name, int* cmd_id_var) {
     }
 }
 
-// FIX Windows: Add cleanup function for when the plugin unloads
 void UnregisterPlugin() {
 #ifdef _WIN32
     UnregisterClassW(g_wndClassName, (HINSTANCE)g_hInst);
@@ -218,6 +210,7 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                                     webviewController->get_CoreWebView2(&webview);
                                     RECT rc; GetClientRect(hwnd, &rc);
                                     webviewController->put_Bounds(rc);
+                                    webviewController->put_IsVisible(TRUE);
                                     webview->Navigate(w_url.c_str());
                                     Log("WebView controller created and navigation initiated.");
                                 } else { DestroyWindow(hwnd); }
@@ -225,6 +218,12 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                             }).Get());
                         return S_OK;
                     }).Get());
+            return 0;
+        }
+        case WM_SETFOCUS: {
+            if (webviewController) {
+                webviewController->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+            }
             return 0;
         }
         case WM_CLOSE: { DestroyWindow(hwnd); return 0; }

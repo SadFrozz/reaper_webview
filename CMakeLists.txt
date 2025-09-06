@@ -32,6 +32,32 @@ if(APPLE)
     find_library(COCOA_LIBRARY Cocoa)
     find_library(WEBKIT_LIBRARY WebKit)
     target_link_libraries(reaper_webview ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
+
+    # <--- ИЗМЕНЕНИЕ: Добавляем список исходных файлов SWELL ---
+    set(SWELL_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-ini.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-dlg.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-gdi.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-kb.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-menu.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-misc.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-miscdlg.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-wnd.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-appstub.mm
+        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-modstub.mm
+    )
+    # <--- ИЗМЕНЕНИЕ: Добавляем исходники SWELL к проекту ---
+    target_sources(reaper_webview PRIVATE ${SWELL_SOURCES})
+
+    # <--- ИЗМЕНЕНИЕ: Линкуем все необходимые фреймворки ---
+    target_link_libraries(reaper_webview PRIVATE
+        "-framework Cocoa"
+        "-framework WebKit"
+        "-framework AppKit"
+        "-framework Carbon"
+    )
+
 elseif(WIN32)
     # Настройки для Windows
     set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
