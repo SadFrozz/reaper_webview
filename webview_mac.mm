@@ -1,16 +1,21 @@
 // webview_mac.mm
 #define SWELL_TARGET_COCOA
 
-// --- Правильный порядок включений ---
+// --- Шаг 1: Заголовки REAPER и WDL (в правильном порядке) ---
 #include "sdk/reaper_plugin.h"
 #include "WDL/swell/swell.h"
-// ------------------------------------
 
+// --- Шаг 2: Заголовки Cocoa/WebKit и специфичные для проекта ---
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 #include "webview.h"
 #include "resource.h"
 #include <string>
+
+// --- Шаг 3: Реализация REAPER API ---
+// (Нужно, только если вы вызываете функции API напрямую в этом файле)
+#include "sdk/reaper_plugin_functions.h"
+
 
 // Глобальная переменная только для macOS
 WKWebView* g_webView = nullptr;

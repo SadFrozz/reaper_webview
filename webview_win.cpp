@@ -1,20 +1,27 @@
 // webview_win.cpp
+
+// --- Шаг 1: Ключевые заголовки Windows ---
 #include <windows.h>
 #include <windowsx.h>
 #include <shlwapi.h>
 #pragma comment(lib, "shlwapi.lib")
 
-// --- Правильный порядок включений ---
+// --- Шаг 2: Заголовки REAPER и WDL (в правильном порядке) ---
 #include "sdk/reaper_plugin.h"
 #include "WDL/swell/swell-win32.h"
-// ------------------------------------
 
+// --- Шаг 3: Заголовки WebView2 и специфичные для проекта ---
 #include <wrl.h>
 #include <wil/com.h>
 #include "WebView2.h"
 #include "webview.h"
 #include "resource.h"
 #include <string>
+
+// --- Шаг 4: Реализация REAPER API ---
+// (Нужно, только если вы вызываете функции API напрямую в этом файле)
+#include "sdk/reaper_plugin_functions.h"
+
 
 // Глобальные переменные только для Windows
 wil::com_ptr<ICoreWebView2Controller> webviewController;

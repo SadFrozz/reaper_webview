@@ -1,24 +1,23 @@
 // main.cpp
-// --- ШАГ 1: Системные заголовки для Windows ---
+// --- Шаг 1: Системные заголовки ---
 #ifdef _WIN32
   #include <windows.h>
 #endif
 
-// --- ШАГ 2: Основной заголовок REAPER (включает wdltypes.h) ---
+// --- Шаг 2: Заголовки REAPER и WDL/SWELL ---
 #include "sdk/reaper_plugin.h"
 
-// --- ШАГ 3: Заголовок SWELL ---
 #ifdef _WIN32
   #include "WDL/swell/swell-win32.h"
 #else
   #include "WDL/swell/swell.h"
 #endif
 
-// --- ШАГ 4: Заголовки проекта ---
+// --- Шаг 3: Заголовки проекта ---
 #include "webview.h"
 #include "resource.h"
 
-// --- ШАГ 5: Стандартные библиотеки и реализация REAPER API ---
+// --- Шаг 4: Стандартные библиотеки и реализация REAPER API ---
 #include <cstdio>
 #include <string>
 
@@ -52,13 +51,14 @@ void ToggleWebView()
 }
 
 // --- Перехватчик команд (Callback) ---
+// REAPER вызывает эту функцию для *каждого* экшена. Мы проверяем, наш ли это.
 bool HookCommandProc(int command, int flag)
 {
     if (command == g_command_id) {
         ToggleWebView();
-        return true; 
+        return true; // Сообщаем REAPER, что мы обработали команду
     }
-    return false;
+    return false; // Не наша команда, пусть REAPER обработает ее сам
 }
 
 // --- Диалоговая процедура ---
@@ -87,7 +87,9 @@ LRESULT WINAPI DockWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         return 0;
     
     WNDPROC oldProc = (WNDPROC)GetWindowLongPtr(hwnd, GWLP_USERDATA);
-    return oldProc(hwnd, uMsg, wParam, lParam);
+    if (oldProc) return oldProc(hwnd, uMsg, wParam, lParam);
+
+    return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
 // --- Логирование ---
@@ -101,7 +103,7 @@ void Log(const char* format, ...) {
 #endif
 }
 
-// --- Точка входа ---
+// --- Точка входа плагина ---
 extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t *rec)
 {
     g_hInst = hInstance;
@@ -111,15 +113,18 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_H
     g_hwndParent = rec->hwnd_main;
     
     // "Чистый" способ регистрации экшена через SDK
+    // 1. Регистрируем уникальный ID для нашей команды
     g_command_id = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN");
     if (!g_command_id) return 0;
 
+    // 2. Регистрируем описание для Action List
     static gaccel_register_t gaccel;
-    gaccel.accel = { 0, 0, 0 };
+    memset(&gaccel, 0, sizeof(gaccel_register_t));
     gaccel.desc = "WebView: Open/close WebView window";
     gaccel.accel.cmd = g_command_id;
     plugin_register("gaccel", &gaccel);
 
+    // 3. Регистрируем нашу callback-функцию для перехвата вызова экшена
     plugin_register("hookcommand", (void*)HookCommandProc);
 
     // Регистрация API
