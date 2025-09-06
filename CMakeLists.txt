@@ -32,17 +32,26 @@ if(APPLE)
 
     # <--- ИЗМЕНЕНИЕ: Добавляем список исходных файлов SWELL ---
     set(SWELL_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-ini.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-dlg.mm
-        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-gdi.mm
-        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-kb.mm
-        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-menu.mm
-        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-misc.mm
-        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-miscdlg.mm
-        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-wnd.mm
-        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-appstub.mm
-        ${CMAKE_CURRENT_SOURCE_DIR}/WDL/swell/swell-modstub.mm
+        # Общие (generic) файлы SWELL, необходимые для базовой логики
+        ${WDL_PATH}/swell/swell.cpp
+        ${WDL_PATH}/swell/swell-ini.cpp
+        ${WDL_PATH}/swell/swell-misc-generic.cpp
+        ${WDL_PATH}/swell/swell-gdi-generic.cpp
+        ${WDL_PATH}/swell/swell-dlg-generic.cpp
+        ${WDL_PATH}/swell/swell-menu-generic.cpp
+        ${WDL_PATH}/swell/swell-kb-generic.cpp
+        ${WDL_PATH}/swell/swell-wnd-generic.cpp
+
+        # Специфичные для macOS реализации (Objective-C++)
+        ${WDL_PATH}/swell/swell-dlg.mm
+        ${WDL_PATH}/swell/swell-gdi.mm
+        ${WDL_PATH}/swell/swell-kb.mm
+        ${WDL_PATH}/swell/swell-menu.mm
+        ${WDL_PATH}/swell/swell-misc.mm
+        ${WDL_PATH}/swell/swell-miscdlg.mm
+        ${WDL_PATH}/swell/swell-wnd.mm
+        ${WDL_PATH}/swell/swell-appstub.mm
+        ${WDL_PATH}/swell/swell-modstub.mm
     )
     # <--- ИЗМЕНЕНИЕ: Добавляем исходники SWELL к проекту ---
     target_sources(reaper_webview PRIVATE ${SWELL_SOURCES})
