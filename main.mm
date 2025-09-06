@@ -70,13 +70,21 @@ bool HookCommandProc(int cmd, int flag) {
         return true;
     }
     if (cmd == g_command_id_refresh) {
-        if (g_hwnd) WEBVIEW_Navigate("refresh");
+        if (g_hwnd) {
+            WEBVIEW_Navigate("refresh");
+        } else {
+            MessageBoxA(g_hwndParent, "WebView is not running. Open any URL via the Action List or run a ReaScript using API functions starting with FRZZ_WEBVIEW.", "WebView Error", MB_OK);
+        }
         return true;
     }
     if (cmd == g_command_id_openurl) {
         char urlbuf[2048] = "https://";
         if (GetUserInputs("Open URL", 1, "URL:", urlbuf, sizeof(urlbuf))) {
-            WEBVIEW_Navigate(urlbuf);
+            if (g_hwnd) {
+                WEBVIEW_Navigate(urlbuf);
+            } else {
+                OpenWebViewWindow(urlbuf);
+            }
         }
         return true;
     }
@@ -214,7 +222,13 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 AppendMenuA(menu, MF_STRING, g_command_id_openurl, "Open URL...");
                 int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), 0, hwnd, NULL);
                 DestroyMenu(menu);
-                if (cmd == IDC_DOCK) DockWindowActivate(hwnd);
+
+                if (cmd == IDC_DOCK) {
+                    DockWindowRemove(hwnd); // Всегда сначала удаляем
+                    if (!is_docked) { // Если не был пристыкован, стыкуем заново
+                        DockWindowAddEx(hwnd, "WebView", "FRZZ_WebView", true);
+                    }
+                }
                 else if (cmd == IDCANCEL) SendMessage(hwnd, WM_CLOSE, 0, 0);
                 else if (cmd > 0) Main_OnCommand(cmd, 0);
             }
@@ -240,9 +254,7 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 MyNSView* myView = [[[MyNSView alloc] initWithFrame:[parentView bounds]] autorelease];
                 WKWebViewConfiguration* config = [[[WKWebViewConfiguration alloc] init] autorelease];
                 WKWebView* wv = [[[WKWebView alloc] initWithFrame:[parentView bounds] configuration:config] autorelease];
-                myView->webView = wv;
-                [myView addSubview:wv];
-                [parentView addSubview:myView];
+                myView->webView = wv; [myView addSubview:wv]; [parentView addSubview:myView];
                 SWELL_SetWindowLong(hwnd, GWL_USERDATA, (LONG_PTR)myView);
                 if (lParam) WEBVIEW_Navigate((const char*)lParam);
             }
@@ -257,44 +269,28 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
             }
             return 0;
         }
-        case WM_DESTROY: {
-            if (DockWindowRemove) DockWindowRemove(hwnd);
-            g_hwnd = nullptr;
-            return 0;
-        }
+        case WM_DESTROY: { if (DockWindowRemove) DockWindowRemove(hwnd); g_hwnd = nullptr; return 0; }
     }
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 void OpenWebViewWindow(const std::string& url) {
-    if (g_hwnd) {
-        if (DockWindowActivate) DockWindowActivate(g_hwnd);
-        return;
-    }
+    if (g_hwnd) { if (DockWindowActivate) DockWindowActivate(g_hwnd); return; }
     WNDCLASS wc = { 0, };
-    wc.lpfnWndProc = SwellWndProc;
-    wc.hInstance = g_hInst;
-    wc.lpszClassName = "MyWebViewSwellClass";
+    wc.lpfnWndProc = SwellWndProc; wc.hInstance = g_hInst; wc.lpszClassName = "MyWebViewSwellClass";
     SWELL_RegisterClass(&wc);
     g_hwnd = CreateWindowEx(0, "MyWebViewSwellClass", "WebView", 0, 0, 0, 0, 0, g_hwndParent, 0, g_hInst, (void*)url.c_str());
-    if (g_hwnd) {
-        DockWindowAddEx(g_hwnd, "WebView", "FRZZ_WebView_macOS", true);
-    }
+    if (g_hwnd) DockWindowAddEx(g_hwnd, "WebView", "FRZZ_WebView_macOS", true);
 }
 void WEBVIEW_Navigate(const char* url) {
     if (!g_hwnd) return;
-    if (strcmp(url, "refresh") == 0) {
-        MyNSView* myView = (MyNSView*)SWELL_GetWindowLong(g_hwnd, GWL_USERDATA);
-        if (myView && myView->webView) [myView->webView reload];
-        return;
-    }
     MyNSView* myView = (MyNSView*)SWELL_GetWindowLong(g_hwnd, GWL_USERDATA);
-    if (myView && myView->webView && url) {
-        @autoreleasepool {
-            NSString* nsURL = [NSString stringWithUTF8String:url];
-            NSURL* URL = [NSURL URLWithString:nsURL];
-            NSURLRequest* request = [NSURLRequest requestWithURL:URL];
-            [myView->webView loadRequest:request];
-        }
+    if (!myView || !myView->webView) return;
+    if (strcmp(url, "refresh") == 0) { [myView->webView reload]; return; }
+    @autoreleasepool {
+        NSString* nsURL = [NSString stringWithUTF8String:url];
+        NSURL* URL = [NSURL URLWithString:nsURL];
+        NSURLRequest* request = [NSURLRequest requestWithURL:URL];
+        [myView->webView loadRequest:request];
     }
 }
 #endif
