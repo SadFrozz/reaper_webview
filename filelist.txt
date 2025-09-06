@@ -9,6 +9,8 @@ reaper_webview\main.mm
 reaper_webview\README.md
 reaper_webview\reaper-plugins
 reaper_webview\reaper_webview_pch.h
+reaper_webview\resource.h
+reaper_webview\main.rc
 reaper_webview\sdk
 reaper_webview\WDL
 reaper_webview\.github\workflows

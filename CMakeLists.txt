@@ -8,9 +8,12 @@ set(WDL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/WDL)
 # Добавляем include директории
 include_directories(${SDK_PATH} ${WDL_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/deps)
 
-# ИСПРАВЛЕНО: Для каждой платформы используется свой, правильный набор исходников.
 set(SOURCES main.mm)
-if(APPLE)
+
+# ИСПРАВЛЕНО: Ресурсный файл добавляется в сборку для Windows
+if(WIN32)
+    list(APPEND SOURCES main.rc)
+elseif(APPLE)
     # Для macOS используем нативную Objective-C заглушку из WDL
     list(APPEND SOURCES "${WDL_PATH}/swell/swell-modstub.mm")
 endif()
@@ -29,7 +32,7 @@ if(APPLE)
 
 elseif(WIN32)
     set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
-    target_compile_definitions(reaper_webview PRIVATE _WIN32_WINNT=0x0601 NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+    target_compile_definitions(reaper_webview PRIVATE _WIN32_WINNT=0x0601 NOMINMAX) # Убрано WIN32_LEAN_AND_MEAN
     target_link_libraries(reaper_webview comctl32 ole32 version shlwapi user32 oleaut32 advapi32)
 endif()
 
