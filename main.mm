@@ -6,7 +6,7 @@
     #include <wil/com.h>
     #include <Shlwapi.h>
     #pragma comment(lib, "shlwapi.lib")
-    #include <windowsx.h> // Для GET_X_LPARAM
+    #include <windowsx.h>
     #include "WebView2.h"
 #else
     #import <Cocoa/Cocoa.h>
@@ -21,17 +21,16 @@
 #define REAPERAPI_IMPLEMENT
 #include "sdk/reaper_plugin_functions.h"
 
-// ID для команд контекстного меню
-#define IDC_DOCK    40003
+#define IDC_DOCK 40003
 
+// Глобальные переменные
 REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
 HWND g_hwndParent = nullptr;
-HWND g_hwnd = nullptr;
+HWND g_hwnd = nullptr; // Единый HWND для обеих платформ
 int g_command_id_open = 0;
 int g_command_id_refresh = 0;
 int g_command_id_openurl = 0;
 
-void Log(const char* format, ...); // Предварительное объявление
 void WEBVIEW_Navigate(const char* url); // Предварительное объявление
 
 #ifdef _WIN32
@@ -42,12 +41,18 @@ void WEBVIEW_Navigate(const char* url); // Предварительное объ
 
 void Log(const char* format, ...) {
     char buf[4096];
-    va_list args; va_start(args, format); vsnprintf(buf, sizeof(buf), format, args); va_end(args);
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
 #ifdef _WIN32
-    OutputDebugStringA("[reaper_webview] "); OutputDebugStringA(buf); OutputDebugStringA("\n");
+    OutputDebugStringA("[reaper_webview] ");
+    OutputDebugStringA(buf);
+    OutputDebugStringA("\n");
     if (GetResourcePath) {
         char path[MAX_PATH];
-        strcpy(path, GetResourcePath()); strcat(path, "\\reaper_webview_log.txt");
+        strcpy(path, GetResourcePath());
+        strcat(path, "\\reaper_webview_log.txt");
         FILE* fp = fopen(path, "a");
         if (fp) { fprintf(fp, "%s\n", buf); fclose(fp); }
     }
@@ -56,16 +61,9 @@ void Log(const char* format, ...) {
 #endif
 }
 
-#ifdef _WIN32
-    wil::com_ptr<ICoreWebView2Controller> webviewController;
-    wil::com_ptr<ICoreWebView2> webview;
-    HMODULE g_hWebView2Loader = nullptr;
-#endif
-
 void Action_OpenWebView();
 static void OpenWebViewWindow(const std::string& url);
 
-// Универсальный обработчик команд
 bool HookCommandProc(int cmd, int flag) {
     if (cmd == g_command_id_open) {
         Action_OpenWebView();
@@ -107,7 +105,9 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     g_command_id_openurl = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN_URL");
     plugin_register("gaccel", new gaccel_register_t{ { 0, 0, 0 }, "WebView: Open URL..." });
 
-    if (g_command_id_open) plugin_register("hookcommand", (void*)HookCommandProc);
+    if (g_command_id_open || g_command_id_refresh || g_command_id_openurl) {
+        plugin_register("hookcommand", (void*)HookCommandProc);
+    }
     
     plugin_register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*,url");
     plugin_register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
@@ -238,15 +238,15 @@ LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam
                 myView->webView = wv;
                 [myView addSubview:wv];
                 [parentView addSubview:myView];
-                SWELL_SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)myView); // Используем SWELL_SetWindowLongPtr
+                SWELL_SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)myView);
                 if (lParam) WEBVIEW_Navigate((const char*)lParam);
             }
             return 0;
         }
         case WM_SIZE: {
-            MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(hwnd, GWLP_USERDATA); // Используем SWELL_GetWindowLongPtr
+            MyNSView* myView = (MyNSView*)SWELL_GetWindowLongPtr(hwnd, GWLP_USERDATA);
             if (myView) {
-                NSRect frame = NSMakeRect(0, 0, LOWORD(lParam), HIWORD(lParam));
+                NSRect frame = NSMakeRect(0, 0, LOWORD(wParam), HIWORD(wParam)); // Используем wParam для SWELL/macOS
                 [myView setFrame:frame];
                 if(myView->webView) [myView->webView setFrame:frame];
             }
