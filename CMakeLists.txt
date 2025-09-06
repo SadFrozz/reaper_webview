@@ -8,22 +8,17 @@ set(WDL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/WDL)
 # Добавляем include директории
 include_directories(${SDK_PATH} ${WDL_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/deps)
 
-# Исходники: наш главный файл и заглушка SWELL
-set(SOURCES
-    main.mm
-    "${WDL_PATH}/swell/swell-modstub-generic.cpp"
-)
+# ИСПРАВЛЕНО: Для каждой платформы используется свой, правильный набор исходников.
+set(SOURCES main.mm)
+if(APPLE)
+    # Для macOS используем нативную Objective-C заглушку из WDL
+    list(APPEND SOURCES "${WDL_PATH}/swell/swell-modstub.mm")
+endif()
+
 add_library(reaper_webview MODULE ${SOURCES})
 
-# Говорим SWELL использовать функции из REAPER
+# Ключевое определение: используем SWELL из REAPER
 target_compile_definitions(reaper_webview PRIVATE SWELL_PROVIDED_BY_APP)
-
-# Принудительно включаем наш "безопасный" PCH для ВСЕХ файлов
-if(MSVC)
-    target_compile_options(reaper_webview PRIVATE "/FI${CMAKE_CURRENT_SOURCE_DIR}/reaper_webview_pch.h")
-else()
-    target_compile_options(reaper_webview PRIVATE "-include" "${CMAKE_CURRENT_SOURCE_DIR}/reaper_webview_pch.h")
-endif()
 
 
 if(APPLE)
@@ -34,7 +29,7 @@ if(APPLE)
 
 elseif(WIN32)
     set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
-    target_compile_definitions(reaper_webview PRIVATE _WIN32_WINNT=0x0601 NOMINMAX _CRT_SECURE_NO_WARNINGS)
+    target_compile_definitions(reaper_webview PRIVATE _WIN32_WINNT=0x0601 NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
     target_link_libraries(reaper_webview comctl32 ole32 version shlwapi user32 oleaut32 advapi32)
 endif()
 

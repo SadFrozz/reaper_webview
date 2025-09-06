@@ -1,20 +1,39 @@
-// 1. Включаем общий C-совместимый PCH
-#include "reaper_webview_pch.h"
+// =================================================================================
+// Includes and Platform Definitions (СТРОГИЙ ПОРЯДОК)
+// =================================================================================
 
-// 2. Включаем C++/Objective-C зависимости, нужные ТОЛЬКО для этого файла
+// --- ШАГ 1: Системные заголовки для Windows
 #ifdef _WIN32
+  #define WIN32_LEAN_AND_MEAN
+  #include <windows.h>
+  #include <shlwapi.h>
+  #pragma comment(lib, "shlwapi.lib")
+  #include <windowsx.h>
+#endif
+
+// --- ШАГ 2: Основной заголовок REAPER, который сам подключит wdltypes.h
+#include "sdk/reaper_plugin.h"
+
+// --- ШАГ 3: SWELL и специфичные для платформы заголовки WebView
+#ifdef _WIN32
+  #include "WDL/swell/swell-win32.h"
   #include <wrl.h>
   #include <wil/com.h>
   #include "WebView2.h"
 #else
+  #define SWELL_TARGET_COCOA
+  #include "WDL/swell/swell.h"
   #import <Cocoa/Cocoa.h>
   #import <WebKit/WebKit.h>
 #endif
-#include <string>
 
-// 3. Реализация REAPER API
+// --- ШАГ 4: Реализация REAPER API
 #define REAPERAPI_IMPLEMENT
 #include "sdk/reaper_plugin_functions.h"
+
+// --- ШАГ 5: Стандартные C++ заголовки
+#include <string>
+#include <cstdio>
 
 
 // =================================================================================
