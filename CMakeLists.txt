@@ -1,10 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(reaper_webview)
 
-# Подключаем стандартные модули
-include(CheckIncludeFile)
-include(CheckFunctionExists)
-
 # Настройка путей
 set(SDK_PATH ${CMAKE_CURRENT_SOURCE_DIR}/sdk)
 set(WDL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/WDL)
@@ -12,7 +8,6 @@ set(WDL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/WDL)
 # Добавляем include директории
 include_directories(${SDK_PATH})
 include_directories(${WDL_PATH})
-include_directories(${WDL_PATH}/swell)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps) # Для WebView2 и WIL
 
 # Добавляем исходники
@@ -33,8 +28,6 @@ if(APPLE)
 
     # Добавляем список исходных файлов SWELL
     set(SWELL_SOURCES
-        # Общие (generic) файлы SWELL
-        
         ${WDL_PATH}/swell/swell.cpp
         ${WDL_PATH}/swell/swell-ini.cpp
         ${WDL_PATH}/swell/swell-misc-generic.cpp
@@ -43,8 +36,6 @@ if(APPLE)
         ${WDL_PATH}/swell/swell-menu-generic.cpp
         ${WDL_PATH}/swell/swell-kb-generic.cpp
         ${WDL_PATH}/swell/swell-wnd-generic.cpp
-
-        # Специфичные для macOS реализации (Objective-C++)
         ${WDL_PATH}/swell/swell-dlg.mm
         ${WDL_PATH}/swell/swell-gdi.mm
         ${WDL_PATH}/swell/swell-kb.mm
@@ -58,7 +49,6 @@ if(APPLE)
     target_sources(reaper_webview PRIVATE ${SWELL_SOURCES})
 
     # Линкуем необходимые фреймворки
-    
     target_link_libraries(reaper_webview PRIVATE
         "-framework Cocoa"
         "-framework WebKit"
@@ -70,16 +60,15 @@ elseif(WIN32)
     # Настройки для Windows
     set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
 
+    # ИСПРАВЛЕНО: Убрано определение SWELL_TARGET_WIN32, так как оно теперь в .mm файле
     target_compile_definitions(reaper_webview PRIVATE
         _WIN32_WINNT=0x0601
-        
         NOMINMAX
         WIN32_LEAN_AND_MEAN
         _CRT_SECURE_NO_WARNINGS
-        SWELL_TARGET_WIN32 # <--- ИЗМЕНЕНИЕ: Явно указываем таргет SWELL
     )
     
-    # Добавляем линковку с Win32 API и WebView2
+    # Добавляем линковку с Win32 API
     target_link_libraries(reaper_webview
         comctl32
         ole32
@@ -89,14 +78,9 @@ elseif(WIN32)
         oleaut32
         advapi32)
     
-
-    # Динамическая линковка через LoadLibrary в коде уже используется,
-    # поэтому дополнительная линковка здесь не требуется.
-    
-
 endif()
 
 # Установка выходного директория
 set_target_properties(reaper_webview PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")

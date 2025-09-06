@@ -1,14 +1,20 @@
 // =================================================================================
 // Includes and Platform Definitions
 // =================================================================================
-#include "WDL/wdltypes.h"
+
+// ИСПРАВЛЕНО: reaper_plugin.h подключается первым для получения базовых типов wdltypes.h
 #include "sdk/reaper_plugin.h"
 #include <string>
 
-// Platform-specific includes and SWELL target definition
+// ИСПРАВЛЕНО: Правильный блок определения таргета и подключения зависимостей
 #ifdef _WIN32
+    // Определяем таргет ДО подключения любых заголовочных файлов SWELL
     #define SWELL_TARGET_WIN32
-    #include <windows.h>
+    
+    // Подключаем саму реализацию SWELL для Windows
+    #include "WDL/swell/swell-win32.h"
+    
+    // Теперь подключаем остальные Windows-специфичные заголовки
     #include <wrl.h>
     #include <wil/com.h>
     #include <Shlwapi.h>
@@ -19,10 +25,9 @@
     #define SWELL_TARGET_COCOA
     #import <Cocoa/Cocoa.h>
     #import <WebKit/WebKit.h>
+    // Подключаем главный заголовок SWELL для остальных платформ
+    #include "WDL/swell/swell.h"
 #endif
-
-// SWELL header includes the correct implementation based on the target
-#include "WDL/swell/swell.h"
 
 #define REAPERAPI_IMPLEMENT
 #include "sdk/reaper_plugin_functions.h"
@@ -55,7 +60,7 @@ int g_command_id_openurl = 0;
 // Forward declarations
 void WEBVIEW_Navigate(const char* url);
 static void OpenWebViewWindow(const std::string& url);
-LRESULT SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 
 // =================================================================================
@@ -141,7 +146,8 @@ void OpenWebViewWindow(const std::string& url) {
     wc.lpszClassName = "SWELL_WebView_Class";
     SWELL_RegisterClass(&wc);
 
-    char* url_param = _strdup(url.c_str());
+    // ИСПРАВЛЕНО: Используем strdup вместо _strdup для кросс-платформенности
+    char* url_param = strdup(url.c_str()); 
     g_hwnd = CreateWindowEx(0, "SWELL_WebView_Class", "WebView", WS_CHILD | WS_VISIBLE, 0, 0, 800, 600, g_hwndParent, NULL, g_hInst, (LPVOID)url_param);
 
     if (!g_hwnd) {
@@ -190,7 +196,7 @@ void WEBVIEW_Navigate(const char* url) {
 #endif
 }
 
-LRESULT SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+LRESULT CALLBACK SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_CREATE: {
             Log("WM_CREATE received for hwnd %p.", hwnd);
@@ -205,7 +211,8 @@ LRESULT SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 char narrowPath[MAX_PATH];
                 strcpy(narrowPath, GetResourcePath());
                 MultiByteToWideChar(CP_UTF8, 0, narrowPath, -1, userDataPath, MAX_PATH);
-                PathAppendW(userDataPath, L'WebView2_UserData');
+                // ИСПРАВЛЕНО: PathAppendW требует строку (L""), а не символ (L'')
+                PathAppendW(userDataPath, L"\\WebView2_UserData");
                 CreateDirectoryW(userDataPath, NULL);
             }
             std::wstring w_url(initial_url.begin(), initial_url.end());
@@ -256,7 +263,7 @@ LRESULT SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
         #else
             MyNSView* myView = (MyNSView*)SWELL_GetWindowLong(hwnd, 0);
             if (myView) {
-                NSRect frame = NSMakeRect(0, 0, lParam & 0xFFFF, lParam >> 16);
+                NSRect frame = NSMakeRect(0, 0, LOWORD(lParam), HIWORD(lParam));
                 [myView setFrame:frame];
                 if(myView->webView) [myView->webView setFrame:frame];
             }
@@ -287,7 +294,7 @@ LRESULT SwellWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
     }
-    return SWELL_DefWindowProc(hwnd, uMsg, wParam, lParam);
+    return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
 
@@ -298,10 +305,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec) {
     g_hInst = hInstance;
     if (!rec) {
-    #ifdef _WIN32
-        // On Windows, we should unregister the class
+        // UnregisterClass is a Win32 specific call, SWELL handles this for other platforms
+        #ifdef _WIN32
         UnregisterClass("SWELL_WebView_Class", g_hInst);
-    #endif
+        #endif
         return 0;
     }
     if (rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc || REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
