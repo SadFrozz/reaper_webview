@@ -1,8 +1,8 @@
 // =================================================================================
-// Includes and Platform Definitions (НОВЫЙ, ПРАВИЛЬНЫЙ ПОРЯДОК)
+// Includes and Platform Definitions (ФИНАЛЬНЫЙ ПРАВИЛЬНЫЙ ПОРЯДОК)
 // =================================================================================
 
-// --- ШАГ 1: Сначала подключаются системные заголовки для конкретной платформы.
+// --- ШАГ 1: Системные заголовки для платформы
 #ifdef _WIN32
   #include <windows.h>
   #include <shlwapi.h>
@@ -10,28 +10,26 @@
   #include <windowsx.h>
 #endif
 
-// --- ШАГ 2: Затем подключаются базовые типы WDL. Это критически важно.
+// --- ШАГ 2: Базовые типы WDL
 #include "WDL/wdltypes.h"
 
-// --- ШАГ 3: После базовых типов можно подключать основной заголовок REAPER SDK.
+// --- ШАГ 3: Основной заголовок REAPER SDK
 #include "sdk/reaper_plugin.h"
 
-// --- ШАГ 4: Теперь, когда все типы определены, подключаем реализацию SWELL.
+// --- ШАГ 4: Заголовки SWELL (теперь они будут работать правильно благодаря SWELL_PROVIDED_BY_APP)
 #ifdef _WIN32
-  #include "WDL/swell/swell-win32.h" // Реализация SWELL для Windows
-  // И специфичные для WebView2 заголовки
+  #include "WDL/swell/swell-win32.h"
   #include <wrl.h>
   #include <wil/com.h>
   #include "WebView2.h"
 #else
-  #define SWELL_TARGET_COCOA // Определяем таргет для macOS
-  #include "WDL/swell/swell.h"     // Декларации SWELL для macOS
-  // И специфичные для платформы фреймворки
+  #define SWELL_TARGET_COCOA
+  #include "WDL/swell/swell.h"
   #import <Cocoa/Cocoa.h>
   #import <WebKit/WebKit.h>
 #endif
 
-// --- ШАГ 5: В самом конце подключаем реализацию REAPER API.
+// --- ШАГ 5: Реализация REAPER API
 #define REAPERAPI_IMPLEMENT
 #include "sdk/reaper_plugin_functions.h"
 
@@ -40,7 +38,7 @@
 
 
 // =================================================================================
-// Global Variables
+// Global Variables (без изменений)
 // =================================================================================
 REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
 HWND g_hwndParent = nullptr;
