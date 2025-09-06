@@ -1,44 +1,24 @@
-// =================================================================================
-// Includes and Platform Definitions (ФИНАЛЬНЫЙ ПРАВИЛЬНЫЙ ПОРЯДОК)
-// =================================================================================
+// 1. Включаем общий C-совместимый PCH
+#include "reaper_webview_pch.h"
 
-// --- ШАГ 1: Системные заголовки для платформы
+// 2. Включаем C++/Objective-C зависимости, нужные ТОЛЬКО для этого файла
 #ifdef _WIN32
-  #include <windows.h>
-  #include <shlwapi.h>
-  #pragma comment(lib, "shlwapi.lib")
-  #include <windowsx.h>
-#endif
-
-// --- ШАГ 2: Базовые типы WDL
-#include "WDL/wdltypes.h"
-
-// --- ШАГ 3: Основной заголовок REAPER SDK
-#include "sdk/reaper_plugin.h"
-
-// --- ШАГ 4: Заголовки SWELL (теперь они будут работать правильно благодаря SWELL_PROVIDED_BY_APP)
-#ifdef _WIN32
-  #include "WDL/swell/swell-win32.h"
   #include <wrl.h>
   #include <wil/com.h>
   #include "WebView2.h"
 #else
-  #define SWELL_TARGET_COCOA
-  #include "WDL/swell/swell.h"
   #import <Cocoa/Cocoa.h>
   #import <WebKit/WebKit.h>
 #endif
+#include <string>
 
-// --- ШАГ 5: Реализация REAPER API
+// 3. Реализация REAPER API
 #define REAPERAPI_IMPLEMENT
 #include "sdk/reaper_plugin_functions.h"
 
-// --- Стандартные C++ заголовки
-#include <string>
-
 
 // =================================================================================
-// Global Variables (без изменений)
+// Global Variables
 // =================================================================================
 REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
 HWND g_hwndParent = nullptr;
@@ -80,7 +60,7 @@ void Log(const char* format, ...) {
 
 
 // =================================================================================
-// REAPER Integration (Screensets & Commands)
+// REAPER Integration
 // =================================================================================
 LRESULT screenset_callback(int action, const char *id, void *param, void *actionParm, int actionParmSize) {
     if (action == SCREENSET_ACTION_GETHWND) {
@@ -134,7 +114,7 @@ void RegisterAction(const char* id, const char* name, int* cmd_id_var) {
 
 
 // =================================================================================
-// Unified Window Management
+// Window Management
 // =================================================================================
 void OpenWebViewWindow(const std::string& url) {
     if (g_hwnd && IsWindow(g_hwnd)) return;
