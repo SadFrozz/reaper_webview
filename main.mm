@@ -23,7 +23,6 @@
 
 #define IDC_DOCK 40003
 
-// Глобальные переменные
 REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
 HWND g_hwndParent = nullptr;
 HWND g_hwnd = nullptr;
@@ -91,19 +90,19 @@ bool HookCommandProc(int cmd, int flag) {
     return false;
 }
 
-// Helper-функция для регистрации действия
-static int RegisterAction(const char* id, const char* name, int* cmd_id_var) {
+// ИСПРАВЛЕНИЕ: Правильная и безопасная регистрация действия
+void RegisterAction(const char* id, const char* name, int* cmd_id_var) {
     *cmd_id_var = NamedCommandLookup(id);
     if (!*cmd_id_var) {
         *cmd_id_var = plugin_register("command_id", (void*)id);
         if (*cmd_id_var) {
-            static gaccel_register_t gaccel = { { 0, 0, 0 }, "" };
+            static gaccel_register_t gaccel;
+            memset(&gaccel, 0, sizeof(gaccel_register_t));
             gaccel.accel.cmd = *cmd_id_var;
             gaccel.desc = name;
             plugin_register("gaccel", &gaccel);
         }
     }
-    return *cmd_id_var;
 }
 
 
@@ -118,7 +117,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     RegisterAction("FRZZ_WEBVIEW_REFRESH_PAGE", "WebView: Refresh Page", &g_command_id_refresh);
     RegisterAction("FRZZ_WEBVIEW_OPEN_URL", "WebView: Open URL...", &g_command_id_openurl);
 
-    if (g_command_id_open) {
+    if (g_command_id_open || g_command_id_refresh || g_command_id_openurl) {
         plugin_register("hookcommand", (void*)HookCommandProc);
     }
     
@@ -214,23 +213,27 @@ LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         case WM_CONTEXTMENU: {
             HMENU menu = CreatePopupMenu();
             if (menu) {
+                // ИСПРАВЛЕНИЕ: Правильно определяем, закреплено ли окно
                 bool is_docked = DockIsChildOfDock(hwnd, NULL);
-                AppendMenuA(menu, MF_STRING | (is_docked ? MFS_CHECKED : 0), IDC_DOCK, "Dock WebView in Docker");
-                AppendMenuA(menu, MF_STRING, IDCANCEL, "Close");
+                AppendMenuA(menu, MF_STRING | (is_docked ? MFS_CHECKED : 0), IDC_DOCK, "Dock window");
+                AppendMenuA(menu, MF_STRING, IDCANCEL, "Close window");
                 AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
                 AppendMenuA(menu, MF_STRING, g_command_id_refresh, "Refresh Page");
                 AppendMenuA(menu, MF_STRING, g_command_id_openurl, "Open URL...");
+                
                 int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), 0, hwnd, NULL);
                 DestroyMenu(menu);
 
+                // ИСПРАВЛЕНИЕ: Используем DockWindowActivate для переключения состояния
                 if (cmd == IDC_DOCK) {
-                    DockWindowRemove(hwnd); // Всегда сначала удаляем
-                    if (!is_docked) { // Если не был пристыкован, стыкуем заново
-                        DockWindowAddEx(hwnd, "WebView", "FRZZ_WebView", true);
-                    }
+                    DockWindowActivate(hwnd);
                 }
-                else if (cmd == IDCANCEL) SendMessage(hwnd, WM_CLOSE, 0, 0);
-                else if (cmd > 0) Main_OnCommand(cmd, 0);
+                else if (cmd == IDCANCEL) {
+                    SendMessage(hwnd, WM_CLOSE, 0, 0);
+                }
+                else if (cmd > 0) {
+                    Main_OnCommand(cmd, 0);
+                }
             }
             return 0;
         }
