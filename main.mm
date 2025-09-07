@@ -294,7 +294,7 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
       int _dockret = (DockIsChildOfDock ? DockIsChildOfDock(hwnd, nullptr) : -1);
       if (_dockret >= 0)
       {
-        LogF("DockIsChildOfDock -> %d, calling DockWindowRemove()", dockidx);
+        LogF("DockIsChildOfDock -> %d, calling DockWindowRemove()", _dockret);
         if (DockWindowRemove) DockWindowRemove(hwnd);
       }
       DestroyWindow(hwnd);
@@ -491,7 +491,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
       int _dockret = (DockIsChildOfDock ? DockIsChildOfDock(g_hwnd, nullptr) : -1);
       if (_dockret >= 0)
       {
-        LogF("Unload: remove from dock %d", dockidx);
+        LogF("Unload: remove from dock (ret=%d)", _dockret);
         if (DockWindowRemove) DockWindowRemove(g_hwnd);
       }
       DestroyWindow(g_hwnd);
