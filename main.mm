@@ -1,25 +1,31 @@
 
-// main.mm — REAPER WebView extension with docking + VERBOSE LOGGING
-// - Возвращено и усилено логирование (в файл + REAPER-консоль + OutputDebugString)
-// - Исправлены имена Dock_* API, корректная обработка WM_CLOSE из докера
-// - Более подробные логи жизненного цикла WebView2 (NavigationStarting/Completed/ProcessFailed)
-// - Поддержка toggle-состояния экшена
+// main.mm — REAPER WebView (dockable), Windows: совместимость SDK (без SHCreateDirectoryExA и CoreWebView2EnvironmentOptions)
 //
-// Windows: WebView2 (ICoreWebView2); macOS: WKWebView (TODO: перенести на SWELL для докинга)
+// Изменения этой ревизии:
+//  • Убраны зависимости от CoreWebView2EnvironmentOptions (options=nullptr)
+//  • Вместо SHCreateDirectoryExA — собственная рекурсивная функция на CreateDirectoryA
+//  • userDataFolder: <ResourcePath>\WebView2Data (создаётся заранее)
+//  • Экшн — только OPEN (не toggle)
+//  • Окно — WS_CHILD; после DockWindowAddEx -> Show + DockWindowActivate + DockWindowRefreshForHWND
+//
 // © 2025
 
 #ifdef _WIN32
   #ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
+  #define WIN32_LEAN_AND_MEAN
+  #endif
   #include <windows.h>
   #include <shellapi.h>
   #include <string>
+  #include <vector>
   #include <mutex>
   #include <wrl.h>
   #include <wil/com.h>
-  #include <objbase.h> // CoInitializeEx
+  #include <objbase.h>
+  #include <direct.h> // _mkdir
   #include "deps/WebView2.h"
+  #include <shlwapi.h>
+  #pragma comment(lib, "Shlwapi.lib")
 #else
   #import <Cocoa/Cocoa.h>
   #import <WebKit/WebKit.h>
@@ -50,13 +56,14 @@ static wil::com_ptr<ICoreWebView2Controller> g_controller;
 static wil::com_ptr<ICoreWebView2>           g_webview;
 static HMODULE g_hWebView2Loader = nullptr;
 static bool   g_com_initialized = false;
+static std::wstring g_userDataFolder;
 #else
 static NSWindow* g_pluginWindow = nil;
 static WKWebView* g_webView = nil;
 #endif
 
 // -----------------------------
-// ЛОГИРОВАНИЕ (файл + консоль REAPER + OutputDebugString)
+// ЛОГИРОВАНИЕ
 // -----------------------------
 static std::mutex& log_mutex() { static std::mutex m; return m; }
 
@@ -75,16 +82,14 @@ static std::string GetModuleDir()
 
 static std::string GetLogPath()
 {
-  // Пытаемся в ресурсный путь REAPER; если не доступен — рядом с плагином
   const char* res = GetResourcePath ? GetResourcePath() : nullptr;
   if (res && *res)
   {
 #ifdef _WIN32
-    std::string p = std::string(res) + "\\reaper_webview_log.txt";
+    return std::string(res) + "\\reaper_webview_log.txt";
 #else
-    std::string p = std::string(res) + "/reaper_webview_log.txt";
+    return std::string(res) + "/reaper_webview_log.txt";
 #endif
-    return p;
   }
 #ifdef _WIN32
   return GetModuleDir() + "\\reaper_webview_log.txt";
@@ -97,15 +102,9 @@ static void LogRaw(const char* s)
 {
   if (!s) return;
 #ifdef _WIN32
-  OutputDebugStringA(s);
-  OutputDebugStringA("\r\n");
+  OutputDebugStringA(s); OutputDebugStringA("\r\n");
 #endif
-  if (ShowConsoleMsg)
-  {
-    ShowConsoleMsg(s);
-    ShowConsoleMsg("\n");
-  }
-  // файл
+  if (ShowConsoleMsg) { ShowConsoleMsg(s); ShowConsoleMsg("\n"); }
   std::lock_guard<std::mutex> lk(log_mutex());
   FILE* f = nullptr;
 #ifdef _WIN32
@@ -113,12 +112,7 @@ static void LogRaw(const char* s)
 #else
   f = fopen(GetLogPath().c_str(), "ab");
 #endif
-  if (f)
-  {
-    fwrite(s, 1, strlen(s), f);
-    fwrite("\n", 1, 1, f);
-    fclose(f);
-  }
+  if (f) { fwrite(s, 1, strlen(s), f); fwrite("\n", 1, 1, f); fclose(f); }
 }
 
 static void LogF(const char* fmt, ...)
@@ -134,26 +128,85 @@ static void LogF(const char* fmt, ...)
   LogRaw(buf);
 }
 
+#ifdef _WIN32
+static std::wstring Widen(const std::string& s)
+{
+  if (s.empty()) return std::wstring();
+  int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+  std::wstring w; w.resize(n ? (n-1) : 0);
+  if (n > 1) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], n);
+  return w;
+}
+
+static bool EnsureDirRecursive(const std::string& path)
+{
+  if (path.empty()) return false;
+  if (PathFileExistsA(path.c_str())) return true;
+
+  // Нормализуем слеши
+  std::string p = path;
+  for (char& c : p) if (c == '/') c = '\\';
+
+  // Обрабатываем префиксы: "C:\", "\\server\share"
+  size_t i = 0;
+  if (p.size() >= 2 && p[1] == ':') i = 3; // "C:\"
+  else if (p.rfind("\\\\", 0) == 0)
+  {
+    // UNC: \\server\share\...
+    size_t pos = p.find('\\', 2);
+    if (pos == std::string::npos) return false;
+    pos = p.find('\\', pos+1);
+    if (pos == std::string::npos) return false;
+    i = pos + 1;
+  }
+
+  // Создаём по сегментам
+  for (; i < p.size(); ++i)
+  {
+    if (p[i] == '\\')
+    {
+      std::string sub = p.substr(0, i);
+      if (!sub.empty() && !PathFileExistsA(sub.c_str()))
+      {
+        if (_mkdir(sub.c_str()) != 0 && GetLastError() != ERROR_ALREADY_EXISTS)
+        {
+          LogF("mkdir failed for %s (gle=%lu)", sub.c_str(), GetLastError());
+          return false;
+        }
+      }
+    }
+  }
+  // Последний сегмент
+  if (!PathFileExistsA(p.c_str()))
+  {
+    if (_mkdir(p.c_str()) != 0 && GetLastError() != ERROR_ALREADY_EXISTS)
+    {
+      LogF("mkdir failed for %s (gle=%lu)", p.c_str(), GetLastError());
+      return false;
+    }
+  }
+  return PathFileExistsA(p.c_str());
+}
+#endif
+
 // -----------------------------
 // Прототипы
 // -----------------------------
-static void ShowOrCreateWebView(const std::string& url, bool activate=true);
-static void ToggleWindow();
-static void UpdateToggleState(bool visible);
+static void OpenOrActivate(const std::string& url);
 static void WEBVIEW_Navigate(const char* url);
 
 // -----------------------------
-// HOOK на команду
+// HOOK команды (OPEN, не toggle)
 // -----------------------------
 static bool HookCommandProc(int cmd, int /*flag*/)
 {
-  if (cmd == g_command_id) { ToggleWindow(); return true; }
+  if (cmd == g_command_id) { OpenOrActivate("https://www.reaper.fm/"); return true; }
   return false;
 }
 
 #ifdef _WIN32
 // -----------------------------
-// WNDPROC с расширенными логами
+// WNDPROC
 // -----------------------------
 static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -172,10 +225,18 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
       char* initial = (char*)((LPCREATESTRUCTA)lp)->lpCreateParams;
       std::string initial_url = initial ? initial : "https://www.reaper.fm/";
       LogF("Initial URL: %s", initial_url.c_str());
-
       if (initial) free(initial);
 
-      // Грузим WebView2Loader.dll
+      // userDataFolder: <ResourcePath>\WebView2Data
+      const char* res = GetResourcePath ? GetResourcePath() : nullptr;
+      std::string base = (res && *res) ? std::string(res) : GetModuleDir();
+      std::string udf = base + "\\WebView2Data";
+      LogF("userDataFolder: %s", udf.c_str());
+      if (!EnsureDirRecursive(udf))
+        LogRaw("WARNING: userDataFolder not ready, WebView2 may fail");
+      g_userDataFolder = Widen(udf);
+
+      // loader
       if (!g_hWebView2Loader)
       {
         std::string candidate = GetModuleDir() + "\\WebView2Loader.dll";
@@ -185,9 +246,20 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
       }
       if (!g_hWebView2Loader)
       {
-        MessageBox(hwnd, "WebView2Loader.dll not found.\nShip it next to the plugin.", "WebView error", MB_ICONERROR);
+        MessageBox(hwnd, "WebView2Loader.dll not found.\nPlace next to the plugin DLL.", "WebView error", MB_ICONERROR);
         LogRaw("FATAL: WebView2Loader.dll not found");
         return 0;
+      }
+
+      // Runtime version
+      typedef HRESULT (STDMETHODCALLTYPE *PFN_GetVer)(PCWSTR, LPWSTR*);
+      auto pGetVer = (PFN_GetVer)GetProcAddress(g_hWebView2Loader, "GetAvailableCoreWebView2BrowserVersionString");
+      if (pGetVer)
+      {
+        LPWSTR ver = nullptr;
+        HRESULT hr = pGetVer(nullptr, &ver);
+        LogF("GetAvailableCoreWebView2BrowserVersionString -> hr=0x%lX ver=%S", (long)hr, ver ? ver : L"(null)");
+        if (ver) CoTaskMemFree(ver);
       }
 
       using CreateEnv_t = HRESULT (STDMETHODCALLTYPE*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*,
@@ -201,16 +273,17 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         return 0;
       }
 
-      std::wstring wurl(initial_url.begin(), initial_url.end());
+      std::wstring wurl = Widen(initial_url);
       LogRaw("Start WebView2 environment...");
-      pCreateEnv(
-        nullptr, nullptr, nullptr,
+      HRESULT hrEnv = pCreateEnv(
+        /*browserExecutableFolder*/ nullptr,
+        /*userDataFolder*/ g_userDataFolder.empty() ? nullptr : g_userDataFolder.c_str(),
+        /*options*/ nullptr,
         Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
           [hwnd, wurl](HRESULT result, ICoreWebView2Environment* env)->HRESULT
           {
             LogF("[EnvCompleted] hr=0x%lX env=%p", (long)result, (void*)env);
             if (FAILED(result) || !env) return S_OK;
-
             env->CreateCoreWebView2Controller(hwnd,
               Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                 [hwnd, wurl](HRESULT result, ICoreWebView2Controller* controller)->HRESULT
@@ -220,12 +293,11 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
                   g_controller = controller;
                   g_controller->get_CoreWebView2(&g_webview);
 
-                  // Навешиваем события для логирования
                   if (g_webview)
                   {
                     g_webview->add_NavigationStarting(
                       Microsoft::WRL::Callback<ICoreWebView2NavigationStartingEventHandler>(
-                        [](ICoreWebView2* /*sender*/, ICoreWebView2NavigationStartingEventArgs* args)->HRESULT
+                        [](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args)->HRESULT
                         {
                           wil::unique_cotaskmem_string uri;
                           if (args && SUCCEEDED(args->get_Uri(&uri))) LogF("[NavigationStarting] %S", uri.get());
@@ -234,7 +306,7 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
 
                     g_webview->add_NavigationCompleted(
                       Microsoft::WRL::Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                        [](ICoreWebView2* /*sender*/, ICoreWebView2NavigationCompletedEventArgs* args)->HRESULT
+                        [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args)->HRESULT
                         {
                           BOOL ok = FALSE; if (args) args->get_IsSuccess(&ok);
                           COREWEBVIEW2_WEB_ERROR_STATUS st = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
@@ -245,7 +317,7 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
 
                     g_webview->add_ProcessFailed(
                       Microsoft::WRL::Callback<ICoreWebView2ProcessFailedEventHandler>(
-                        [](ICoreWebView2* /*sender*/, ICoreWebView2ProcessFailedEventArgs* args)->HRESULT
+                        [](ICoreWebView2*, ICoreWebView2ProcessFailedEventArgs* args)->HRESULT
                         {
                           COREWEBVIEW2_PROCESS_FAILED_KIND k;
                           if (args && SUCCEEDED(args->get_ProcessFailedKind(&k)))
@@ -265,38 +337,28 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             return S_OK;
           }).Get());
 
+      LogF("CreateCoreWebView2EnvironmentWithOptions returned 0x%lX", (long)hrEnv);
       return 0;
     }
+
+    case WM_SHOWWINDOW:
+      LogF("[WM_SHOWWINDOW] shown=%d status=%d", (int)wp, (int)lp);
+      return 0;
 
     case WM_SIZE:
     {
-      if (g_controller) { RECT rc; GetClientRect(hwnd, &rc); g_controller->put_Bounds(rc); }
-      return 0;
-    }
-
-    case WM_APP+1: // navigate
-    {
-      const char* url = (const char*)lp;
-      LogF("[WM_APP+1] Navigate -> %s", url ? url : "(null)");
-      if (g_webview && url)
-      {
-        std::wstring w(url, url + strlen(url));
-        g_webview->Navigate(w.c_str());
-      }
-      if (url) free((void*)url);
+      RECT rc; GetClientRect(hwnd, &rc);
+      LogF("[WM_SIZE] %ldx%ld", (long)(rc.right-rc.left), (long)(rc.bottom-rc.top));
+      if (g_controller) g_controller->put_Bounds(rc);
       return 0;
     }
 
     case WM_CLOSE:
     {
       LogRaw("[WM_CLOSE]");
-      // Если мы в доке — удалим из докера, затем уничтожим окно
       int _dockret = (DockIsChildOfDock ? DockIsChildOfDock(hwnd, nullptr) : -1);
-      if (_dockret >= 0)
-      {
-        LogF("DockIsChildOfDock -> %d, calling DockWindowRemove()", _dockret);
-        if (DockWindowRemove) DockWindowRemove(hwnd);
-      }
+      LogF("DockIsChildOfDock -> %d", _dockret);
+      if (_dockret >= 0 && DockWindowRemove) DockWindowRemove(hwnd);
       DestroyWindow(hwnd);
       return 0;
     }
@@ -309,7 +371,6 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
       if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
       if (g_com_initialized) { CoUninitialize(); g_com_initialized = false; }
       g_hwnd = nullptr;
-      UpdateToggleState(false);
       return 0;
     }
   }
@@ -318,80 +379,50 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
 #endif // _WIN32
 
 // -----------------------------
-// Служебные
+// Окно + док
 // -----------------------------
-static void UpdateToggleState(bool visible)
-{
-  if (SetToggleCommandState) SetToggleCommandState(0, g_command_id, visible ? 1 : 0);
-  if (RefreshToolbar2) RefreshToolbar2(0, g_command_id);
-}
-
 #ifdef _WIN32
-static void RegisterWindowClass()
-{
-  static bool s_registered = false;
-  if (s_registered) return;
-  WNDCLASSEXA wc = {0};
-  wc.cbSize = sizeof(wc);
-  wc.style = CS_HREDRAW|CS_VREDRAW|CS_DBLCLKS;
-  wc.lpfnWndProc = WebViewWndProc;
-  wc.hInstance = (HINSTANCE)g_hInst;
-  wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-  wc.lpszClassName = "FRZZ_WebView_Dock_Class";
-  if (!RegisterClassExA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
-  {
-    MessageBox(g_hwndParent, "Failed to register window class.", "WebView", MB_ICONERROR);
-  }
-  else s_registered = true;
-}
-
-static void ShowOrCreateWebView(const std::string& url, bool activate/*=true*/)
+static void OpenOrActivate(const std::string& url)
 {
   if (!g_hwnd)
   {
-    RegisterWindowClass();
+    WNDCLASSEXA wc = {0};
+    wc.cbSize = sizeof(wc);
+    wc.style = CS_HREDRAW|CS_VREDRAW|CS_DBLCLKS;
+    wc.lpfnWndProc = WebViewWndProc;
+    wc.hInstance = (HINSTANCE)g_hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.lpszClassName = "FRZZ_WebView_Dock_Class";
+    if (!RegisterClassExA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+    {
+      MessageBox(g_hwndParent, "Failed to register window class.", "WebView", MB_ICONERROR);
+      return;
+    }
+
     char* urlParam = _strdup(url.c_str());
     g_hwnd = CreateWindowExA(
       0, "FRZZ_WebView_Dock_Class", kTitle,
-      // Top-level окно без меню — REAPER сам перепривяжет в док и добавит свою панель с Dock/Close
-      WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-      CW_USEDEFAULT, CW_USEDEFAULT, 1200, 700,
+      WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+      0, 0, 1200, 700,
       g_hwndParent, nullptr, (HINSTANCE)g_hInst, (LPVOID)urlParam);
     LogF("CreateWindowEx -> %p (GetLastError=%lu)", g_hwnd, GetLastError());
-
     if (!g_hwnd) return;
 
-    // Регистрируем окно в докер (persist ident)
     if (DockWindowAddEx) { DockWindowAddEx(g_hwnd, kTitle, kDockIdent, true); LogRaw("DockWindowAddEx OK"); }
     else if (DockWindowAdd) { DockWindowAdd(g_hwnd, kTitle, 0, true); LogRaw("DockWindowAdd OK"); }
 
-    // Docker сам покажет окно; пусть не мигает отдельно
-    ShowWindow(g_hwnd, SW_HIDE);
+    ShowWindow(g_hwnd, SW_SHOWNA);
+    if (DockWindowActivate) { DockWindowActivate(g_hwnd); LogRaw("DockWindowActivate"); }
+    if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(g_hwnd);
   }
-
-  if (activate)
+  else
   {
     if (DockWindowActivate) { DockWindowActivate(g_hwnd); LogRaw("DockWindowActivate"); }
     else ShowWindow(g_hwnd, SW_SHOW);
   }
-  UpdateToggleState(true);
-}
-
-static void ToggleWindow()
-{
-  if (g_hwnd && IsWindow(g_hwnd) && IsWindowVisible(g_hwnd))
-  {
-    LogRaw("[Toggle] close -> WM_CLOSE");
-    SendMessage(g_hwnd, WM_CLOSE, 0, 0);
-  }
-  else
-  {
-    LogRaw("[Toggle] open");
-    ShowOrCreateWebView("https://www.reaper.fm/", true);
-  }
 }
 #else
-static void ShowOrCreateWebView(const std::string& url, bool activate/*=true*/)
+static void OpenOrActivate(const std::string& url)
 {
   if (!g_pluginWindow)
   {
@@ -399,35 +430,26 @@ static void ShowOrCreateWebView(const std::string& url, bool activate/*=true*/)
     g_pluginWindow = [[NSWindow alloc] initWithContentRect:frame
                       styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable)
                         backing:NSBackingStoreBuffered defer:NO];
-
     [g_pluginWindow setTitle:@"WebView"];
     WKWebViewConfiguration* cfg = [[WKWebViewConfiguration alloc] init];
     g_webView = [[WKWebView alloc] initWithFrame:[[g_pluginWindow contentView] bounds] configuration:cfg];
     [g_webView setAutoresizingMask:(NSViewWidthSizable|NSViewHeightSizable)];
     [[g_pluginWindow contentView] addSubview:g_webView];
-
     NSURL* u = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
     if (u) [g_webView loadRequest:[NSURLRequest requestWithURL:u]];
   }
-  if (activate) [g_pluginWindow makeKeyAndOrderFront:nil];
-  UpdateToggleState(true);
-}
-
-static void ToggleWindow()
-{
-  if (g_pluginWindow && [g_pluginWindow isVisible]) { [g_pluginWindow orderOut:nil]; UpdateToggleState(false); }
-  else ShowOrCreateWebView("https://www.reaper.fm/", true);
+  [g_pluginWindow makeKeyAndOrderFront:nil];
 }
 #endif
 
 // -----------------------------
-// SWS-style API
+// API
 // -----------------------------
 static void WEBVIEW_Navigate(const char* url)
 {
   if (!url || !*url) return;
 #ifdef _WIN32
-  if (!g_hwnd || !IsWindow(g_hwnd)) ShowOrCreateWebView(url, true);
+  if (!g_hwnd || !IsWindow(g_hwnd)) OpenOrActivate(url);
   else
   {
     char* copy = _strdup(url);
@@ -457,25 +479,24 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
 
     g_hwndParent = rec->hwnd_main;
-
     LogRaw("=== Plugin init ===");
 #ifdef _WIN32
     LogF("DLL dir: %s", GetModuleDir().c_str());
 #endif
     LogF("Log path: %s", GetLogPath().c_str());
 
-    g_command_id = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_TOGGLE");
+    g_command_id = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN");
     if (g_command_id)
     {
-      static gaccel_register_t gaccel = {{0,0,0}, "WebView: Toggle (dockable)"};
+      static gaccel_register_t gaccel = {{0,0,0}, "WebView: Open (dockable)"};
       gaccel.accel.cmd = g_command_id;
       plugin_register("gaccel", &gaccel);
       plugin_register("hookcommand", (void*)HookCommandProc);
       LogF("Registered command id=%d", g_command_id);
     }
+
     plugin_register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*,url");
     plugin_register("API_WEBVIEW_Navigate",   (void*)WEBVIEW_Navigate);
-
     return 1;
   }
   else
@@ -489,11 +510,8 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     if (g_hwnd && IsWindow(g_hwnd))
     {
       int _dockret = (DockIsChildOfDock ? DockIsChildOfDock(g_hwnd, nullptr) : -1);
-      if (_dockret >= 0)
-      {
-        LogF("Unload: remove from dock (ret=%d)", _dockret);
-        if (DockWindowRemove) DockWindowRemove(g_hwnd);
-      }
+      LogF("Unload: DockIsChildOfDock -> %d", _dockret);
+      if (_dockret >= 0 && DockWindowRemove) DockWindowRemove(g_hwnd);
       DestroyWindow(g_hwnd);
       g_hwnd = nullptr;
     }
