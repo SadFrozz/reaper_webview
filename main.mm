@@ -9,7 +9,9 @@
 // © 2025
 
 #ifdef _WIN32
-  #define WIN32_LEAN_AND_MEAN
+  #ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
   #include <windows.h>
   #include <shellapi.h>
   #include <string>
@@ -289,8 +291,8 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     {
       LogRaw("[WM_CLOSE]");
       // Если мы в доке — удалим из докера, затем уничтожим окно
-      int dockidx = -1;
-      if (DockIsChildOfDock && DockIsChildOfDock(hwnd, &dockidx) >= 0)
+      int _dockret = (DockIsChildOfDock ? DockIsChildOfDock(hwnd, nullptr) : -1);
+      if (_dockret >= 0)
       {
         LogF("DockIsChildOfDock -> %d, calling DockWindowRemove()", dockidx);
         if (DockWindowRemove) DockWindowRemove(hwnd);
@@ -486,8 +488,8 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
 #ifdef _WIN32
     if (g_hwnd && IsWindow(g_hwnd))
     {
-      int dockidx = -1;
-      if (DockIsChildOfDock && DockIsChildOfDock(g_hwnd, &dockidx) >= 0)
+      int _dockret = (DockIsChildOfDock ? DockIsChildOfDock(g_hwnd, nullptr) : -1);
+      if (_dockret >= 0)
       {
         LogF("Unload: remove from dock %d", dockidx);
         if (DockWindowRemove) DockWindowRemove(g_hwnd);
