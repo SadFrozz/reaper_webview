@@ -1,6 +1,19 @@
 cmake_minimum_required(VERSION 3.10)
 project(reaper_webview)
 
+# --- Логи по типу сборки ---
+# ENABLE_LOG можно принудительно включить: -DENABLE_LOG=ON
+option(ENABLE_LOG "Enable verbose logging in reaper_webview target" OFF)
+# Поддержка твоей переменной build_type (debug/rel и т.п.)
+if(DEFINED build_type)
+  string(TOLOWER "${build_type}" _bt_lower)
+  if(_bt_lower STREQUAL "release")
+    set(ENABLE_LOG OFF)
+  else()
+    set(ENABLE_LOG ON)
+  endif()
+endif()
+
 # Подключаем стандартные модули
 include(CheckIncludeFile)
 include(CheckFunctionExists)
@@ -20,6 +33,15 @@ set(SOURCES main.mm)
 # Создаем библиотеку
 add_library(reaper_webview MODULE ${SOURCES})
 
+# Включаем логи для основного таргета только если разрешено
+if(ENABLE_LOG)
+  target_compile_definitions(reaper_webview PRIVATE ENABLE_LOG=1)
+endif()
+
+# Второй таргет: всегда с логами
+add_library(reaper_webview_debug MODULE ${SOURCES})
+target_compile_definitions(reaper_webview_debug PRIVATE ENABLE_LOG=1)
+
 # Настройки для разных платформ
 if(APPLE)
     # Настройки для macOS
@@ -32,6 +54,13 @@ if(APPLE)
     find_library(COCOA_LIBRARY Cocoa)
     find_library(WEBKIT_LIBRARY WebKit)
     target_link_libraries(reaper_webview ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
+
+    # debug-вариант (та же конфигурация, другое имя)
+    set_target_properties(reaper_webview_debug PROPERTIES 
+        OUTPUT_NAME "reaper_webview_debug"
+        SUFFIX ".dylib"
+        BUNDLE FALSE)
+    target_link_libraries(reaper_webview_debug ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
 elseif(WIN32)
     # Настройки для Windows
     set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
@@ -69,9 +98,33 @@ elseif(WIN32)
         # Динамическая линковка через LoadLibrary
         target_compile_definitions(reaper_webview PRIVATE USE_WEBVIEW2_LOADER_DYNAMIC)
     endif()
+
+    # debug-вариант (идентичные дефайны/линковка + .dll суффикс)
+    set_target_properties(reaper_webview_debug PROPERTIES SUFFIX ".dll")
+    target_compile_definitions(reaper_webview_debug PRIVATE 
+        _WIN32_WINNT=0x0601
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+        _CRT_SECURE_NO_WARNINGS)
+    target_link_libraries(reaper_webview_debug 
+        comctl32 
+        ole32 
+        version 
+        shlwapi
+        user32
+        oleaut32
+        advapi32)
+    if(WEBVIEW2_LIB)
+        target_link_libraries(reaper_webview_debug ${WEBVIEW2_LIB})
+    else()
+        target_compile_definitions(reaper_webview_debug PRIVATE USE_WEBVIEW2_LOADER_DYNAMIC)
+    endif()
 endif()
 
 # Установка выходного директория
 set_target_properties(reaper_webview PROPERTIES 
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+set_target_properties(reaper_webview_debug PROPERTIES 
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})

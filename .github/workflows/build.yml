@@ -68,43 +68,55 @@ jobs:
 
     - name: Configure CMake (Windows)
       if: runner.os == 'Windows'
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_LOG=OFF
 
     - name: Build (Unix)
       if: runner.os != 'Windows'
-      run: cmake --build --preset macos-universal
+      run: cmake --build --preset macos-universal --target reaper_webview reaper_webview_debug
 
     - name: Build (Windows)
       if: runner.os == 'Windows'
-      run: cmake --build build --config Release
+      run: cmake --build build --config Release --target reaper_webview reaper_webview_debug
 
     # --- ИСПРАВЛЕННЫЙ БЛОК ДЛЯ WINDOWS ---
     - name: Prepare Windows Artifact
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        Write-Host "Copying WebView2Loader.dll to build directory..."
-        Copy-Item -Path "webview2-sdk/runtimes/win-x64/native/WebView2Loader.dll" -Destination "build/Release/"
+        $loader = "webview2-sdk/runtimes/win-x64/native/WebView2Loader.dll"
+        if (Test-Path $loader) {
+          Write-Host "Copying WebView2Loader.dll to build/Release/"
+          Copy-Item -Path $loader -Destination "build/Release/" -Force
+        } else {
+          Write-Host "WebView2Loader.dll not found (likely static linking). Skipping."
+        }
         
     - name: Upload Windows artifact
       if: runner.os == 'Windows'
       uses: actions/upload-artifact@v4
       with:
         name: reaper-webview-windows-x64
-        path: build/Release/  # Указываем всю папку, чтобы захватить оба файла
-        if-no-files-found: error
+        path: |
+          build/Release/reaper_webview.dll
+          build/Release/reaper_webview_debug.dll
+          build/Release/WebView2Loader.dll
+        if-no-files-found: warn
         retention-days: 7
-        
+
     # --- БЛОК ДЛЯ MACOS (без изменений, но теперь логически отделен) ---
     - name: Prepare macOS Artifact
       if: runner.os == 'macOS'
-      run: mv build/libreaper_webview.dylib build/reaper_webview.dylib
-      
+      run: |
+        mv build/libreaper_webview.dylib build/reaper_webview.dylib 2>/dev/null || true
+        mv build/libreaper_webview_debug.dylib build/reaper_webview_debug.dylib 2>/dev/null || true
+
     - name: Upload macOS artifact
       if: runner.os == 'macOS'
       uses: actions/upload-artifact@v4
       with:
         name: reaper-webview-macos-universal
-        path: build/reaper_webview.dylib
+        path: |
+          build/reaper_webview.dylib
+          build/reaper_webview_debug.dylib
         if-no-files-found: error
         retention-days: 7
