@@ -1,297 +1,400 @@
+
+// main.mm — REAPER WebView extension with dock support (Windows) and WebView2 fixes
+// Drop-in replacement for original main.mm
+//
+// Notes:
+// - Adds DockWindowAddEx()/DockWindowActivate()/DockWindowRemove() usage (Windows)
+// - Adds action toggle state updates (SetToggleCommandState/RefreshToolbar2)
+// - Fixes white-screen on Windows by calling CoInitializeEx and keeping the window alive
+// - macOS path retained (WKWebView), TODO: switch to SWELL dialog to enable docking
+//
+// Build: ensure Ole32.lib linked on Windows (for CoInitializeEx), and ship WebView2Loader.dll next to the .dll
+//
+// © 2025
+
 #ifdef _WIN32
-    #define WM_APP_NAVIGATE (WM_APP + 1)
-    #include <windows.h>
-    #include <string>
-    #include <wrl.h>
-    #include <wil/com.h>
-    #include "WebView2.h"
+  #define WIN32_LEAN_AND_MEAN
+  #include <windows.h>
+  #include <shellapi.h>
+  #include <string>
+  #include <wrl.h>
+  #include <wil/com.h>
+  #include "deps/WebView2.h"
+  #include <objbase.h> // CoInitializeEx
 #else
-    #import <Cocoa/Cocoa.h>
-    #import <WebKit/WebKit.h>
-    #include <string>
+  #import <Cocoa/Cocoa.h>
+  #import <WebKit/WebKit.h>
+  #include <string>
 #endif
 
 #include "WDL/wdltypes.h"
-#include "sdk/reaper_plugin.h"
 
+// One translation unit must implement the REAPER API glue:
+#ifndef REAPERAPI_IMPLEMENT
 #define REAPERAPI_IMPLEMENT
+#endif
+#include "sdk/reaper_plugin.h"
 #include "sdk/reaper_plugin_functions.h"
 
-// ================================================================= //
-//                            ЛОГИРОВАНИЕ                            //
-// ================================================================= //
-REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
-void Log(const char* format, ...) {
-    char buf[4096];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buf, sizeof(buf), format, args);
-    va_end(args);
-#ifdef _WIN32
-    OutputDebugStringA("[reaper_webview] ");
-    OutputDebugStringA(buf);
-    OutputDebugStringA("\n");
-    if (GetResourcePath) {
-        char path[MAX_PATH];
-        strcpy(path, GetResourcePath());
-        strcat(path, "\\reaper_webview_log.txt");
-        FILE* fp = fopen(path, "a");
-        if (fp) { fprintf(fp, "%s\n", buf); fclose(fp); }
-    }
-#else
-    NSLog(@"[reaper_webview] %s", buf);
-#endif
-}
-
-// ================================================================= //
-//                      ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ                        //
-// ================================================================= //
-HWND g_hwndParent = nullptr;
-int g_command_id = 0; // Глобальная переменная для хранения нашего Command ID
-
-#ifdef _WIN32
-    HWND g_plugin_hwnd = nullptr;
-    wil::com_ptr<ICoreWebView2Controller> webviewController;
-    wil::com_ptr<ICoreWebView2> webview;
-    HMODULE g_hWebView2Loader = nullptr;
-#else
-    NSWindow* g_pluginWindow = nil; WKWebView* g_webView = nil; id g_delegate = nil;
-#endif
-
-// ================================================================= //
-//                       ОСНОВНАЯ ЛОГИКА ПЛАГИНА                       //
-// ================================================================= //
-
-void Action_OpenWebView();
-static void OpenWebViewWindow(const std::string& url);
-void WEBVIEW_Navigate(const char* url);
-
-// Эта функция будет перехватывать ВСЕ действия
-bool HookCommandProc(int cmd, int flag)
+// -----------------------------
+// Small logging helper
+// -----------------------------
+static void Log(const char* fmt, ...)
 {
-    // Проверяем, наше ли это действие
-    if (cmd == g_command_id) {
-        Action_OpenWebView();
-        return true; // Сообщаем Reaper, что мы обработали команду
-    }
-    return false; // Не наше действие, передаем дальше
+  char buf[2048] = {0};
+  va_list ap; va_start(ap, fmt);
+#ifdef _WIN32
+  _vsnprintf(buf, sizeof(buf)-2, fmt, ap);
+  OutputDebugStringA(buf);
+  OutputDebugStringA("\r\n");
+#else
+  vsnprintf(buf, sizeof(buf)-2, fmt, ap);
+  fprintf(stderr, "%s\n", buf);
+#endif
+  va_end(ap);
 }
 
+// -----------------------------
+// Globals
+// -----------------------------
+static REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
+static HWND   g_hwndParent = nullptr;
+static int    g_command_id = 0;
+
+#ifdef _WIN32
+static HWND   g_hwnd = nullptr;
+static bool   g_docked = false;
+static const char* kDockIdent = "FRZZ_WEBVIEW_DOCK";
+static const char* kTitle     = "WebView (dockable)";
+static wil::com_ptr<ICoreWebView2Controller> g_controller;
+static wil::com_ptr<ICoreWebView2>           g_webview;
+static HMODULE g_hWebView2Loader = nullptr;
+static bool   g_com_initialized = false;
+#else
+static NSWindow* g_pluginWindow = nil;
+static WKWebView* g_webView = nil;
+#endif
+
+// Forward decls
+static void ShowOrCreateWebView(const std::string& url, bool activate=true);
+static void ToggleWindow();
+static void UpdateToggleState(bool visible);
+
+static void WEBVIEW_Navigate(const char* url);
+
+// -----------------------------
+// REAPER action hook
+// -----------------------------
+static bool HookCommandProc(int cmd, int flag)
+{
+  if (cmd == g_command_id)
+  {
+    ToggleWindow();
+    return true;
+  }
+  return false;
+}
+
+// -----------------------------
+// Windows: window proc
+// -----------------------------
+#ifdef _WIN32
+static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+  switch (msg)
+  {
+    case WM_CREATE:
+    {
+      Log("WM_CREATE");
+      if (!g_com_initialized)
+      {
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        g_com_initialized = SUCCEEDED(hr);
+        Log("CoInitializeEx -> 0x%lX", (long)hr);
+      }
+
+      // Extract initial URL
+      char* initial = (char*)((LPCREATESTRUCTA)lp)->lpCreateParams;
+      std::string initial_url = initial ? initial : "https://www.reaper.fm/";
+      if (initial) free(initial);
+
+      // Load WebView2 loader (prefer plugin dir)
+      if (!g_hWebView2Loader)
+      {
+        char modPath[MAX_PATH] = {0};
+        GetModuleFileNameA((HMODULE)g_hInst, modPath, MAX_PATH);
+        std::string dir(modPath);
+        size_t p = dir.find_last_of("\\/"); if (p != std::string::npos) dir.resize(p);
+        std::string candidate = dir + "\\WebView2Loader.dll";
+        g_hWebView2Loader = LoadLibraryA(candidate.c_str());
+        if (!g_hWebView2Loader) g_hWebView2Loader = LoadLibraryA("WebView2Loader.dll");
+      }
+
+      if (!g_hWebView2Loader)
+      {
+        MessageBox(hwnd, "WebView2Loader.dll not found.\nShip it next to the plugin.", "WebView error", MB_ICONERROR);
+        return 0;
+      }
+
+      using CreateEnv_t = HRESULT (STDMETHODCALLTYPE*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*,
+        ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
+      auto pCreateEnv = (CreateEnv_t)GetProcAddress(g_hWebView2Loader, "CreateCoreWebView2EnvironmentWithOptions");
+      if (!pCreateEnv)
+      {
+        MessageBox(hwnd, "CreateCoreWebView2EnvironmentWithOptions not found.", "WebView error", MB_ICONERROR);
+        return 0;
+      }
+
+      // Start async environment creation
+      std::wstring wurl(initial_url.begin(), initial_url.end());
+      Log("Start WebView2 env...");
+      pCreateEnv(
+        nullptr, nullptr, nullptr,
+        Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+          [hwnd, wurl](HRESULT result, ICoreWebView2Environment* env)->HRESULT
+          {
+            Log("Env cb: 0x%lX", (long)result);
+            if (FAILED(result) || !env) return S_OK;
+            env->CreateCoreWebView2Controller(hwnd,
+              Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                [hwnd, wurl](HRESULT result, ICoreWebView2Controller* controller)->HRESULT
+                {
+                  Log("Controller cb: 0x%lX", (long)result);
+                  if (!controller) return S_OK;
+                  g_controller = controller;
+                  g_controller->get_CoreWebView2(&g_webview);
+
+                  RECT rc; GetClientRect(hwnd, &rc);
+                  g_controller->put_Bounds(rc);
+                  g_controller->put_IsVisible(TRUE);
+
+                  g_webview->Navigate(wurl.c_str());
+                  return S_OK;
+                }).Get());
+            return S_OK;
+          }).Get());
+
+      return 0;
+    }
+
+    case WM_SIZE:
+      if (g_controller) { RECT rc; GetClientRect(hwnd, &rc); g_controller->put_Bounds(rc); }
+      return 0;
+
+    case WM_APP+1: // navigate
+    {
+      const char* url = (const char*)lp;
+      if (g_webview && url)
+      {
+        std::wstring w(url, url + strlen(url));
+        g_webview->Navigate(w.c_str());
+      }
+      if (url) free((void*)url);
+      return 0;
+    }
+
+    case WM_CLOSE:
+    {
+      // Hide instead of destroy; remove from dock if needed
+      if (DockIsChildOfDock && DockIsChildOfDock(hwnd, nullptr) >= 0)
+      {
+        DockWindowRemove(hwnd);
+      }
+      ShowWindow(hwnd, SW_HIDE);
+      UpdateToggleState(false);
+      return 0;
+    }
+
+    case WM_DESTROY:
+      Log("WM_DESTROY");
+      g_controller = nullptr;
+      g_webview = nullptr;
+      if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
+      if (g_com_initialized) { CoUninitialize(); g_com_initialized = false; }
+      g_hwnd = nullptr;
+      UpdateToggleState(false);
+      return 0;
+  }
+  return DefWindowProc(hwnd, msg, wp, lp);
+}
+#endif // _WIN32
+
+// -----------------------------
+// Helpers
+// -----------------------------
+static void UpdateToggleState(bool visible)
+{
+  // Section 0 is main section. If you register in other section, adapt.
+  SetToggleCommandState ? SetToggleCommandState(0, g_command_id, visible ? 1 : 0) : (void)0;
+  if (RefreshToolbar2) RefreshToolbar2(0, g_command_id);
+}
+
+#ifdef _WIN32
+static void EnsureWindowRegistered(WNDCLASSEXA& wc)
+{
+  static bool s_registered = false;
+  if (s_registered) return;
+  ZeroMemory(&wc, sizeof(wc));
+  wc.cbSize = sizeof(wc);
+  wc.style = CS_HREDRAW|CS_VREDRAW|CS_DBLCLKS;
+  wc.lpfnWndProc = WebViewWndProc;
+  wc.hInstance = (HINSTANCE)g_hInst;
+  wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+  wc.lpszClassName = "FRZZ_WebView_Dock_Class";
+  if (!RegisterClassExA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+  {
+    MessageBox(g_hwndParent, "Failed to register window class.", "WebView", MB_ICONERROR);
+    return;
+  }
+  s_registered = true;
+}
+
+static void ShowOrCreateWebView(const std::string& url, bool activate/*=true*/)
+{
+  if (!g_hwnd)
+  {
+    WNDCLASSEXA wc; EnsureWindowRegistered(wc);
+    char* urlParam = _strdup(url.c_str());
+    g_hwnd = CreateWindowExA(
+      0, wc.lpszClassName, kTitle,
+      WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+      CW_USEDEFAULT, CW_USEDEFAULT, 1200, 700,
+      g_hwndParent, nullptr, (HINSTANCE)g_hInst, (LPVOID)urlParam);
+    if (!g_hwnd) { MessageBox(g_hwndParent, "Failed to create window", "WebView", MB_ICONERROR); return; }
+
+    // Register in docker (persist ident)
+    if (DockWindowAddEx) DockWindowAddEx(g_hwnd, kTitle, kDockIdent, true);
+    else if (DockWindowAdd) DockWindowAdd(g_hwnd, kTitle, 0, true);
+
+    // Hide standalone window first; the docker will show it
+    ShowWindow(g_hwnd, SW_HIDE);
+  }
+
+  if (activate)
+  {
+    if (DockWindowActivate) DockWindowActivate(g_hwnd);
+    else ShowWindow(g_hwnd, SW_SHOW);
+  }
+  UpdateToggleState(true);
+}
+
+static void ToggleWindow()
+{
+  if (g_hwnd && IsWindowVisible(g_hwnd))
+  {
+    SendMessage(g_hwnd, WM_CLOSE, 0, 0);
+  }
+  else
+  {
+    ShowOrCreateWebView("https://www.reaper.fm/", true);
+  }
+}
+#else
+static void ShowOrCreateWebView(const std::string& url, bool activate/*=true*/)
+{
+  // TODO macOS: switch to SWELL dialog (CreateDialog) to get an HWND, then DockWindowAddEx
+  if (!g_pluginWindow)
+  {
+    NSRect frame = NSMakeRect(0, 0, 1200, 700);
+    g_pluginWindow = [[NSWindow alloc] initWithContentRect:frame
+                      styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable)
+                        backing:NSBackingStoreBuffered defer:NO];
+
+    [g_pluginWindow setTitle:@"WebView"];
+    WKWebViewConfiguration* cfg = [[WKWebViewConfiguration alloc] init];
+    g_webView = [[WKWebView alloc] initWithFrame:[[g_pluginWindow contentView] bounds] configuration:cfg];
+    [g_webView setAutoresizingMask:(NSViewWidthSizable|NSViewHeightSizable)];
+    [[g_pluginWindow contentView] addSubview:g_webView];
+
+    NSURL* u = [NSURL URLWithString:[NSString stringWithUTF8String:url.c_str()]];
+    if (u) [g_webView loadRequest:[NSURLRequest requestWithURL:u]];
+  }
+  if (activate) [g_pluginWindow makeKeyAndOrderFront:nil];
+  UpdateToggleState(true);
+}
+
+static void ToggleWindow()
+{
+  if (g_pluginWindow && [g_pluginWindow isVisible]) { [g_pluginWindow orderOut:nil]; UpdateToggleState(false); }
+  else ShowOrCreateWebView("https://www.reaper.fm/", true);
+}
+#endif
+
+// -----------------------------
+// SWS-style API function for scripts
+// -----------------------------
+static void WEBVIEW_Navigate(const char* url)
+{
+  if (!url || !*url) return;
+#ifdef _WIN32
+  if (!g_hwnd || !IsWindow(g_hwnd)) ShowOrCreateWebView(url, true);
+  else
+  {
+    char* copy = _strdup(url);
+    PostMessage(g_hwnd, WM_APP+1, 0, (LPARAM)copy);
+  }
+#else
+  if (g_webView)
+  {
+    NSString* s = [NSString stringWithUTF8String:url];
+    NSURL* u = [NSURL URLWithString:s];
+    if (u) [g_webView loadRequest:[NSURLRequest requestWithURL:u]];
+  }
+#endif
+}
+
+// -----------------------------
+// Entry point
+// -----------------------------
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec)
 {
-    g_hInst = hInstance;
-    if (!rec) return 0;
+  g_hInst = hInstance;
+
+  if (rec)
+  {
     if (rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc) return 0;
     if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
-    
+
     g_hwndParent = rec->hwnd_main;
-    Log("Plugin loaded successfully. API initialized.");
+    Log("Plugin init OK");
 
-    // Шаг 1: Регистрируем действие и получаем его ID
-    g_command_id = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN_DEFAULT");
-    if (g_command_id) {
-        // Шаг 2: Регистрируем описание для списка действий
-        static gaccel_register_t gaccel = { { 0, 0, 0 }, "WebView: Open (default)" };
-        gaccel.accel.cmd = g_command_id;
-        plugin_register("gaccel", &gaccel);
+    // Register action + description
+    g_command_id = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_TOGGLE");
+    if (g_command_id)
+    {
+      static gaccel_register_t gaccel = {{0,0,0}, "WebView: Toggle (dockable)"};
+      gaccel.accel.cmd = g_command_id;
+      plugin_register("gaccel", &gaccel);
 
-        // Шаг 3: Регистрируем наш "перехватчик"
-        plugin_register("hookcommand", (void*)HookCommandProc);
-        Log("Action 'WebView: Open (default)' registered with command ID %d", g_command_id);
-    } else {
-        Log("!!! FAILED to register action.");
+      plugin_register("hookcommand", (void*)HookCommandProc);
     }
-    
+
+    // Expose API for scripts: WEBVIEW_Navigate(url)
     plugin_register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*,url");
-    plugin_register("API_WEBVIEW_Navigate", (void*)WEBVIEW_Navigate);
-    Log("API function 'WEBVIEW_Navigate' registered.");
+    plugin_register("API_WEBVIEW_Navigate",   (void*)WEBVIEW_Navigate);
 
     return 1;
-}
-
-// Теперь это простая функция без аргументов
-void Action_OpenWebView()
-{
-    Log("Action_OpenWebView triggered!");
-    OpenWebViewWindow("https://www.reaper.fm/");
-}
-
-void WEBVIEW_Navigate(const char* url)
-{
-    Log("API WEBVIEW_Navigate called with URL: %s", url);
-    if (!url || !strlen(url)) return;
-#ifdef _WIN32
-    if (!g_plugin_hwnd || !IsWindow(g_plugin_hwnd))
-        OpenWebViewWindow(std::string(url));
-    else {
-        char* copy = _strdup(url);
-        PostMessage(g_plugin_hwnd, WM_APP_NAVIGATE, 0, (LPARAM)copy);
-        ShowWindow(g_plugin_hwnd, SW_SHOW); SetForegroundWindow(g_plugin_hwnd);
-    }
-#else
-    if (!g_pluginWindow)
-        OpenWebViewWindow(std::string(url));
-    else {
-        NSString* nsURL = [NSString stringWithUTF8String:url];
-        [g_delegate performSelectorOnMainThread:@selector(navigate:)
-                                   withObject:nsURL waitUntilDone:NO];
-        [g_pluginWindow makeKeyAndOrderFront:nil];
-    }
-#endif
-}
-
-// ================================================================= //
-//                    РЕАЛИЗАЦИЯ ДЛЯ WINDOWS (ИЗМЕНЕНИЯ)             //
-// ================================================================= //
+  }
+  else
+  {
+    // unload
+    plugin_register("hookcommand", (void*)NULL);
+    plugin_register("gaccel", (void*)NULL);
+    if (g_command_id) plugin_register("command_id", (void*)NULL);
 
 #ifdef _WIN32
-LRESULT CALLBACK WebViewWndProc(HWND, UINT, WPARAM, LPARAM);
-void OpenWebViewWindow(const std::string& url) {
-    Log("OpenWebViewWindow called for URL: %s", url.c_str());
-    if (!LoadLibraryA("WebView2Loader.dll")) {
-        Log("!!! FAILED: WebView2Loader.dll not found.");
-        MessageBox(g_hwndParent, "WebView2 Runtime not found.\nPlease install Microsoft Edge WebView2 Runtime.", "Error", MB_ICONERROR);
-        return;
+    if (g_hwnd && IsWindow(g_hwnd))
+    {
+      if (DockWindowRemove) DockWindowRemove(g_hwnd);
+      DestroyWindow(g_hwnd);
+      g_hwnd = nullptr;
     }
-    if (g_plugin_hwnd && IsWindow(g_plugin_hwnd)) {
-        Log("Window already exists, bringing to front.");
-        ShowWindow(g_plugin_hwnd, SW_SHOW); SetForegroundWindow(g_plugin_hwnd); return;
-    }
-    WNDCLASSA wc{0};
-    wc.lpfnWndProc = WebViewWndProc; wc.hInstance = (HINSTANCE)g_hInst; wc.lpszClassName = "MyWebViewPlugin_WindowClass"; wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    if (!RegisterClassA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-        Log("!!! FAILED to register window class. Error: %lu", GetLastError());
-        MessageBox(g_hwndParent, "Failed to register window class.", "Tracer Error", MB_ICONERROR); return;
-    }
-    Log("Window class registered successfully.");
-    char* url_param = _strdup(url.c_str());
-    g_plugin_hwnd = CreateWindowExA(
-        0, wc.lpszClassName, "Интегрированный WebView (Windows)",
-        WS_POPUPWINDOW | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1280, 720,
-        g_hwndParent, NULL, (HINSTANCE)g_hInst, (LPVOID)url_param);
-    if (!g_plugin_hwnd) {
-        Log("!!! FAILED to create window. Error: %lu", GetLastError());
-        MessageBox(g_hwndParent, "Failed to create window.", "Tracer Error", MB_ICONERROR);
-        free(url_param); return;
-    }
-    Log("Window created successfully (hwnd: %p).", g_plugin_hwnd);
-}
-LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    switch (uMsg) {
-        case WM_CREATE: {
-            Log("WM_CREATE received for hwnd %p.", hwnd);
-            char* initial_url_c = reinterpret_cast<char*>(((LPCREATESTRUCTA)lParam)->lpCreateParams);
-            if (!initial_url_c) { Log("!!! WM_CREATE: lpCreateParams is NULL."); break; }
-            std::string initial_url_str(initial_url_c);
-            free(initial_url_c);
-            std::wstring w_url(initial_url_str.begin(), initial_url_str.end());
-            Log("WM_CREATE: Initial URL is %s", initial_url_str.c_str());
-            g_hWebView2Loader = LoadLibraryA("WebView2Loader.dll");
-            if (!g_hWebView2Loader) { Log("!!! WM_CREATE: Failed to load WebView2Loader.dll again."); DestroyWindow(hwnd); return 0; }
-            using CreateEnv_t = HRESULT (STDMETHODCALLTYPE*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
-            auto pCreate = reinterpret_cast<CreateEnv_t>(GetProcAddress(g_hWebView2Loader, "CreateCoreWebView2EnvironmentWithOptions"));
-            if (!pCreate) { Log("!!! WM_CREATE: Failed to get address of CreateCoreWebView2EnvironmentWithOptions."); DestroyWindow(hwnd); return 0; }
-            Log("WM_CREATE: Starting WebView2 environment creation...");
-            pCreate(nullptr, nullptr, nullptr,
-                Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-                    [hwnd, w_url](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
-                        Log("WebView env callback fired. HRESULT: 0x%lX", result);
-                        if (FAILED(result)) { DestroyWindow(hwnd); return result; }
-                        env->CreateCoreWebView2Controller(hwnd, Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                            [hwnd, w_url](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
-                                Log("WebView controller callback fired. HRESULT: 0x%lX", result);
-                                if (controller) {
-                                    webviewController = controller;
-                                    webviewController->get_CoreWebView2(&webview);
-                                    RECT rc; GetClientRect(hwnd, &rc);
-                                    webviewController->put_Bounds(rc);
-                                    webview->Navigate(w_url.c_str());
-                                    Log("WebView controller created and navigation initiated.");
-                                } else { DestroyWindow(hwnd); }
-                                return S_OK;
-                            }).Get());
-                        return S_OK;
-                    }).Get());
-            break;
-        }
-        case WM_APP_NAVIGATE: {
-            char* url = reinterpret_cast<char*>(lParam);
-            Log("WM_APP_NAVIGATE received for URL: %s", url);
-            if (webview && url) { std::wstring w_url(url, url + strlen(url)); webview->Navigate(w_url.c_str()); }
-            free(url); return 0;
-        }
-        case WM_SIZE: { if (webviewController) { RECT rc; GetClientRect(hwnd, &rc); webviewController->put_Bounds(rc); } return 0; }
-        case WM_DESTROY: {
-            Log("WM_DESTROY received for hwnd %p. Cleaning up.", hwnd);
-            if (webviewController) { webviewController->Close(); webviewController = nullptr; webview = nullptr; }
-            if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
-            g_plugin_hwnd = NULL; return 0;
-        }
-        default: return DefWindowProc(hwnd, uMsg, wParam, lParam);
-    }
-    return 0;
-}
-
+    if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
+    if (g_com_initialized) { CoUninitialize(); g_com_initialized = false; }
 #else
-// ================================================================= //
-//                     РЕАЛИЗАЦИЯ ДЛЯ MACOS                          //
-// ================================================================= //
-
-// ... код для macOS остается без изменений, но будет выводить логи через NSLog ...
-
-@interface WebViewDelegate : NSObject <NSWindowDelegate>
-- (void)navigate:(NSString*)urlString;
-@end
-
-@implementation WebViewDelegate
-- (void)windowWillClose:(NSNotification *)notification {
-    Log("macOS window is closing.");
-    g_pluginWindow = nil;
-    g_webView = nil;
-    g_delegate = nil;
-}
-- (void)navigate:(NSString*)urlString {
-    Log("macOS navigating to: %s", [urlString UTF8String]);
-    if (g_webView) {
-        NSURL* url = [NSURL URLWithString:urlString];
-        if (url) {
-            NSURLRequest* request = [NSURLRequest requestWithURL:url];
-            [g_webView loadRequest:request];
-        }
-    }
-}
-@end
-
-void OpenWebViewWindow(const std::string& url) {
-    Log("macOS OpenWebViewWindow called.");
-    if (g_pluginWindow) {
-        [g_pluginWindow makeKeyAndOrderFront:nil];
-        return;
-    }
-    
-    @autoreleasepool {
-        NSRect frame = NSMakeRect(0, 0, 1280, 720);
-        g_pluginWindow = [[NSWindow alloc] initWithContentRect:frame
-                                                     styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable)
-                                                       backing:NSBackingStoreBuffered defer:NO];
-        [g_pluginWindow setTitle:@"Интегрированный WebView (macOS)"];
-        [g_pluginWindow center];
-
-        WKWebViewConfiguration* config = [[WKWebViewConfiguration alloc] init];
-        g_webView = [[WKWebView alloc] initWithFrame:frame configuration:config];
-        [g_pluginWindow setContentView:g_webView];
-        
-        g_delegate = [[WebViewDelegate alloc] init];
-        [g_pluginWindow setDelegate:g_delegate];
-        [g_pluginWindow makeKeyAndOrderFront:nil];
-        [g_pluginWindow setReleasedWhenClosed:NO];
-
-        NSString* nsURL = [NSString stringWithUTF8String:url.c_str()];
-        if (nsURL) {
-            [g_delegate performSelectorOnMainThread:@selector(navigate:) withObject:nsURL waitUntilDone:NO];
-        }
-    }
-}
+    if (g_pluginWindow) { [g_pluginWindow close]; g_pluginWindow = nil; g_webView = nil; }
 #endif
+  }
+  return 0;
+}
