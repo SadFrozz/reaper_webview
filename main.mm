@@ -290,9 +290,9 @@ static LRESULT CALLBACK WebViewWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
       LogRaw("[WM_CLOSE]");
       // Если мы в доке — удалим из докера, затем уничтожим окно
       int dockidx = -1;
-      if (Dock_IsChildOfDock && Dock_IsChildOfDock(hwnd, &dockidx) >= 0)
+      if (DockIsChildOfDock && DockIsChildOfDock(hwnd, &dockidx) >= 0)
       {
-        LogF("Dock_IsChildOfDock -> %d, calling DockWindowRemove()", dockidx);
+        LogF("DockIsChildOfDock -> %d, calling DockWindowRemove()", dockidx);
         if (DockWindowRemove) DockWindowRemove(hwnd);
       }
       DestroyWindow(hwnd);
@@ -487,7 +487,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     if (g_hwnd && IsWindow(g_hwnd))
     {
       int dockidx = -1;
-      if (Dock_IsChildOfDock && Dock_IsChildOfDock(g_hwnd, &dockidx) >= 0)
+      if (DockIsChildOfDock && DockIsChildOfDock(g_hwnd, &dockidx) >= 0)
       {
         LogF("Unload: remove from dock %d", dockidx);
         if (DockWindowRemove) DockWindowRemove(g_hwnd);
