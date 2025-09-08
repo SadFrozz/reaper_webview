@@ -22,8 +22,30 @@
   #import <Cocoa/Cocoa.h>
   #import <WebKit/WebKit.h>
   #ifndef AppendMenuA
-  #define AppendMenuA AppendMenu
+  #define AppendMenuA(hMenu, uFlags, uIDNewItem, lpNewItem) InsertMenu(hMenu, -1, MF_BYPOSITION | (uFlags), uIDNewItem, lpNewItem)
   #endif
+  HWND GetAncestor(HWND hwnd, UINT gaFlags)
+  {
+      if (!hwnd) return NULL;
+
+      if (gaFlags == GA_PARENT)
+      {
+          return GetParent(hwnd);
+      }
+
+      if (gaFlags == GA_ROOT || gaFlags == GA_ROOTOWNER)
+      {
+          HWND last_hwnd = hwnd;
+          HWND current_hwnd = hwnd;
+          while ((current_hwnd = GetParent(current_hwnd)) != NULL)
+          {
+              last_hwnd = current_hwnd;
+          }
+          return last_hwnd; // Возвращаем самое верхнее окно
+      }
+
+      return NULL; // Неподдерживаемый флаг
+  }
 #endif
 
 #include <string>
