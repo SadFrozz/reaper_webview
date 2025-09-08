@@ -416,7 +416,7 @@ static void UpdateTitlesExtractAndApply(HWND hwnd)
 #define IDD_WEBVIEW 2001
 SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(IDD_WEBVIEW, 0, "WebView", 300, 200, 1.8)
 BEGIN
-  CONTROL         "",-1,"customcontrol",WS_CHILD|WS_VISIBLE,0,0,300,200
+  CONTROL         "",-1,"customcontrol",WS_CHILD|WS_VISIBLE,0,0,300,200,0
 END
 SWELL_DEFINE_DIALOG_RESOURCE_END(IDD_WEBVIEW)
 #endif
@@ -901,6 +901,7 @@ static void UnregisterAPI()
 }
 
 // ============================== Entry ==============================
+// ============================== Entry ==============================
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec)
 {
@@ -911,11 +912,26 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     // Лог до любых отказов — чтобы видеть хотя бы версию хоста
     LogF("Plugin entry: caller=0x%08X plugin=0x%08X",
          rec->caller_version, (unsigned)REAPER_PLUGIN_VERSION);
-    if (!rec->GetFunc) return 0;                // без строгой привязки к версии
-    // если хочешь страховку по мажору 7.x:
-    // auto maj=[](int v){return (v>>16)&0xFFFF;};
-    // if (maj(rec->caller_version)!=maj(REAPER_PLUGIN_VERSION)) return 0;
-    if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
+
+    if (!rec->GetFunc) return 0;
+
+    // НЕ заваливаемся при несовпадении версий — только предупреждаем
+    if (rec->caller_version != REAPER_PLUGIN_VERSION)
+      LogRaw("WARNING: REAPER/SDK version mismatch. Плагин продолжит работу. "
+             "Если что-то не работает — проверьте обновления плагина и/или REAPER.");
+
+    // Загружаем API; НЕ выходим при неполной загрузке — просто логируем, что отстуствует
+    const int missing = REAPERAPI_LoadAPI(rec->GetFunc);
+    if (missing)
+      LogF("REAPERAPI_LoadAPI: missing=%d (продолжаем, используем доступные функции)", missing);
+
+    // Минимально необходимое для работы расширения — plugin_register
+    if (!plugin_register)
+    {
+      LogRaw("FATAL: essential API missing: plugin_register == NULL. "
+             "Обновите REAPER и/или плагин.");
+      return 0;
+    }
 
     g_hwndParent = rec->hwnd_main;
     LogRaw("=== Plugin init ===");
@@ -932,7 +948,8 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
 
     if (g_dlg && IsWindow(g_dlg))
     {
-      bool f=false; int idx=-1; bool id = DockIsChildOfDock ? (DockIsChildOfDock(g_dlg, &f) >= 0) : false;
+      bool f=false; int idx=-1;
+      bool id = DockIsChildOfDock ? (DockIsChildOfDock(g_dlg, &f) >= 0) : false;
       if (id && DockWindowRemove) DockWindowRemove(g_dlg);
       DestroyWindow(g_dlg);
       g_dlg = nullptr;
