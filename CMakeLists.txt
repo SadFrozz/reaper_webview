@@ -44,9 +44,9 @@ target_compile_definitions(reaper_webview_debug PRIVATE ENABLE_LOG=1)
 
 # Настройки для разных платформ
 if(APPLE)
-    #set(SWELL_STUB ${CMAKE_SOURCE_DIR}/WDL/swell/swell-modstub.mm)
-    #target_sources(reaper_webview PRIVATE ${SWELL_STUB})
-    #target_sources(reaper_webview_debug PRIVATE ${SWELL_STUB})
+    set(SWELL_STUB ${CMAKE_SOURCE_DIR}/WDL/swell/swell-modstub.mm)
+    target_sources(reaper_webview PRIVATE ${SWELL_STUB})
+    target_sources(reaper_webview_debug PRIVATE ${SWELL_STUB})
     # Настройки для macOS
     set_target_properties(reaper_webview PROPERTIES 
         OUTPUT_NAME "reaper_webview"
