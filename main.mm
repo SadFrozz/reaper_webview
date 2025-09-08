@@ -415,9 +415,8 @@ static void UpdateTitlesExtractAndApply(HWND hwnd)
 #ifndef _WIN32
 #define IDD_WEBVIEW 2001
 SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(IDD_WEBVIEW, 0, "WebView", 300, 200, 1.8)
-BEGIN
-  CONTROL         "",-1,"customcontrol",WS_CHILD|WS_VISIBLE,0,0,300,200,0
-END
+  // Прямое определение единственного элемента управления вместо BEGIN/CONTROL/END
+  { "",-1,"customcontrol",WS_CHILD|WS_VISIBLE,0,0,300,200,0 }
 SWELL_DEFINE_DIALOG_RESOURCE_END(IDD_WEBVIEW)
 #endif
 
