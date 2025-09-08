@@ -430,6 +430,33 @@ static void SizeWebViewToClient(HWND hwnd)
 
 // ============================== WebView init ==============================
 #ifdef _WIN32
+static HMODULE LoadWebView2Loader()
+{
+  // 1) пробуем короткое имя (вдруг REAPER не ограничил поиск)
+  HMODULE h = LoadLibraryA("WebView2Loader.dll");
+  if (h) { LogRaw("LoadLibrary(WebView2Loader.dll) -> OK (default search)"); return h; }
+
+  // 2) директория плагина
+  char mod[MAX_PATH]{};
+  GetModuleFileNameA((HMODULE)g_hInst, mod, MAX_PATH);
+  std::string dir = mod;
+  auto p = dir.find_last_of("\\/"); if (p != std::string::npos) dir.resize(p);
+  std::string full = dir + "\\WebView2Loader.dll";
+  h = LoadLibraryA(full.c_str());
+  if (h) { LogF("LoadLibrary -> OK (plugin dir): %s", full.c_str()); return h; }
+
+  // 3) директория REAPER.exe (про запас)
+  char exe[MAX_PATH]{};
+  GetModuleFileNameA(NULL, exe, MAX_PATH);
+  dir = exe; p = dir.find_last_of("\\/"); if (p != std::string::npos) dir.resize(p);
+  full = dir + "\\WebView2Loader.dll";
+  h = LoadLibraryA(full.c_str());
+  if (h) { LogF("LoadLibrary -> OK (reaper.exe dir): %s", full.c_str()); return h; }
+
+  DWORD gle = GetLastError();
+  LogF("LoadLibrary(WebView2Loader.dll) FAILED, GetLastError=%lu", gle);
+  return NULL;
+}
 static void StartWebView(HWND hwnd, const std::string& initial_url)
 {
   if (!g_com_initialized)
@@ -447,7 +474,7 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
 
   if (!g_hWebView2Loader)
   {
-    g_hWebView2Loader = LoadLibraryA("WebView2Loader.dll");
+    g_hWebView2Loader = LoadWebView2Loader();
     LogF("LoadLibrary(WebView2Loader) -> %p", (void*)g_hWebView2Loader);
   }
   if (!g_hWebView2Loader) { LogRaw("FATAL: missing WebView2Loader.dll"); return; }
@@ -880,7 +907,13 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
 
   if (rec)
   {
-    if (!rec->GetFunc) return 0;
+    // Лог до любых отказов — чтобы видеть хотя бы версию хоста
+    LogF("Plugin entry: caller=0x%08X plugin=0x%08X",
+         rec->caller_version, (unsigned)REAPER_PLUGIN_VERSION);
+    if (!rec->GetFunc) return 0;                // без строгой привязки к версии
+    // если хочешь страховку по мажору 7.x:
+    // auto maj=[](int v){return (v>>16)&0xFFFF;};
+    // if (maj(rec->caller_version)!=maj(REAPER_PLUGIN_VERSION)) return 0;
     if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
 
     g_hwndParent = rec->hwnd_main;
