@@ -880,7 +880,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
 
   if (rec)
   {
-    if (rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc) return 0;
+    if (!rec->GetFunc) return 0;
     if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) return 0;
 
     g_hwndParent = rec->hwnd_main;
