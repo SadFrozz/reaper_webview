@@ -44,9 +44,9 @@ target_compile_definitions(reaper_webview_debug PRIVATE ENABLE_LOG=1)
 
 # Настройки для разных платформ
 if(APPLE)
-    #set(SWELL_STUB ${CMAKE_SOURCE_DIR}/WDL/swell/swell-modstub.mm)
-    #target_sources(reaper_webview PRIVATE ${SWELL_STUB})
-    #target_sources(reaper_webview_debug PRIVATE ${SWELL_STUB})
+    set(SWELL_STUB ${CMAKE_SOURCE_DIR}/WDL/swell/swell-modstub.mm)
+    target_sources(reaper_webview PRIVATE ${SWELL_STUB})
+    target_sources(reaper_webview_debug PRIVATE ${SWELL_STUB})
     # Настройки для macOS
     set_target_properties(reaper_webview PROPERTIES 
         OUTPUT_NAME "reaper_webview"
@@ -57,7 +57,7 @@ if(APPLE)
     find_library(COCOA_LIBRARY Cocoa)
     find_library(WEBKIT_LIBRARY WebKit)
     target_link_libraries(reaper_webview ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
-    target_link_options(reaper_webview PRIVATE "-Wl,-undefined,dynamic_lookup")
+    #target_link_options(reaper_webview PRIVATE "-Wl,-undefined,dynamic_lookup")
     target_compile_definitions(reaper_webview PRIVATE GA_PARENT=1)
     target_compile_definitions(reaper_webview PRIVATE GA_ROOT=2)
     target_compile_definitions(reaper_webview PRIVATE GA_ROOTOWNER=3)
@@ -68,7 +68,7 @@ if(APPLE)
         SUFFIX ".dylib"
         BUNDLE FALSE)
     target_link_libraries(reaper_webview_debug ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
-    target_link_options(reaper_webview_debug PRIVATE "-Wl,-undefined,dynamic_lookup")
+    #target_link_options(reaper_webview_debug PRIVATE "-Wl,-undefined,dynamic_lookup")
     target_compile_definitions(reaper_webview_debug PRIVATE GA_PARENT=1)
     target_compile_definitions(reaper_webview_debug PRIVATE GA_ROOT=2)
     target_compile_definitions(reaper_webview_debug PRIVATE GA_ROOTOWNER=3)

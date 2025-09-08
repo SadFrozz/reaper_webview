@@ -19,6 +19,7 @@
 #else
   #include "WDL/swell/swell.h"
   #include "WDL/swell/swell-dlggen.h"
+  #include "WDL/swell/swell-menugen.h"
   #import <Cocoa/Cocoa.h>
   #import <WebKit/WebKit.h>
   #ifndef AppendMenuA
