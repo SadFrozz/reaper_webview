@@ -21,6 +21,9 @@
   #include "WDL/swell/swell-dlggen.h"
   #import <Cocoa/Cocoa.h>
   #import <WebKit/WebKit.h>
+  #ifndef AppendMenuA
+  #define AppendMenuA AppendMenu
+  #endif
 #endif
 
 #include <string>
@@ -266,7 +269,7 @@ static void SetTitleBarText(const std::string& s){ if (g_titleBar) SetWindowText
 static void EnsureTitleBarCreated(HWND hwnd)
 {
   if (g_titleBarView) return;
-  NSView* host = (NSView*)SWELL_GetView(hwnd); if (!host) return;
+  NSView* host = (NSView*)hwnd; if (!host) return;
   g_titleBarView = [[NSView alloc] initWithFrame:NSMakeRect(0,0, host.bounds.size.width, g_titleBarH)];
   g_titleLabel   = [[NSTextField alloc] initWithFrame:NSMakeRect(g_titlePadX, 2, host.bounds.size.width-2*g_titlePadX, g_titleBarH-4)];
   [g_titleLabel setEditable:NO]; [g_titleLabel setBordered:NO]; [g_titleLabel setBezeled:NO];
@@ -279,7 +282,7 @@ static void EnsureTitleBarCreated(HWND hwnd)
 }
 static void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
-  NSView* host = (NSView*)SWELL_GetView(hwnd); if (!host) return;
+  NSView* host = (NSView*)hwnd; if (!host) return;
   CGFloat top = 0;
   if (titleVisible && g_titleBarView)
   {
@@ -518,7 +521,7 @@ static FRZWebViewDelegate* g_delegate = nil;
 
 static void StartWebView(HWND hwnd, const std::string& initial_url)
 {
-  NSView* host = (NSView*)SWELL_GetView(hwnd); if (!host) return;
+  NSView* host = (NSView*)hwnd; if (!host) return;
   WKWebViewConfiguration* cfg = [[WKWebViewConfiguration alloc] init];
   g_webView = [[WKWebView alloc] initWithFrame:[host bounds] configuration:cfg];
   g_delegate = [[FRZWebViewDelegate alloc] init];

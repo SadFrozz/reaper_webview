@@ -58,6 +58,7 @@ if(APPLE)
     find_library(WEBKIT_LIBRARY WebKit)
     target_link_libraries(reaper_webview ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
     target_link_options(reaper_webview PRIVATE "-Wl,-undefined,dynamic_lookup")
+    target_compile_definitions(reaper_webview PRIVATE GA_ROOT=2)
 
     # debug-вариант (та же конфигурация, другое имя)
     set_target_properties(reaper_webview_debug PROPERTIES 
@@ -66,6 +67,7 @@ if(APPLE)
         BUNDLE FALSE)
     target_link_libraries(reaper_webview_debug ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
     target_link_options(reaper_webview_debug PRIVATE "-Wl,-undefined,dynamic_lookup")
+    target_compile_definitions(reaper_webview_debug PRIVATE GA_ROOT=2)
 elseif(WIN32)
     # Настройки для Windows
     set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
