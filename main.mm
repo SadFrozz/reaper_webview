@@ -258,6 +258,15 @@ static inline void SafePluginRegister(const char* name, void* p)
 static bool g_api_registered  = false;
 static bool g_cmd_registered  = false;
 
+static inline void SafePluginRegister(const char* name, const char* sig) {
+  SafePluginRegister(name, (void*)sig);
+}
+
+// удобный helper для снятия регистрации
+static inline void SafePluginRegisterNull(const char* name) {
+  SafePluginRegister(name, (void*)NULL);
+}
+
 // ============================== Title panel (dock) ==============================
 #ifdef _WIN32
 static void DestroyTitleGdi()
@@ -952,10 +961,10 @@ static bool HookCommandProc(int cmd, int /*flag*/)
   {
     if (!g_api_registered) return;
     // Разрегистрируем в обратном порядке
-    SafePluginRegister("API_WEBVIEW_SetTitle",     (void*)NULL);
-    SafePluginRegister("APIdef_WEBVIEW_SetTitle",  (void*)NULL);
-    SafePluginRegister("API_WEBVIEW_Navigate",     (void*)NULL);
-    SafePluginRegister("APIdef_WEBVIEW_Navigate",  (void*)NULL);
+    SafePluginRegisterNull("API_WEBVIEW_SetTitle");
+    SafePluginRegisterNull("APIdef_WEBVIEW_SetTitle");
+    SafePluginRegisterNull("API_WEBVIEW_Navigate");
+    SafePluginRegisterNull("APIdef_WEBVIEW_Navigate");
     g_api_registered = false;
   }
 #endif
