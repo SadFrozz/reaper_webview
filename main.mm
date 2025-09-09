@@ -296,13 +296,14 @@ static void PlatformMakeTopLevel(HWND hwnd)
   SetForegroundWindow(hwnd);
 #else
   ShowWindow(hwnd, SW_SHOW);
-  // важно: NSView* host = (NSView*)hwnd — оставляем этот фикс
-  NSView* host = (NSView*)hwnd;
+  NSView* host = (NSView*)hwnd;               // SWELL hwnd -> NSView
   if (host) {
     NSWindow* win = [host window];
     if (win) {
       [win setIsVisible:YES];
+      if ([win isMiniaturized]) [win deminiaturize:nil];
       [win makeKeyAndOrderFront:nil];
+      [win orderFrontRegardless];             // чуть агрессивнее, чем просто makeKey…
       [NSApp activateIgnoringOtherApps:YES];
     }
   }
@@ -858,11 +859,7 @@ static void OpenOrActivate(const std::string& url)
     if (dockId >= 0) {
       if (DockWindowActivate) DockWindowActivate(g_dlg); // докнуто — активируем вкладку
     } else {
-#ifdef _WIN32
-      ShowWindow(g_dlg, SW_SHOW); SetForegroundWindow(g_dlg);      // ан-док — поднимаем
-#else
-      ShowWindow(g_dlg, SW_SHOW); PlatformMakeTopLevel(g_dlg);     // ан-док — поднимаем
-#endif
+      PlatformMakeTopLevel(g_dlg);
     }
     return;
   }
@@ -889,11 +886,7 @@ static void OpenOrActivate(const std::string& url)
     if (dockId >= 0) {
       if (DockWindowActivate) DockWindowActivate(g_dlg);
     } else {
-#ifdef _WIN32
-      ShowWindow(g_dlg, SW_SHOW); SetForegroundWindow(g_dlg);
-#else
-      ShowWindow(g_dlg, SW_SHOW); PlatformMakeTopLevel(g_dlg);
-#endif
+      PlatformMakeTopLevel(g_dlg);
     }
   }
 }
