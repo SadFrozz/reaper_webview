@@ -295,18 +295,16 @@ static void PlatformMakeTopLevel(HWND hwnd)
   ShowWindow(hwnd, SW_SHOWNORMAL);
   SetForegroundWindow(hwnd);
 #else
-  ShowWindow(hwnd, SW_SHOW);
-  NSView* host = (NSView*)hwnd;               // SWELL hwnd -> NSView
-  if (host) {
-    NSWindow* win = [host window];
-    if (win) {
-      [win setIsVisible:YES];
-      if ([win isMiniaturized]) [win deminiaturize:nil];
-      [win makeKeyAndOrderFront:nil];
-      [win orderFrontRegardless];             // чуть агрессивнее, чем просто makeKey…
-      [NSApp activateIgnoringOtherApps:YES];
-    }
-  }
+  ShowWindow(hwnd, SW_SHOW);                 // чтобы SWELL его не спрятал
+  NSView* host = (NSView*)hwnd;              // SWELL HWND -> NSView
+  if (!host) return;
+  NSWindow* win = [host window];
+  if (!win) return;
+  [win setIsVisible:YES];
+  if ([win isMiniaturized]) [win deminiaturize:nil];
+  [win makeKeyAndOrderFront:nil];
+  [win orderFrontRegardless];                 // более агрессивно, чем просто makeKey…
+  [NSApp activateIgnoringOtherApps:YES];
 #endif
 }
 
@@ -477,7 +475,7 @@ static void UpdateTitlesExtractAndApply(HWND hwnd)
 #define IDD_WEBVIEW 2001
 SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(
   IDD_WEBVIEW,
-  WS_CAPTION|WS_THICKFRAME|WS_SYSMENU|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, // <— ВАЖНО
+  WS_CAPTION|WS_THICKFRAME|WS_SYSMENU|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
   "WebView",
   900, 600, 1.0
 )
@@ -696,27 +694,24 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
     const bool nowDock = QueryDockState(hwnd,&nowFloat,&nowIdx);
 
   if (nowDock) {
-    // сейчас окно в доке — отстыковываем
+    // было докнуто — снимаем с дока
     if (DockWindowRemove) DockWindowRemove(hwnd);
 
   #ifdef _WIN32
-    // на винде сразу превращаем в top-level
-    PlatformMakeTopLevel(hwnd);
+    PlatformMakeTopLevel(hwnd);                 // сразу
   #else
-    // на macOS даём SWELL закончить undock и на следующем тике поднимем окно
-    LogRaw("After undock (mac): posting WM_FRZ_AFTER_UNDOCK");
+    // даем SWELL закончить undock и на следующем тике поднимаем окно
     PostMessage(hwnd, WM_FRZ_AFTER_UNDOCK, 0, 0);
-    ShowWindow(hwnd, SW_SHOW); // на всякий случай не даём ему остаться скрытым
+    ShowWindow(hwnd, SW_SHOW);
   #endif
-
   } else {
-    // сейчас вне дока — пристыковываем
+    // было ан-док — пристыковываем
     if (DockWindowAddEx) DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
     if (DockWindowActivate) DockWindowActivate(hwnd);
     if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
     if (DockWindowRefresh) DockWindowRefresh();
   }
-    UpdateTitlesExtractAndApply(hwnd);
+  UpdateTitlesExtractAndApply(hwnd);
   }
   else if (cmd == 10099) SendMessage(hwnd, WM_CLOSE, 0, 0);
 }
@@ -729,35 +724,29 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_INITDIALOG:
     {
       g_dlg = hwnd;
-      LogF("[WM_INITDIALOG] hwnd=%p", hwnd);
-
       char* initial = (char*)lp;
       std::string url = (initial && *initial) ? std::string(initial) : std::string(kDefaultURL);
       if (initial) free(initial);
 
-      // Панель создаём заранее, но не показываем — реальное состояние покажем после док/ан-док
       EnsureTitleBarCreated(hwnd);
       LayoutTitleBarAndWebView(hwnd, false);
 
-      // Лог текущего (на новом диалоге обычно «не в доке», просто для трассировки)
+      // просто для логов
       bool isFloat=false; int idx=-1; (void)QueryDockState(hwnd, &isFloat, &idx);
 
-      // Восстановление: -1 (первый запуск) и 1 → док, 0 → ан-док
+      // восстановление
       const bool wantDock = (g_want_dock_on_create == 1) || (g_want_dock_on_create < 0);
       if (wantDock && DockWindowAddEx) {
         DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
         if (DockWindowActivate) DockWindowActivate(hwnd);
         if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
         if (DockWindowRefresh) DockWindowRefresh();
-        LogRaw("Init: DOCK -> DockWindowAddEx/Activate");
       } else {
         PlatformMakeTopLevel(hwnd);
-        LogRaw("Init: UNDOCK -> top-level");
       }
 
       SaveDockState(hwnd);
 
-      // Старт движка + титулы
       StartWebView(hwnd, url);
       UpdateTitlesExtractAndApply(hwnd);
       return 1;
@@ -799,21 +788,17 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       break;
 
     case WM_FRZ_AFTER_UNDOCK:
-    {
     #ifndef _WIN32
-      LogRaw("[AFTER_UNDOCK] mac: make window top-level & bring to front");
       if (IsWindow(hwnd)) {
-        PlatformMakeTopLevel(hwnd);          // как на винде: реальный top-level + фокус
-        UpdateTitlesExtractAndApply(hwnd);   // обновим заголовки/панель
+        PlatformMakeTopLevel(hwnd);
+        UpdateTitlesExtractAndApply(hwnd);
       } else {
-        // крайне редко: SWELL инвалидировал handle. Пересоздадим окно.
-        LogRaw("[AFTER_UNDOCK] mac: hwnd invalid -> recreate dialog");
+        // крайне редкий случай: дескриптор умер — пересоздаем
         g_dlg = nullptr;
         OpenOrActivate(kDefaultURL);
       }
     #endif
       return 0;
-    }
 
     case WM_CLOSE:
       LogRaw("[WM_CLOSE]");
@@ -850,39 +835,33 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 // ============================== open/activate ==============================
 static void OpenOrActivate(const std::string& url)
 {
-  // если окно уже есть — просто активируем его корректно
   if (g_dlg && IsWindow(g_dlg))
   {
     bool floating=false;
     const int dockId = DockIsChildOfDock ? DockIsChildOfDock(g_dlg, &floating) : -1;
-
     if (dockId >= 0) {
-      if (DockWindowActivate) DockWindowActivate(g_dlg); // докнуто — активируем вкладку
+      if (DockWindowActivate) DockWindowActivate(g_dlg);      // док: активируем вкладку
     } else {
-      PlatformMakeTopLevel(g_dlg);
+      PlatformMakeTopLevel(g_dlg);                            // ан-док: реальный top-level + фокус
     }
     return;
   }
 
-  // окна нет — создаём
 #ifdef _WIN32
   struct MyDLGTEMPLATE : DLGTEMPLATE { WORD ext[3]; MyDLGTEMPLATE(){ memset(this,0,sizeof(*this)); } } t;
   t.style = DS_SETFONT | DS_FIXEDSYS | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_CLIPCHILDREN;
   t.cx = 900; t.cy = 600; t.dwExtendedStyle = 0;
   char* urlParam = _strdup(url.c_str());
   g_dlg = CreateDialogIndirectParam((HINSTANCE)g_hInst, &t, g_hwndParent, (DLGPROC)WebViewDlgProc, (LPARAM)urlParam);
-  LogF("CreateDialogIndirectParam -> %p (gle=%lu)", g_dlg, GetLastError());
 #else
   char* urlParam = strdup(url.c_str());
   g_dlg = CreateDialogParam((HINSTANCE)g_hInst, MAKEINTRESOURCE(IDD_WEBVIEW), g_hwndParent, WebViewDlgProc, (LPARAM)urlParam);
 #endif
 
-  // и ТОЛЬКО после создания решаем, как поднимать: док или топ-левел
   if (g_dlg && IsWindow(g_dlg))
   {
     bool floating=false;
     const int dockId = DockIsChildOfDock ? DockIsChildOfDock(g_dlg, &floating) : -1;
-
     if (dockId >= 0) {
       if (DockWindowActivate) DockWindowActivate(g_dlg);
     } else {
