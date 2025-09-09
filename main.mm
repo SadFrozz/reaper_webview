@@ -179,6 +179,7 @@ static std::unordered_map<int, CommandHandler> g_cmd_handlers;
 // Важно: gaccel_register_t должен жить, пока плагин жив.
 // Храним указатели на отдельные объекты, чтобы их адреса не менялись.
 static std::vector<std::unique_ptr<gaccel_register_t>> g_gaccels;
+static const UINT WM_FRZ_AFTER_UNDOCK = WM_USER + 0x77;
 
 // ============================== helpers ==============================
 #ifdef _WIN32
@@ -693,28 +694,27 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
     bool nowFloat=false; int nowIdx=-1;
     const bool nowDock = QueryDockState(hwnd,&nowFloat,&nowIdx);
 
-    if (nowDock) {
-      if (DockWindowRemove) DockWindowRemove(hwnd);
+  if (nowDock) {
+    // сейчас окно в доке — отстыковываем
+    if (DockWindowRemove) DockWindowRemove(hwnd);
 
-  #ifndef _WIN32
-      // НЕ трогаем PlatformMakeTopLevel на macOS после DockWindowRemove.
-      // Просто покажем окно; если SWELL вдруг инвалидировал handle — пересоздадим.
-      if (!IsWindow(hwnd)) {
-        LogRaw("After undock (mac): handle invalid -> recreate dialog");
-        g_dlg = nullptr;
-        OpenOrActivate(kDefaultURL);
-        return;
-      }
+  #ifdef _WIN32
+    // на винде сразу превращаем в top-level
+    PlatformMakeTopLevel(hwnd);
   #else
-      PlatformMakeTopLevel(hwnd);
+    // на macOS даём SWELL закончить undock и на следующем тике поднимем окно
+    LogRaw("After undock (mac): posting WM_FRZ_AFTER_UNDOCK");
+    PostMessage(hwnd, WM_FRZ_AFTER_UNDOCK, 0, 0);
+    ShowWindow(hwnd, SW_SHOW); // на всякий случай не даём ему остаться скрытым
   #endif
-    } else {
-      if (DockWindowAddEx) DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
-      if (DockWindowActivate) DockWindowActivate(hwnd);
-      if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
-      if (DockWindowRefresh) DockWindowRefresh();
-    }
 
+  } else {
+    // сейчас вне дока — пристыковываем
+    if (DockWindowAddEx) DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
+    if (DockWindowActivate) DockWindowActivate(hwnd);
+    if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
+    if (DockWindowRefresh) DockWindowRefresh();
+  }
     UpdateTitlesExtractAndApply(hwnd);
   }
   else if (cmd == 10099) SendMessage(hwnd, WM_CLOSE, 0, 0);
@@ -797,6 +797,23 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       }
       break;
 
+    case WM_FRZ_AFTER_UNDOCK:
+    {
+    #ifndef _WIN32
+      LogRaw("[AFTER_UNDOCK] mac: make window top-level & bring to front");
+      if (IsWindow(hwnd)) {
+        PlatformMakeTopLevel(hwnd);          // как на винде: реальный top-level + фокус
+        UpdateTitlesExtractAndApply(hwnd);   // обновим заголовки/панель
+      } else {
+        // крайне редко: SWELL инвалидировал handle. Пересоздадим окно.
+        LogRaw("[AFTER_UNDOCK] mac: hwnd invalid -> recreate dialog");
+        g_dlg = nullptr;
+        OpenOrActivate(kDefaultURL);
+      }
+    #endif
+      return 0;
+    }
+
     case WM_CLOSE:
       LogRaw("[WM_CLOSE]");
       RememberWantDock(hwnd); // сохранить DOCK/UNDOCK для следующего запуска
@@ -832,6 +849,7 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 // ============================== open/activate ==============================
 static void OpenOrActivate(const std::string& url)
 {
+  // если окно уже есть — просто активируем его корректно
   if (g_dlg && IsWindow(g_dlg))
   {
     bool floating=false;
@@ -840,14 +858,16 @@ static void OpenOrActivate(const std::string& url)
     if (dockId >= 0) {
       if (DockWindowActivate) DockWindowActivate(g_dlg); // докнуто — активируем вкладку
     } else {
-      ShowWindow(g_dlg, SW_SHOW);                        // ан-док — поднимаем окно
-#ifndef _WIN32
-      PlatformMakeTopLevel(g_dlg); // безопасный подъём на macOS/SWELL
+#ifdef _WIN32
+      ShowWindow(g_dlg, SW_SHOW); SetForegroundWindow(g_dlg);      // ан-док — поднимаем
+#else
+      ShowWindow(g_dlg, SW_SHOW); PlatformMakeTopLevel(g_dlg);     // ан-док — поднимаем
 #endif
     }
     return;
   }
 
+  // окна нет — создаём
 #ifdef _WIN32
   struct MyDLGTEMPLATE : DLGTEMPLATE { WORD ext[3]; MyDLGTEMPLATE(){ memset(this,0,sizeof(*this)); } } t;
   t.style = DS_SETFONT | DS_FIXEDSYS | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_CLIPCHILDREN;
@@ -855,12 +875,27 @@ static void OpenOrActivate(const std::string& url)
   char* urlParam = _strdup(url.c_str());
   g_dlg = CreateDialogIndirectParam((HINSTANCE)g_hInst, &t, g_hwndParent, (DLGPROC)WebViewDlgProc, (LPARAM)urlParam);
   LogF("CreateDialogIndirectParam -> %p (gle=%lu)", g_dlg, GetLastError());
-  if (g_dlg) { ShowWindow(g_dlg, SW_SHOW); SetForegroundWindow(g_dlg); }
 #else
   char* urlParam = strdup(url.c_str());
   g_dlg = CreateDialogParam((HINSTANCE)g_hInst, MAKEINTRESOURCE(IDD_WEBVIEW), g_hwndParent, WebViewDlgProc, (LPARAM)urlParam);
-  if (g_dlg) { ShowWindow(g_dlg, SW_SHOW); PlatformMakeTopLevel(g_dlg); }
 #endif
+
+  // и ТОЛЬКО после создания решаем, как поднимать: док или топ-левел
+  if (g_dlg && IsWindow(g_dlg))
+  {
+    bool floating=false;
+    const int dockId = DockIsChildOfDock ? DockIsChildOfDock(g_dlg, &floating) : -1;
+
+    if (dockId >= 0) {
+      if (DockWindowActivate) DockWindowActivate(g_dlg);
+    } else {
+#ifdef _WIN32
+      ShowWindow(g_dlg, SW_SHOW); SetForegroundWindow(g_dlg);
+#else
+      ShowWindow(g_dlg, SW_SHOW); PlatformMakeTopLevel(g_dlg);
+#endif
+    }
+  }
 }
 
 // ============================== API ==============================
