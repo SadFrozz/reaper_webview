@@ -164,6 +164,8 @@ static CGFloat      g_titlePadX    = 8.0;
 // fwd
 static INT_PTR WINAPI WebViewDlgProc(HWND, UINT, WPARAM, LPARAM);
 static void OpenOrActivate(const std::string& url);
+static bool g_api_registered  = false;
+static bool g_cmd_registered  = false;
 
 // ============================== helpers ==============================
 #ifdef _WIN32
