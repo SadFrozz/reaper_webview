@@ -249,6 +249,15 @@ static void SetTabTitleInplace(HWND hwnd, const std::string& tabCaption)
   if (DockWindowRefresh) DockWindowRefresh();
 }
 
+static inline void SafePluginRegister(const char* name, void* p)
+{
+  if (!plugin_register) { LogRaw("plugin_register == NULL (skip)"); return; }
+  if (!name || !*name)   { LogRaw("plugin_register: empty name (skip)"); return; }
+  plugin_register(name, p);
+}
+static bool g_api_registered  = false;
+static bool g_cmd_registered  = false;
+
 // ============================== Title panel (dock) ==============================
 #ifdef _WIN32
 static void DestroyTitleGdi()
@@ -414,9 +423,13 @@ static void UpdateTitlesExtractAndApply(HWND hwnd)
 // ============================== диалог/докер ==============================
 #ifndef _WIN32
 #define IDD_WEBVIEW 2001
-SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(IDD_WEBVIEW, 0, "WebView", 300, 200, 1.8)
-  // Прямое определение единственного элемента управления вместо BEGIN/CONTROL/END
-  { "",-1,"customcontrol",WS_CHILD|WS_VISIBLE,0,0,300,200,0 }
+SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(
+  IDD_WEBVIEW,
+  WS_CAPTION|WS_THICKFRAME|WS_SYSMENU|WS_CLIPCHILDREN|WS_CLIPSIBLINGS, // <— ВАЖНО
+  "WebView",
+  900, 600, 1.0
+)
+  { "", -1, "customcontrol", WS_CHILD|WS_VISIBLE, 0, 0, 300, 200, 0 }
 SWELL_DEFINE_DIALOG_RESOURCE_END(IDD_WEBVIEW)
 #endif
 
@@ -644,7 +657,9 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
       SetWindowPos(hwnd,NULL, rr.left, rr.top, w, h, SWP_NOZORDER|SWP_FRAMECHANGED|SWP_SHOWWINDOW);
       ShowWindow(hwnd, SW_SHOWNORMAL);
 #else
+      // macOS (UNDOCK)
       ShowWindow(hwnd, SW_SHOW);
+      SetForegroundWindow(hwnd); // <— ДОБАВЬ
 #endif
     }
     else
@@ -829,7 +844,7 @@ static void OpenOrActivate(const std::string& url)
 #else
   char* urlParam = strdup(url.c_str());
   g_dlg = CreateDialogParam((HINSTANCE)g_hInst, MAKEINTRESOURCE(IDD_WEBVIEW), g_hwndParent, WebViewDlgProc, (LPARAM)urlParam);
-  if (g_dlg) ShowWindow(g_dlg, SW_SHOW);
+  if (g_dlg) { ShowWindow(g_dlg, SW_SHOW); SetForegroundWindow(g_dlg); }
 #endif
 }
 
@@ -862,44 +877,88 @@ static bool HookCommandProc(int cmd, int /*flag*/)
 }
 
 // ============================== Registration blocks ==============================
-static void RegisterCommandId()
-{
-  g_command_id = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN");
-  if (g_command_id)
+
+#ifdef _WIN32
+  static void RegisterCommandId()
   {
-    static gaccel_register_t gaccel = {{0,0,0}, "WebView: Open (default url)"};
-    gaccel.accel.cmd = g_command_id;
-    plugin_register("gaccel", &gaccel);
-    plugin_register("hookcommand", (void*)HookCommandProc);
-    LogF("Registered command id=%d", g_command_id);
+    g_command_id = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN");
+    if (g_command_id)
+    {
+      static gaccel_register_t gaccel = {{0,0,0}, "WebView: Open (default url)"};
+      gaccel.accel.cmd = g_command_id;
+      plugin_register("gaccel", &gaccel);
+      plugin_register("hookcommand", (void*)HookCommandProc);
+      LogF("Registered command id=%d", g_command_id);
+    }
   }
-}
-static void UnregisterCommandId()
-{
-  plugin_register("hookcommand", (void*)NULL);
-  plugin_register("gaccel", (void*)NULL);
-  if (g_command_id) plugin_register("command_id", (void*)NULL);
-  g_command_id = 0;
-}
+  static void UnregisterCommandId()
+  {
+    plugin_register("hookcommand", (void*)NULL);
+    plugin_register("gaccel", (void*)NULL);
+    if (g_command_id) plugin_register("command_id", (void*)NULL);
+    g_command_id = 0;
+  }
+  static void RegisterAPI()
+  {
+    plugin_register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*");
+    plugin_register("API_WEBVIEW_Navigate",   (void*)API_WEBVIEW_Navigate);
 
-static void RegisterAPI()
-{
-  plugin_register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*");
-  plugin_register("API_WEBVIEW_Navigate",   (void*)API_WEBVIEW_Navigate);
+    // ВАЖНО: без имен параметров, чтобы не ловить «1 names but 0 types»
+    plugin_register("APIdef_WEBVIEW_SetTitle", (void*)"void,const char*");
+    plugin_register("API_WEBVIEW_SetTitle",    (void*)API_WEBVIEW_SetTitle);
+  }
+  static void UnregisterAPI()
+  {
+    plugin_register("API_WEBVIEW_Navigate", (void*)NULL);
+    plugin_register("APIdef_WEBVIEW_Navigate", (void*)NULL);
+    plugin_register("API_WEBVIEW_SetTitle", (void*)NULL);
+    plugin_register("APIdef_WEBVIEW_SetTitle", (void*)NULL);
+  }
+#else
+  static void RegisterCommandId()
+  {
+    g_command_id = plugin_register ? plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN") : 0;
+    if (g_command_id)
+    {
+      static gaccel_register_t gaccel = {{0,0,0}, "WebView: Open (default url)"};
+      gaccel.accel.cmd = g_command_id;
+      SafePluginRegister("gaccel",       &gaccel);
+      SafePluginRegister("hookcommand",  (void*)HookCommandProc);
+      LogF("Registered command id=%d", g_command_id);
+      g_cmd_registered = true;
+    }
+  }
+  static void UnregisterCommandId()
+  {
+    if (!g_cmd_registered) return;
+    SafePluginRegister("hookcommand", (void*)NULL);
+    SafePluginRegister("gaccel",      (void*)NULL);
+    if (plugin_register) plugin_register("command_id", (void*)NULL);
+    g_command_id = 0;
+    g_cmd_registered = false;
+  }
+  static void RegisterAPI()
+  {
+    SafePluginRegister("APIdef_WEBVIEW_Navigate", "void,const char*");
+    SafePluginRegister("API_WEBVIEW_Navigate",    (void*)API_WEBVIEW_Navigate);
 
-  // ВАЖНО: без имен параметров, чтобы не ловить «1 names but 0 types»
-  plugin_register("APIdef_WEBVIEW_SetTitle", (void*)"void,const char*");
-  plugin_register("API_WEBVIEW_SetTitle",    (void*)API_WEBVIEW_SetTitle);
-}
-static void UnregisterAPI()
-{
-  plugin_register("API_WEBVIEW_Navigate", (void*)NULL);
-  plugin_register("APIdef_WEBVIEW_Navigate", (void*)NULL);
-  plugin_register("API_WEBVIEW_SetTitle", (void*)NULL);
-  plugin_register("APIdef_WEBVIEW_SetTitle", (void*)NULL);
-}
+    SafePluginRegister("APIdef_WEBVIEW_SetTitle", "void,const char*");
+    SafePluginRegister("API_WEBVIEW_SetTitle",    (void*)API_WEBVIEW_SetTitle);
 
-// ============================== Entry ==============================
+    g_api_registered = true;
+  }
+
+  static void UnregisterAPI()
+  {
+    if (!g_api_registered) return;
+    // Разрегистрируем в обратном порядке
+    SafePluginRegister("API_WEBVIEW_SetTitle",     (void*)NULL);
+    SafePluginRegister("APIdef_WEBVIEW_SetTitle",  (void*)NULL);
+    SafePluginRegister("API_WEBVIEW_Navigate",     (void*)NULL);
+    SafePluginRegister("APIdef_WEBVIEW_Navigate",  (void*)NULL);
+    g_api_registered = false;
+  }
+#endif
 // ============================== Entry ==============================
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec)
