@@ -45,7 +45,7 @@ target_compile_definitions(reaper_webview_debug PRIVATE ENABLE_LOG=1)
 # Настройки для разных платформ
 if(APPLE)
     set(SWELL_STUB ${CMAKE_SOURCE_DIR}/WDL/swell/swell-modstub.mm)
-    set(SWELL_SRC ${CMAKE_SOURCE_DIR}/WDL/swell/swell-appstub.mm ${CMAKE_SOURCE_DIR}/WDL/swell/swell-dlg.mm ${CMAKE_SOURCE_DIR}/WDL/swell/swell-gdi.mm ${CMAKE_SOURCE_DIR}/WDL/swell/swell-wnd.mm ${CMAKE_SOURCE_DIR}/WDL/swell/swell-kb.mm ${CMAKE_SOURCE_DIR}/WDL/swell/swell-menu.mm ${CMAKE_SOURCE_DIR}/WDL/swell/swell-misc.mm)
+    set(SWELL_SRC ${CMAKE_SOURCE_DIR}/WDL/swell/swell-modstub.mm ${CMAKE_SOURCE_DIR}/WDL/swell/swell-dlg.mm ${CMAKE_SOURCE_DIR}/WDL/swell/swell-gdi.mm ${CMAKE_SOURCE_DIR}/WDL/swell/swell-wnd.mm ${CMAKE_SOURCE_DIR}/WDL/swell/swell-kb.mm ${CMAKE_SOURCE_DIR}/WDL/swell/swell-menu.mm ${CMAKE_SOURCE_DIR}/WDL/swell/swell-misc.mm)
     target_sources(reaper_webview PRIVATE ${SWELL_SRC})
     target_sources(reaper_webview_debug PRIVATE ${SWELL_SRC})
     # Настройки для macOS
