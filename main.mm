@@ -49,7 +49,9 @@
   }
 #endif
 
+#include <vector>
 #include <string>
+#include <map>
 #include <mutex>
 #include <stdio.h>
 #include <stdarg.h>
@@ -117,6 +119,7 @@ static void LogF(const char* fmt, ...) {
 static REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
 static HWND   g_hwndParent = nullptr;
 static int    g_command_id = 0;
+static std::map<std::string, int> g_registered_commands;
 
 static const char* kDockIdent  = "reaper_webview";
 static const char* kDefaultURL = "https://www.reaper.fm/";
@@ -166,6 +169,13 @@ static INT_PTR WINAPI WebViewDlgProc(HWND, UINT, WPARAM, LPARAM);
 static void OpenOrActivate(const std::string& url);
 static bool g_api_registered  = false;
 static bool g_cmd_registered  = false;
+
+// Структура для описания одной API-функции
+struct ApiRegistrationInfo {
+    const char* name;           // e.g., "WEBVIEW_Navigate"
+    const char* signature;      // e.g., "void,const char*"
+    void* functionPointer;  // e.g., (void*)API_WEBVIEW_Navigate
+};
 
 // ============================== helpers ==============================
 #ifdef _WIN32
@@ -877,31 +887,78 @@ static bool HookCommandProc(int cmd, int /*flag*/)
 
 static void RegisterCommandId()
 {
-  g_command_id = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN");
-  if (g_command_id)
-  {
-    static gaccel_register_t gaccel = {{0,0,0}, "WebView: Open (default url)"};
-    gaccel.accel.cmd = g_command_id;
-    plugin_register("gaccel", &gaccel);
-    plugin_register("hookcommand", (void*)HookCommandProc);
-    LogF("Registered command id=%d", g_command_id);
-  }
+  const std::vector<std::pair<const char*, const char*>> commands_to_register = {
+    {"FRZZ_WEBVIEW_OPEN", "WebView: Open (default url)"},
+    // {"FRZZ_WEBVIEW_ANOTHER_ACTION", "WebView: Another action"}, // <- Легко добавить еще
+    // {"FRZZ_WEBVIEW_SOMETHING_ELSE", "WebView: Something else"}
+};
+
+    for (const auto& cmd_info : commands_to_register)
+    {
+        const char* cmd_name = cmd_info.first;
+        const char* cmd_desc = cmd_info.second;
+
+        int command_id = plugin_register("command_id", (void*)cmd_name);
+        if (command_id)
+        {
+            g_registered_commands[cmd_name] = command_id;
+
+            static gaccel_register_t gaccel = {{0, 0, 0}, ""};
+            gaccel.accel.cmd = command_id;
+            gaccel.desc = cmd_desc;
+            
+            plugin_register("gaccel", &gaccel);
+            LogF("Registered command '%s' with id=%d", cmd_name, command_id);
+        }
+    }
+    // Регистрируем хук один раз, если есть хотя бы одна команда
+    if (!g_registered_commands.empty())
+    {
+        plugin_register("hookcommand", (void*)HookCommandProc);
+    }
 }
+
 static void UnregisterCommandId()
 {
   plugin_register("hookcommand", (void*)NULL);
   plugin_register("gaccel", (void*)NULL);
-  if (g_command_id) plugin_register("command_id", (void*)NULL);
-  g_command_id = 0;
+  for (const auto& pair : g_registered_commands)
+  {
+      plugin_register("command_id", (void*)pair.first.c_str());
+      LogF("Unregistered command '%s'", pair.first.c_str());
+  }
+  g_registered_commands.clear(); 
 }
 static void RegisterAPI()
 {
-  plugin_register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*");
-  plugin_register("API_WEBVIEW_Navigate",   (void*)API_WEBVIEW_Navigate);
+    // Список всех API-функций для регистрации. Легко добавлять новые.
+    const std::vector<ApiRegistrationInfo> apis_to_register = {
+        {
+            "WEBVIEW_Navigate",
+            "void,const char*",
+            (void*)API_WEBVIEW_Navigate
+        },
+        {
+            "WEBVIEW_SetTitle",
+            "void,const char*",
+            (void*)API_WEBVIEW_SetTitle
+        }
+        // Сюда можно легко добавить новые функции
+        // ,{ "NEW_FUNCTION", "ret_type,arg_type", (void*)API_NEW_FUNCTION }
+    };
 
-  // ВАЖНО: без имен параметров, чтобы не ловить «1 names but 0 types»
-  plugin_register("APIdef_WEBVIEW_SetTitle", (void*)"void,const char*");
-  plugin_register("API_WEBVIEW_SetTitle",    (void*)API_WEBVIEW_SetTitle);
+    for (const auto& api : apis_to_register)
+    {
+        // Формируем имена для регистрации определения и самой функции
+        std::string def_name = "APIdef_" + std::string(api.name);
+        std::string api_name = "API_" + std::string(api.name);
+
+        // Регистрируем
+        plugin_register(def_name.c_str(), (void*)api.signature);
+        plugin_register(api_name.c_str(), api.functionPointer);
+        
+        LogF("Registered API: %s", api.name);
+    }
 }
 
 // ============================== Entry ==============================
