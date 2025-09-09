@@ -294,29 +294,44 @@ static void PlatformMakeTopLevel(HWND hwnd)
   ShowWindow(hwnd, SW_SHOWNORMAL);
   SetForegroundWindow(hwnd);
 #else
-  // На macOS, SWELL's SetParent(hwnd, NULL) обернет осиротевший View
-  // в новое окно верхнего уровня.
-  SetParent(hwnd, NULL);
+  // --- Обновленный универсальный код для macOS ---
+  NSView* host = (NSView*)hwnd;
+  if (!host) return;
 
-  // Теперь, когда окно стало top-level, нужно задать ему адекватные
-  // размеры, позицию и показать его.
-  RECT r;
-  GetWindowRect(hwnd, &r); // Получаем его текущие, возможно, некорректные размеры
+  // ШАГ 1: Если View "осиротел" (после андока), создаем для него новое окно-хост.
+  if (![host window])
+  {
+    LogRaw("[PlatformMakeTopLevel] View is an orphan. Calling SetParent(NULL) to wrap it.");
+    SetParent(hwnd, NULL);
+  }
 
-  int w = r.right - r.left;
-  int h = r.bottom - r.top;
-  // Если размеры слишком малы, задаем дефолтные
+  // ШАГ 2: Теперь мы гарантированно имеем родительское окно. Настраиваем и показываем его.
+  NSWindow* win = [host window];
+  if (!win)
+  {
+    LogRaw("[PlatformMakeTopLevel] ERROR: View still has no host window!");
+    return;
+  }
+
+  // Задаем позицию и размер
+  RECT r; GetWindowRect(hwnd, &r); // Теперь hwnd - это View, но SWELL вернет Rect его NSWindow
+  int w = r.right - r.left, h = r.bottom - r.top;
   if (w < 200 || h < 120) { w = 900; h = 600; }
-
-  // Позиционируем по центру окна REAPER для удобства
-  RECT reaper_r;
-  GetWindowRect(g_hwndParent, &reaper_r);
+  
+  RECT reaper_r; GetWindowRect(g_hwndParent, &reaper_r);
   int x = reaper_r.left + (reaper_r.right - reaper_r.left - w) / 2;
   int y = reaper_r.top + (reaper_r.bottom - reaper_r.top - h) / 2;
+  
+  // SetWindowPos для HWND (который NSView) автоматически сдвинет его родительское NSWindow
+  SetWindowPos(hwnd, NULL, x, y, w, h, SWP_NOZORDER);
 
-  SetWindowPos(hwnd, NULL, x, y, w, h, SWP_NOZORDER | SWP_SHOWWINDOW);
-  ShowWindow(hwnd, SW_SHOW);
-  SetForegroundWindow(hwnd);
+  // Устанавливаем заголовок и показываем окно
+  [win setTitle:[NSString stringWithUTF8String:g_lastWndText.c_str()]];
+  [win setIsVisible:YES];
+  if ([win isMiniaturized]) [win deminiaturize:nil];
+  [win makeKeyAndOrderFront:nil];
+  [win orderFrontRegardless];
+  [NSApp activateIgnoringOtherApps:YES];
 #endif
 }
 
