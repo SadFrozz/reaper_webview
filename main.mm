@@ -875,83 +875,35 @@ static bool HookCommandProc(int cmd, int /*flag*/)
 
 // ============================== Registration blocks ==============================
 
-#ifdef _WIN32
-  static void RegisterCommandId()
+static void RegisterCommandId()
+{
+  g_command_id = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN");
+  if (g_command_id)
   {
-    g_command_id = plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN");
-    if (g_command_id)
-    {
-      static gaccel_register_t gaccel = {{0,0,0}, "WebView: Open (default url)"};
-      gaccel.accel.cmd = g_command_id;
-      plugin_register("gaccel", &gaccel);
-      plugin_register("hookcommand", (void*)HookCommandProc);
-      LogF("Registered command id=%d", g_command_id);
-    }
+    static gaccel_register_t gaccel = {{0,0,0}, "WebView: Open (default url)"};
+    gaccel.accel.cmd = g_command_id;
+    plugin_register("gaccel", &gaccel);
+    plugin_register("hookcommand", (void*)HookCommandProc);
+    LogF("Registered command id=%d", g_command_id);
   }
-  static void UnregisterCommandId()
-  {
-    plugin_register("hookcommand", (void*)NULL);
-    plugin_register("gaccel", (void*)NULL);
-    if (g_command_id) plugin_register("command_id", (void*)NULL);
-    g_command_id = 0;
-  }
-  static void RegisterAPI()
-  {
-    plugin_register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*");
-    plugin_register("API_WEBVIEW_Navigate",   (void*)API_WEBVIEW_Navigate);
+}
+static void UnregisterCommandId()
+{
+  plugin_register("hookcommand", (void*)NULL);
+  plugin_register("gaccel", (void*)NULL);
+  if (g_command_id) plugin_register("command_id", (void*)NULL);
+  g_command_id = 0;
+}
+static void RegisterAPI()
+{
+  plugin_register("APIdef_WEBVIEW_Navigate", (void*)"void,const char*");
+  plugin_register("API_WEBVIEW_Navigate",   (void*)API_WEBVIEW_Navigate);
 
-    // ВАЖНО: без имен параметров, чтобы не ловить «1 names but 0 types»
-    plugin_register("APIdef_WEBVIEW_SetTitle", (void*)"void,const char*");
-    plugin_register("API_WEBVIEW_SetTitle",    (void*)API_WEBVIEW_SetTitle);
-  }
-  static void UnregisterAPI()
-  {
-    plugin_register("API_WEBVIEW_Navigate", (void*)NULL);
-    plugin_register("APIdef_WEBVIEW_Navigate", (void*)NULL);
-    plugin_register("API_WEBVIEW_SetTitle", (void*)NULL);
-    plugin_register("APIdef_WEBVIEW_SetTitle", (void*)NULL);
-  }
-#else
-  static void RegisterCommandId()
-  {
-    g_command_id = plugin_register ? plugin_register("command_id", (void*)"FRZZ_WEBVIEW_OPEN") : 0;
-    if (g_command_id)
-    {
-      static gaccel_register_t gaccel = {{0,0,0}, "WebView: Open (default url)"};
-      gaccel.accel.cmd = g_command_id;
-      SafePluginRegister("gaccel",       &gaccel);
-      SafePluginRegister("hookcommand",  (void*)HookCommandProc);
-      LogF("Registered command id=%d", g_command_id);
-      g_cmd_registered = true;
-    }
-  }
-  static void UnregisterCommandId()
-  {
-    if (!g_cmd_registered) return;
-    SafePluginRegister("hookcommand", (void*)NULL);
-    SafePluginRegister("gaccel",      (void*)NULL);
-    if (plugin_register) plugin_register("command_id", (void*)NULL);
-    g_command_id = 0;
-    g_cmd_registered = false;
-  }
-  static void RegisterAPI()
-  {
-    SafePluginRegister("APIdef_WEBVIEW_Navigate", "void,const char*");
-    SafePluginRegister("API_WEBVIEW_Navigate",    (void*)API_WEBVIEW_Navigate);
+  // ВАЖНО: без имен параметров, чтобы не ловить «1 names but 0 types»
+  plugin_register("APIdef_WEBVIEW_SetTitle", (void*)"void,const char*");
+  plugin_register("API_WEBVIEW_SetTitle",    (void*)API_WEBVIEW_SetTitle);
+}
 
-    SafePluginRegister("APIdef_WEBVIEW_SetTitle", "void,const char*");
-    SafePluginRegister("API_WEBVIEW_SetTitle",    (void*)API_WEBVIEW_SetTitle);
-  }
-
-  static void UnregisterAPI()
-  {
-    if (!plugin_register) return;
-    // НЕ трогаем APIdef_* (оставляем строки сигнатур зарегистрированными),
-    // иначе plugin_register внутри REAPER дернёт strlen(NULL) и упадёт.
-    plugin_register("API_WEBVIEW_SetTitle", (void*)NULL);
-    plugin_register("API_WEBVIEW_Navigate", (void*)NULL);
-  }
-#endif
 // ============================== Entry ==============================
 extern "C" REAPER_PLUGIN_DLL_EXPORT int
 REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t* rec)
@@ -994,7 +946,6 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
   else
   {
     LogRaw("=== Plugin unload ===");
-    UnregisterAPI();
     UnregisterCommandId();
 
     if (g_dlg && IsWindow(g_dlg))
