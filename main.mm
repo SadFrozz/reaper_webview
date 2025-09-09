@@ -57,6 +57,10 @@
 #include <stdarg.h>
 #include <string.h>
 #include <ctype.h>
+#include <unordered_map>
+#include <memory>
+
+using CommandHandler = bool(*)(int flag);
 
 #include "WDL/wdltypes.h"
 
@@ -119,7 +123,6 @@ static void LogF(const char* fmt, ...) {
 static REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
 static HWND   g_hwndParent = nullptr;
 static int    g_command_id = 0;
-static std::map<std::string, int> g_registered_commands;
 
 static const char* kDockIdent  = "reaper_webview";
 static const char* kDefaultURL = "https://www.reaper.fm/";
@@ -170,12 +173,12 @@ static void OpenOrActivate(const std::string& url);
 static bool g_api_registered  = false;
 static bool g_cmd_registered  = false;
 
-// Структура для описания одной API-функции
-struct ApiRegistrationInfo {
-    const char* name;           // e.g., "WEBVIEW_Navigate"
-    const char* signature;      // e.g., "void,const char*"
-    void* functionPointer;  // e.g., (void*)API_WEBVIEW_Navigate
-};
+static std::unordered_map<std::string,int> g_registered_commands;
+static std::unordered_map<int, CommandHandler> g_cmd_handlers;
+
+// Важно: gaccel_register_t должен жить, пока плагин жив.
+// Храним указатели на отдельные объекты, чтобы их адреса не менялись.
+static std::vector<std::unique_ptr<gaccel_register_t>> g_gaccels;
 
 // ============================== helpers ==============================
 #ifdef _WIN32
@@ -686,27 +689,32 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
   DestroyMenu(m);
   if (!cmd) return;
 
-  if (cmd == 10001)
-  {
-    bool nowFloat=false; int nowIdx=-1; bool nowDock = QueryDockState(hwnd,&nowFloat,&nowIdx);
+  if (cmd == 10001) {
+    bool nowFloat=false; int nowIdx=-1;
+    const bool nowDock = QueryDockState(hwnd,&nowFloat,&nowIdx);
+
     if (nowDock) {
       if (DockWindowRemove) DockWindowRemove(hwnd);
-      PlatformMakeTopLevel(hwnd);
-    #ifndef _WIN32
-      // На старых сборках SWELL иногда инвалидирует handle — подстрахуемся
+
+  #ifndef _WIN32
+      // НЕ трогаем PlatformMakeTopLevel на macOS после DockWindowRemove.
+      // Просто покажем окно; если SWELL вдруг инвалидировал handle — пересоздадим.
       if (!IsWindow(hwnd)) {
-        LogRaw("After undock: window handle invalid -> recreate");
+        LogRaw("After undock (mac): handle invalid -> recreate dialog");
         g_dlg = nullptr;
         OpenOrActivate(kDefaultURL);
         return;
       }
-    #endif
+  #else
+      PlatformMakeTopLevel(hwnd);
+  #endif
     } else {
       if (DockWindowAddEx) DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
       if (DockWindowActivate) DockWindowActivate(hwnd);
       if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
       if (DockWindowRefresh) DockWindowRefresh();
     }
+
     UpdateTitlesExtractAndApply(hwnd);
   }
   else if (cmd == 10099) SendMessage(hwnd, WM_CLOSE, 0, 0);
@@ -877,45 +885,80 @@ static void API_WEBVIEW_SetTitle(const char* title_or_null)
 }
 
 // ============================== Hook command ==============================
-static bool HookCommandProc(int cmd, int /*flag*/)
+
+static bool HookCommandProc(int cmd, int flag)
 {
-  if (cmd == g_command_id) { OpenOrActivate(kDefaultURL); return true; }
+  // быстрый путь на случай, если оставишь совместимость со старым кодом
+  if (cmd == g_command_id) {
+    OpenOrActivate(kDefaultURL);
+    return true;
+  }
+
+  auto it = g_cmd_handlers.find(cmd);
+  if (it != g_cmd_handlers.end() && it->second) {
+    return it->second(flag);
+  }
   return false;
 }
+
+// ============================== Handlers ===================================
+
+static bool Act_OpenDefault(int /*flag*/)
+{
+  OpenOrActivate(kDefaultURL);
+  return true;
+}
+
+// ============================ structures =============================
+
+// Структура для описания одной API-функции
+struct ApiRegistrationInfo {
+    const char* name;           // e.g., "WEBVIEW_Navigate"
+    const char* signature;      // e.g., "void,const char*"
+    void* functionPointer;  // e.g., (void*)API_WEBVIEW_Navigate
+};
+
+// Структура для описания команды
+struct CommandSpec {
+  const char* name;      // "FRZZ_WEBVIEW_OPEN"
+  const char* desc;      // "WebView: Open (default url)"
+  CommandHandler handler;// обработчик
+};
+
+static const CommandSpec kCommandSpecs[] = {
+  { "FRZZ_WEBVIEW_OPEN", "WebView: Open (default url)", &Act_OpenDefault },
+  // сюда добавляй дальше: { "NAME", "Desc", &Handler }
+};
 
 // ============================== Registration blocks ==============================
 
 static void RegisterCommandId()
 {
-  const std::vector<std::pair<const char*, const char*>> commands_to_register = {
-    {"FRZZ_WEBVIEW_OPEN", "WebView: Open (default url)"},
-    // {"FRZZ_WEBVIEW_ANOTHER_ACTION", "WebView: Another action"}, // <- Легко добавить еще
-    // {"FRZZ_WEBVIEW_SOMETHING_ELSE", "WebView: Something else"}
-};
+  // регистрируем хук ровно 1 раз
+  plugin_register("hookcommand", (void*)HookCommandProc);
 
-    for (const auto& cmd_info : commands_to_register)
-    {
-        const char* cmd_name = cmd_info.first;
-        const char* cmd_desc = cmd_info.second;
+  for (const auto& spec : kCommandSpecs)
+  {
+    int id = (int)(intptr_t)plugin_register("command_id", (void*)spec.name);
+    if (!id) { LogF("Failed to register command '%s'", spec.name); continue; }
 
-        int command_id = plugin_register("command_id", (void*)cmd_name);
-        if (command_id)
-        {
-            g_registered_commands[cmd_name] = command_id;
+    g_registered_commands[spec.name] = id;
+    g_cmd_handlers[id] = spec.handler;
 
-            static gaccel_register_t gaccel = {{0, 0, 0}, ""};
-            gaccel.accel.cmd = command_id;
-            gaccel.desc = cmd_desc;
-            
-            plugin_register("gaccel", &gaccel);
-            LogF("Registered command '%s' with id=%d", cmd_name, command_id);
-        }
-    }
-    // Регистрируем хук один раз, если есть хотя бы одна команда
-    if (!g_registered_commands.empty())
-    {
-        plugin_register("hookcommand", (void*)HookCommandProc);
-    }
+    // Совместимость со старым кодом: помним основной экшн (если нужен где-то ещё)
+    if (!strcmp(spec.name, "FRZZ_WEBVIEW_OPEN"))
+      g_command_id = id;
+
+    // gaccel должен жить в памяти — делаем отдельный объект на каждый экшн
+    auto acc = std::make_unique<gaccel_register_t>();
+    memset(&acc->accel, 0, sizeof(acc->accel));
+    acc->accel.cmd = id;
+    acc->desc = spec.desc;
+    plugin_register("gaccel", acc.get());
+    g_gaccels.push_back(std::move(acc));
+
+    LogF("Registered command '%s' id=%d", spec.name, id);
+  }
 }
 
 static void UnregisterCommandId()
