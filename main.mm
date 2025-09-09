@@ -695,15 +695,7 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
 
   if (nowDock) {
     // было докнуто — снимаем с дока
-    if (DockWindowRemove) DockWindowRemove(hwnd);
-
-  #ifdef _WIN32
-    PlatformMakeTopLevel(hwnd);                 // сразу
-  #else
-    // даем SWELL закончить undock и на следующем тике поднимаем окно
-    PostMessage(hwnd, WM_FRZ_AFTER_UNDOCK, 0, 0);
-    ShowWindow(hwnd, SW_SHOW);
-  #endif
+    if (DockWindowRemove) DockWindowRemove(hwnd); PlatformMakeTopLevel(hwnd);
   } else {
     // было ан-док — пристыковываем
     if (DockWindowAddEx) DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
@@ -786,19 +778,6 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
           return 0;
       }
       break;
-
-    case WM_FRZ_AFTER_UNDOCK:
-    #ifndef _WIN32
-      if (IsWindow(hwnd)) {
-        PlatformMakeTopLevel(hwnd);
-        UpdateTitlesExtractAndApply(hwnd);
-      } else {
-        // крайне редкий случай: дескриптор умер — пересоздаем
-        g_dlg = nullptr;
-        OpenOrActivate(kDefaultURL);
-      }
-    #endif
-      return 0;
 
     case WM_CLOSE:
       LogRaw("[WM_CLOSE]");
