@@ -793,7 +793,6 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       DestroyWindow(hwnd);
       g_dlg = nullptr;
       return 0;
-    }
 
     case WM_DESTROY:
     LogRaw("[WM_DESTROY]");
