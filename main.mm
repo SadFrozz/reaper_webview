@@ -20,6 +20,7 @@
   #include "WDL/swell/swell.h"
   #include "WDL/swell/swell-dlggen.h"
   #include "WDL/swell/swell-menugen.h"
+  #define SWELL_PROVIDED_BY_APP
   #import <Cocoa/Cocoa.h>
   #import <WebKit/WebKit.h>
   #ifndef AppendMenuA
