@@ -179,7 +179,6 @@ static std::unordered_map<int, CommandHandler> g_cmd_handlers;
 // Важно: gaccel_register_t должен жить, пока плагин жив.
 // Храним указатели на отдельные объекты, чтобы их адреса не менялись.
 static std::vector<std::unique_ptr<gaccel_register_t>> g_gaccels;
-static const UINT WM_FRZ_AFTER_UNDOCK = WM_USER + 0x77;
 
 // ============================== helpers ==============================
 #ifdef _WIN32
@@ -295,16 +294,29 @@ static void PlatformMakeTopLevel(HWND hwnd)
   ShowWindow(hwnd, SW_SHOWNORMAL);
   SetForegroundWindow(hwnd);
 #else
-  ShowWindow(hwnd, SW_SHOW);                 // чтобы SWELL его не спрятал
-  NSView* host = (NSView*)hwnd;              // SWELL HWND -> NSView
-  if (!host) return;
-  NSWindow* win = [host window];
-  if (!win) return;
-  [win setIsVisible:YES];
-  if ([win isMiniaturized]) [win deminiaturize:nil];
-  [win makeKeyAndOrderFront:nil];
-  [win orderFrontRegardless];                 // более агрессивно, чем просто makeKey…
-  [NSApp activateIgnoringOtherApps:YES];
+  // На macOS, SWELL's SetParent(hwnd, NULL) обернет осиротевший View
+  // в новое окно верхнего уровня.
+  SetParent(hwnd, NULL);
+
+  // Теперь, когда окно стало top-level, нужно задать ему адекватные
+  // размеры, позицию и показать его.
+  RECT r;
+  GetWindowRect(hwnd, &r); // Получаем его текущие, возможно, некорректные размеры
+
+  int w = r.right - r.left;
+  int h = r.bottom - r.top;
+  // Если размеры слишком малы, задаем дефолтные
+  if (w < 200 || h < 120) { w = 900; h = 600; }
+
+  // Позиционируем по центру окна REAPER для удобства
+  RECT reaper_r;
+  GetWindowRect(g_hwndParent, &reaper_r);
+  int x = reaper_r.left + (reaper_r.right - reaper_r.left - w) / 2;
+  int y = reaper_r.top + (reaper_r.bottom - reaper_r.top - h) / 2;
+
+  SetWindowPos(hwnd, NULL, x, y, w, h, SWP_NOZORDER | SWP_SHOWWINDOW);
+  ShowWindow(hwnd, SW_SHOW);
+  SetForegroundWindow(hwnd);
 #endif
 }
 
@@ -695,13 +707,13 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
 
   if (nowDock) {
     // было докнуто — снимаем с дока
+    LogRaw("[Undock] Removing from dock...");
     if (DockWindowRemove) DockWindowRemove(hwnd); PlatformMakeTopLevel(hwnd);
   } else {
     // было ан-док — пристыковываем
+    LogRaw("[Dock] Adding to dock...");
     if (DockWindowAddEx) DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
     if (DockWindowActivate) DockWindowActivate(hwnd);
-    if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
-    if (DockWindowRefresh) DockWindowRefresh();
   }
   UpdateTitlesExtractAndApply(hwnd);
   }
