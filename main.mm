@@ -251,20 +251,46 @@ static void SetTabTitleInplace(HWND hwnd, const std::string& tabCaption)
 
 static inline void SafePluginRegister(const char* name, void* p)
 {
-  if (!plugin_register) { LogRaw("plugin_register == NULL (skip)"); return; }
-  if (!name || !*name)   { LogRaw("plugin_register: empty name (skip)"); return; }
+  if (!plugin_register || !name || !*name) return;
   plugin_register(name, p);
 }
-static bool g_api_registered  = false;
-static bool g_cmd_registered  = false;
-
-static inline void SafePluginRegister(const char* name, const char* sig) {
-  SafePluginRegister(name, (void*)sig);
-}
+static inline void SafePluginRegister(const char* name, const char* sig)
+{ SafePluginRegister(name, (void*)sig); }
 
 // удобный helper для снятия регистрации
 static inline void SafePluginRegisterNull(const char* name) {
   SafePluginRegister(name, (void*)NULL);
+}
+
+static void PlatformMakeTopLevel(HWND hwnd)
+{
+#ifdef _WIN32
+  LONG_PTR st  = GetWindowLongPtr(hwnd, GWL_STYLE);
+  LONG_PTR exs = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+  st &= ~WS_CHILD; st |= WS_OVERLAPPEDWINDOW;
+  SetWindowLongPtr(hwnd, GWL_STYLE, st);
+  SetWindowLongPtr(hwnd, GWL_EXSTYLE, exs & ~WS_EX_TOOLWINDOW);
+  SetParent(hwnd, NULL);
+  RECT rr{}; GetWindowRect(hwnd, &rr);
+  int w = rr.right-rr.left, h = rr.bottom-rr.top;
+  if (w < 200 || h < 120) { w = 900; h = 600; }
+  SetWindowPos(hwnd, NULL, rr.left, rr.top, w, h,
+               SWP_NOZORDER|SWP_FRAMECHANGED|SWP_SHOWWINDOW);
+  ShowWindow(hwnd, SW_SHOWNORMAL);
+  SetForegroundWindow(hwnd);
+#else
+  ShowWindow(hwnd, SW_SHOW);
+  // важно: NSView* host = (NSView*)hwnd — оставляем этот фикс
+  NSView* host = (NSView*)hwnd;
+  if (host) {
+    NSWindow* win = [host window];
+    if (win) {
+      [win setIsVisible:YES];
+      [win makeKeyAndOrderFront:nil];
+      [NSApp activateIgnoringOtherApps:YES];
+    }
+  }
+#endif
 }
 
 // ============================== Title panel (dock) ==============================
@@ -651,28 +677,19 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
   if (cmd == 10001)
   {
     bool nowFloat=false; int nowIdx=-1; bool nowDock = QueryDockState(hwnd,&nowFloat,&nowIdx);
-    if (nowDock)
-    {
+    if (nowDock) {
       if (DockWindowRemove) DockWindowRemove(hwnd);
-#ifdef _WIN32
-      LONG_PTR st  = GetWindowLongPtr(hwnd, GWL_STYLE);
-      LONG_PTR exs = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-      st &= ~WS_CHILD; st |= WS_OVERLAPPEDWINDOW;
-      SetWindowLongPtr(hwnd, GWL_STYLE, st);
-      SetWindowLongPtr(hwnd, GWL_EXSTYLE, exs & ~WS_EX_TOOLWINDOW);
-      SetParent(hwnd, NULL);
-      RECT rr{}; GetWindowRect(hwnd,&rr);
-      int w = rr.right-rr.left, h = rr.bottom-rr.top; if (w<200||h<120){ w=900; h=600; }
-      SetWindowPos(hwnd,NULL, rr.left, rr.top, w, h, SWP_NOZORDER|SWP_FRAMECHANGED|SWP_SHOWWINDOW);
-      ShowWindow(hwnd, SW_SHOWNORMAL);
-#else
-      // macOS (UNDOCK)
-      ShowWindow(hwnd, SW_SHOW);
-      SetForegroundWindow(hwnd); // <— ДОБАВЬ
-#endif
-    }
-    else
-    {
+      PlatformMakeTopLevel(hwnd);
+    #ifndef _WIN32
+      // На старых сборках SWELL иногда инвалидирует handle — подстрахуемся
+      if (!IsWindow(hwnd)) {
+        LogRaw("After undock: window handle invalid -> recreate");
+        g_dlg = nullptr;
+        OpenOrActivate(kDefaultURL);
+        return;
+      }
+    #endif
+    } else {
       if (DockWindowAddEx) DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
       if (DockWindowActivate) DockWindowActivate(hwnd);
       if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
@@ -690,62 +707,39 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
   {
     case WM_INITDIALOG:
     {
-    g_dlg = hwnd;
-    LogF("[WM_INITDIALOG] hwnd=%p", hwnd);
+      g_dlg = hwnd;
+      LogF("[WM_INITDIALOG] hwnd=%p", hwnd);
 
-    char* initial = (char*)lp;
-    std::string url = (initial && *initial) ? std::string(initial) : std::string(kDefaultURL);
-    if (initial) free(initial);
+      char* initial = (char*)lp;
+      std::string url = (initial && *initial) ? std::string(initial) : std::string(kDefaultURL);
+      if (initial) free(initial);
 
-    // Панель создаём заранее, но пока скрыта (до определения док-состояния)
-    EnsureTitleBarCreated(hwnd);
-    LayoutTitleBarAndWebView(hwnd, false);
+      // Панель создаём заранее, но не показываем — реальное состояние покажем после док/ан-док
+      EnsureTitleBarCreated(hwnd);
+      LayoutTitleBarAndWebView(hwnd, false);
 
-    // === ВОССТАНОВЛЕНИЕ предыдущего состояния окна ===
-    bool isFloat=false; int idx=-1;
-    bool nowDock = QueryDockState(hwnd, &isFloat, &idx); // почти всегда false на новом диалоге — просто для логов
+      // Лог текущего (на новом диалоге обычно «не в доке», просто для трассировки)
+      bool isFloat=false; int idx=-1; (void)QueryDockState(hwnd, &isFloat, &idx);
 
-    if (g_want_dock_on_create == 1 /*DOCK*/ || (g_want_dock_on_create < 0 /*первый запуск*/))
-    {
-        if (DockWindowAddEx) { DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true); LogRaw("Init: forcing DOCK -> DockWindowAddEx()"); }
-        if (DockWindowActivate) { DockWindowActivate(hwnd); LogRaw("DockWindowActivate"); }
-        if (DockWindowRefreshForHWND) { DockWindowRefreshForHWND(hwnd); LogRaw("DockWindowRefreshForHWND"); }
-        if (DockWindowRefresh) { DockWindowRefresh(); LogRaw("DockWindowRefresh"); }
-    }
-    else // g_want_dock_on_create == 0 → UNDOCK
-    {
-    #ifdef _WIN32
-        // гарантируем настоящий top-level
-        LONG_PTR st  = GetWindowLongPtr(hwnd, GWL_STYLE);
-        LONG_PTR exs = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-        st &= ~WS_CHILD; st |= WS_OVERLAPPEDWINDOW;
-        SetWindowLongPtr(hwnd, GWL_STYLE, st);
-        SetWindowLongPtr(hwnd, GWL_EXSTYLE, exs & ~WS_EX_TOOLWINDOW);
-        SetParent(hwnd, NULL);
-        RECT rr{}; GetWindowRect(hwnd, &rr);
-        int w = rr.right-rr.left, h = rr.bottom-rr.top;
-        if (w < 200 || h < 120) { w = 900; h = 600; }
-        SetWindowPos(hwnd, NULL, rr.left, rr.top, w, h, SWP_NOZORDER|SWP_FRAMECHANGED|SWP_SHOWWINDOW);
-        ShowWindow(hwnd, SW_SHOWNORMAL);
-        LogRaw("Init: forcing UNDOCK -> top-level styles applied");
-    #else
-        ShowWindow(hwnd, SW_SHOW);
-    #endif
-    }
+      // Восстановление: -1 (первый запуск) и 1 → док, 0 → ан-док
+      const bool wantDock = (g_want_dock_on_create == 1) || (g_want_dock_on_create < 0);
+      if (wantDock && DockWindowAddEx) {
+        DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
+        if (DockWindowActivate) DockWindowActivate(hwnd);
+        if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
+        if (DockWindowRefresh) DockWindowRefresh();
+        LogRaw("Init: DOCK -> DockWindowAddEx/Activate");
+      } else {
+        PlatformMakeTopLevel(hwnd);
+        LogRaw("Init: UNDOCK -> top-level");
+      }
 
-    // теперь состояние известно
-    SaveDockState(hwnd);
+      SaveDockState(hwnd);
 
-    // Запускаем движок
-    StartWebView(hwnd, url);
-    UpdateTitlesExtractAndApply(hwnd);
-
-    #ifdef _WIN32
-    ShowWindow(hwnd, SW_SHOW); SetForegroundWindow(hwnd);
-    #else
-    ShowWindow(hwnd, SW_SHOW);
-    #endif
-    return 1;
+      // Старт движка + титулы
+      StartWebView(hwnd, url);
+      UpdateTitlesExtractAndApply(hwnd);
+      return 1;
     }
 
 #ifdef _WIN32
@@ -784,19 +778,19 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       break;
 
     case WM_CLOSE:
-    {
-    LogRaw("[WM_CLOSE]");
-    RememberWantDock(hwnd); // <=== запомнить док/андок перед закрытием
+      LogRaw("[WM_CLOSE]");
+      RememberWantDock(hwnd); // сохранить DOCK/UNDOCK для следующего запуска
 
-    bool f=false; int idx=-1; bool id = DockIsChildOfDock ? (DockIsChildOfDock(hwnd, &f) >= 0) : false;
-    LogF("DockIsChildOfDock (on close) -> inDock=%d float=%d", (int)id, (int)f);
-    if (id && DockWindowRemove) DockWindowRemove(hwnd);
+      { bool f=false; int idx=-1;
+        bool id = DockIsChildOfDock ? (DockIsChildOfDock(hwnd,&f) >= 0) : false;
+        if (id && DockWindowRemove) DockWindowRemove(hwnd);
+      }
     #ifdef _WIN32
-    g_controller = nullptr; g_webview = nullptr;
+      g_controller = nullptr; g_webview = nullptr;
     #endif
-    DestroyWindow(hwnd);
-    g_dlg = nullptr;
-    return 0;
+      DestroyWindow(hwnd);
+      g_dlg = nullptr;
+      return 0;
     }
 
     case WM_DESTROY:
@@ -821,24 +815,17 @@ static void OpenOrActivate(const std::string& url)
 {
   if (g_dlg && IsWindow(g_dlg))
   {
-    bool isFloat=false; int idx=-1;
-    bool inDock = DockIsChildOfDock ? (DockIsChildOfDock(g_dlg, &isFloat) >= 0) : false;
-    if (inDock)
-    {
-      if (DockWindowActivate) DockWindowActivate(g_dlg);
-      if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(g_dlg);
-      if (DockWindowRefresh) DockWindowRefresh();
-    }
-    else
-    {
-#ifdef _WIN32
-      ShowWindow(g_dlg, IsIconic(g_dlg) ? SW_RESTORE : SW_SHOW);
-      SetForegroundWindow(g_dlg); SetActiveWindow(g_dlg); BringWindowToTop(g_dlg);
-#else
-      ShowWindow(g_dlg, SW_SHOW);
+    bool floating=false;
+    const int dockId = DockIsChildOfDock ? DockIsChildOfDock(g_dlg, &floating) : -1;
+
+    if (dockId >= 0) {
+      if (DockWindowActivate) DockWindowActivate(g_dlg); // докнуто — активируем вкладку
+    } else {
+      ShowWindow(g_dlg, SW_SHOW);                        // ан-док — поднимаем окно
+#ifndef _WIN32
+      PlatformMakeTopLevel(g_dlg); // безопасный подъём на macOS/SWELL
 #endif
     }
-    UpdateTitlesExtractAndApply(g_dlg);
     return;
   }
 
@@ -853,7 +840,7 @@ static void OpenOrActivate(const std::string& url)
 #else
   char* urlParam = strdup(url.c_str());
   g_dlg = CreateDialogParam((HINSTANCE)g_hInst, MAKEINTRESOURCE(IDD_WEBVIEW), g_hwndParent, WebViewDlgProc, (LPARAM)urlParam);
-  if (g_dlg) { ShowWindow(g_dlg, SW_SHOW); SetForegroundWindow(g_dlg); }
+  if (g_dlg) { ShowWindow(g_dlg, SW_SHOW); PlatformMakeTopLevel(g_dlg); }
 #endif
 }
 
@@ -953,19 +940,15 @@ static bool HookCommandProc(int cmd, int /*flag*/)
 
     SafePluginRegister("APIdef_WEBVIEW_SetTitle", "void,const char*");
     SafePluginRegister("API_WEBVIEW_SetTitle",    (void*)API_WEBVIEW_SetTitle);
-
-    g_api_registered = true;
   }
 
   static void UnregisterAPI()
   {
-    if (!g_api_registered) return;
-    // Разрегистрируем в обратном порядке
-    SafePluginRegisterNull("API_WEBVIEW_SetTitle");
-    SafePluginRegisterNull("APIdef_WEBVIEW_SetTitle");
-    SafePluginRegisterNull("API_WEBVIEW_Navigate");
-    SafePluginRegisterNull("APIdef_WEBVIEW_Navigate");
-    g_api_registered = false;
+    if (!plugin_register) return;
+    // НЕ трогаем APIdef_* (оставляем строки сигнатур зарегистрированными),
+    // иначе plugin_register внутри REAPER дернёт strlen(NULL) и упадёт.
+    plugin_register("API_WEBVIEW_SetTitle", (void*)NULL);
+    plugin_register("API_WEBVIEW_Navigate", (void*)NULL);
   }
 #endif
 // ============================== Entry ==============================
