@@ -695,16 +695,31 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
 @implementation FRZWebViewDelegate
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation
 { UpdateTitlesExtractAndApply((HWND)g_dlg); }
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message
+- (void)userContentController:(WKUserContentController *)userContentController
+      didReceiveScriptMessage:(WKScriptMessage *)message
 {
   if (![message.name isEqualToString:@"frzCtx"]) return;
-  NSString* s = [message.body isKindOfClass:[NSString class]] ? (NSString*)message.body : @"";
-  NSArray<NSString*>* parts = [s componentsSeparatedByString:@"|"];
-  if (parts.count == 3 && [parts[0] isEqualToString:@"CTX"]) {
-    NSInteger sx = [parts[1] integerValue];
-    NSInteger sy = [parts[2] integerValue];
-    PostMessage((HWND)g_dlg, WM_CONTEXTMENU, (WPARAM)g_dlg, MAKELPARAM((int)sx, (int)sy));
+
+  // Текущая позиция курсора в системе (origin у экрана — СНИЗУ СЛЕВА)
+  NSPoint p = [NSEvent mouseLocation];
+
+  // Найдём экран, на котором находится курсор, чтобы корректно перевести Y в "от верха"
+  NSScreen *hit = nil;
+  for (NSScreen *s in [NSScreen screens]) {
+    if (NSPointInRect(p, s.frame)) { hit = s; break; }
   }
+  if (!hit) hit = [NSScreen mainScreen];
+
+  // Превращаем в "Windows-подобные" координаты: X слева, Y от верха
+  CGFloat yFromTop = hit.frame.origin.y + hit.frame.size.height - p.y;
+
+  int sx = (int)llround(p.x);
+  int sy = (int)llround(yFromTop);
+
+  // Отдаём в уже существующую логику меню (через WM_CONTEXTMENU — SWELL сам покажет его правильно)
+  PostMessage((HWND)g_dlg, WM_CONTEXTMENU, (WPARAM)g_dlg, MAKELPARAM(sx, sy));
+  // Если предпочитаешь прямой вызов:
+  // ShowLocalDockMenu((HWND)g_dlg, sx, sy);
 }
 @end
 static FRZWebViewDelegate* g_delegate = nil;
@@ -721,14 +736,21 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
   g_delegate = [[FRZWebViewDelegate alloc] init];
   g_webView.navigationDelegate = g_delegate;
   // === ADD: inject script and hook message handler ===
-  NSString* js =
-  @"window.addEventListener('contextmenu',function(e){"
-    "e.preventDefault();"
-    "var scale = window.devicePixelRatio || 1;"
-    "var px = Math.round(e.screenX * scale);"
-    "var py = Math.round(e.screenY * scale);"
-    "window.webkit.messageHandlers.frzCtx.postMessage('CTX|' + px + '|' + py);"
-  "},true);";
+  NSString *js =
+  @"(function(){"
+    // Глушим собственное меню страницы и не даём браузеру выделять слово по ПКМ
+    "window.addEventListener('contextmenu', function(e){ e.preventDefault(); "
+      "try{ window.webkit.messageHandlers.frzCtx.postMessage('CTX'); }catch(_){ }"
+    "}, true);"
+
+    // Глушим выделение текста вообще
+    "var st = document.createElement('style');"
+    "st.textContent='*{ -webkit-user-select:none !important; user-select:none !important; }';"
+    "document.documentElement.appendChild(st);"
+
+    // Глушим клик правой кнопкой как событие (чтобы не было доп. выделений)
+    "window.addEventListener('mousedown', function(e){ if(e.button===2){ e.preventDefault(); } }, true);"
+  "})();";
   WKUserScript* us = [[WKUserScript alloc] initWithSource:js injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO];
   [ucc addUserScript:us];
   [ucc addScriptMessageHandler:g_delegate name:@"frzCtx"];
