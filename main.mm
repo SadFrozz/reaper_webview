@@ -721,15 +721,6 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
   g_delegate = [[FRZWebViewDelegate alloc] init];
   g_webView.navigationDelegate = g_delegate;
   // === ADD: inject script and hook message handler ===
-  NSString* js = @"window.addEventListener('contextmenu',function(e){e.preventDefault();window.webkit.messageHandlers.frzCtx.postMessage('CTX|' + Math.round(e.screenX) + '|' + Math.round(e.screenY));},true);";
-  WKUserScript* us = [[WKUserScript alloc] initWithSource:js injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO];
-  [ucc addUserScript:us];
-  [ucc addScriptMessageHandler:g_delegate name:@"frzCtx"];
-  // === END ADD ===
-  [g_webView setAutoresizingMask:(NSViewWidthSizable|NSViewHeightSizable)];
-  [host addSubview:g_webView];
-
-  NSString* s = [NSString stringWithUTF8String:initial_url.c_str()];
   NSString* js =
   @"window.addEventListener('contextmenu',function(e){"
     "e.preventDefault();"
@@ -738,6 +729,14 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
     "var py = Math.round(e.screenY * scale);"
     "window.webkit.messageHandlers.frzCtx.postMessage('CTX|' + px + '|' + py);"
   "},true);";
+  WKUserScript* us = [[WKUserScript alloc] initWithSource:js injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO];
+  [ucc addUserScript:us];
+  [ucc addScriptMessageHandler:g_delegate name:@"frzCtx"];
+  // === END ADD ===
+  [g_webView setAutoresizingMask:(NSViewWidthSizable|NSViewHeightSizable)];
+  [host addSubview:g_webView];
+
+  NSString* s = [NSString stringWithUTF8String:initial_url.c_str()];
   NSURL* u = [NSURL URLWithString:s]; if (u) [g_webView loadRequest:[NSURLRequest requestWithURL:u]];
   UpdateTitlesExtractAndApply(hwnd);
 }
