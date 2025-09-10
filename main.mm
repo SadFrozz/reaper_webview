@@ -703,7 +703,7 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
   if (parts.count == 3 && [parts[0] isEqualToString:@"CTX"]) {
     NSInteger sx = [parts[1] integerValue];
     NSInteger sy = [parts[2] integerValue];
-    ShowLocalDockMenu((HWND)g_dlg, (int)sx, (int)sy);
+    PostMessage((HWND)g_dlg, WM_CONTEXTMENU, (WPARAM)g_dlg, MAKELPARAM((int)sx, (int)sy));
   }
 }
 @end
@@ -730,6 +730,14 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
   [host addSubview:g_webView];
 
   NSString* s = [NSString stringWithUTF8String:initial_url.c_str()];
+  NSString* js =
+  @"window.addEventListener('contextmenu',function(e){"
+    "e.preventDefault();"
+    "var scale = window.devicePixelRatio || 1;"
+    "var px = Math.round(e.screenX * scale);"
+    "var py = Math.round(e.screenY * scale);"
+    "window.webkit.messageHandlers.frzCtx.postMessage('CTX|' + px + '|' + py);"
+  "},true);";
   NSURL* u = [NSURL URLWithString:s]; if (u) [g_webView loadRequest:[NSURLRequest requestWithURL:u]];
   UpdateTitlesExtractAndApply(hwnd);
 }
