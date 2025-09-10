@@ -20,8 +20,17 @@ set(SOURCES main.mm)
 # Создаем библиотеку
 add_library(reaper_webview MODULE ${SOURCES})
 
+# Второй таргет: всегда с логами
+add_library(reaper_webview_debug MODULE ${SOURCES})
+target_compile_definitions(reaper_webview_debug PRIVATE ENABLE_LOG)
+
 # Настройки для разных платформ
 if(APPLE)
+    set(SWELL_STUB ${CMAKE_SOURCE_DIR}/WDL/swell/swell-modstub.mm)
+    target_sources(reaper_webview PRIVATE ${SWELL_STUB})
+    target_sources(reaper_webview_debug PRIVATE ${SWELL_STUB})
+    target_compile_definitions(reaper_webview PRIVATE SWELL_PROVIDED_BY_APP)
+    target_compile_definitions(reaper_webview_debug PRIVATE SWELL_PROVIDED_BY_APP)
     # Настройки для macOS
     set_target_properties(reaper_webview PROPERTIES 
         OUTPUT_NAME "reaper_webview"
@@ -32,6 +41,21 @@ if(APPLE)
     find_library(COCOA_LIBRARY Cocoa)
     find_library(WEBKIT_LIBRARY WebKit)
     target_link_libraries(reaper_webview ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
+    #target_link_options(reaper_webview PRIVATE "-Wl,-undefined,dynamic_lookup")
+    target_compile_definitions(reaper_webview PRIVATE GA_PARENT=1)
+    target_compile_definitions(reaper_webview PRIVATE GA_ROOT=2)
+    target_compile_definitions(reaper_webview PRIVATE GA_ROOTOWNER=3)
+
+    # debug-вариант (та же конфигурация, другое имя)
+    set_target_properties(reaper_webview_debug PROPERTIES 
+        OUTPUT_NAME "reaper_webview_debug"
+        SUFFIX ".dylib"
+        BUNDLE FALSE)
+    target_link_libraries(reaper_webview_debug ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
+    #target_link_options(reaper_webview_debug PRIVATE "-Wl,-undefined,dynamic_lookup")
+    target_compile_definitions(reaper_webview_debug PRIVATE GA_PARENT=1)
+    target_compile_definitions(reaper_webview_debug PRIVATE GA_ROOT=2)
+    target_compile_definitions(reaper_webview_debug PRIVATE GA_ROOTOWNER=3)
 elseif(WIN32)
     # Настройки для Windows
     set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
@@ -69,9 +93,33 @@ elseif(WIN32)
         # Динамическая линковка через LoadLibrary
         target_compile_definitions(reaper_webview PRIVATE USE_WEBVIEW2_LOADER_DYNAMIC)
     endif()
+
+    # debug-вариант (идентичные дефайны/линковка + .dll суффикс)
+    set_target_properties(reaper_webview_debug PROPERTIES SUFFIX ".dll")
+    target_compile_definitions(reaper_webview_debug PRIVATE 
+        _WIN32_WINNT=0x0601
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+        _CRT_SECURE_NO_WARNINGS)
+    target_link_libraries(reaper_webview_debug 
+        comctl32 
+        ole32 
+        version 
+        shlwapi
+        user32
+        oleaut32
+        advapi32)
+    if(WEBVIEW2_LIB)
+        target_link_libraries(reaper_webview_debug ${WEBVIEW2_LIB})
+    else()
+        target_compile_definitions(reaper_webview_debug PRIVATE USE_WEBVIEW2_LOADER_DYNAMIC)
+    endif()
 endif()
 
 # Установка выходного директория
 set_target_properties(reaper_webview PROPERTIES 
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+set_target_properties(reaper_webview_debug PROPERTIES 
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
