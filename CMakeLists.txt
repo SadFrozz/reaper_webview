@@ -34,9 +34,9 @@ set(SOURCES main.mm)
 add_library(reaper_webview MODULE ${SOURCES})
 
 # Включаем логи для основного таргета только если разрешено
-if(ENABLE_LOG)
-  target_compile_definitions(reaper_webview PRIVATE ENABLE_LOG=1)
-endif()
+#if(ENABLE_LOG)
+#  target_compile_definitions(reaper_webview PRIVATE ENABLE_LOG=1)
+#endif()
 
 # Второй таргет: всегда с логами
 add_library(reaper_webview_debug MODULE ${SOURCES})
