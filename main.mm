@@ -700,24 +700,16 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
 {
   if (![message.name isEqualToString:@"frzCtx"]) return;
 
-  // 1) Позиция курсора в глобальных координатах macOS (origin снизу слева у primary)
+  // Глобальная позиция курсора в системе Cocoa: (0,0) внизу слева
   NSPoint p = [NSEvent mouseLocation];
 
-  // 2) Собираем виртуальные границы всего рабочего стола (включая все мониторы)
-  NSRect vr = NSZeroRect;
-  for (NSScreen *s in [NSScreen screens]) {
-    vr = NSEqualRects(vr, NSZeroRect) ? s.frame : NSUnionRect(vr, s.frame);
-  }
+  // Ничего не инвертируем и не сдвигаем по экранам
+  int sx = (int)llround(p.x);
+  int sy = (int)llround(p.y);
 
-  // 3) Переводим в «виндовые» координаты: X от левого края ВИРТ.экрана, Y от его верха
-  const CGFloat top    = NSMaxY(vr);        // верхняя граница виртуального экрана
-  const CGFloat left   = vr.origin.x;       // левая граница виртуального экрана
-  int sx = (int)llround(p.x - left);        // смещение от левого края виртуального экрана
-  int sy = (int)llround(top - p.y);         // инверсия Y относительно верха виртуального экрана
-
-  // 4) Показываем меню (используй один из вариантов)
+  // Показываем меню (любой из вариантов)
   PostMessage((HWND)g_dlg, WM_CONTEXTMENU, (WPARAM)g_dlg, MAKELPARAM(sx, sy));
-  // или, если удобнее:
+  // или:
   // ShowLocalDockMenu((HWND)g_dlg, sx, sy);
 }
 @end
