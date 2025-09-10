@@ -594,6 +594,60 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
                 wil::com_ptr<ICoreWebView2Settings> settings;
                 if (SUCCEEDED(g_webview->get_Settings(&settings)) && settings)
                   settings->put_AreDefaultContextMenusEnabled(FALSE);
+                
+                // === ADD: JS bridge for right-click inside WebView2 ===
+                {
+                  static const wchar_t* kFRZCtxJS = LR"JS(
+                    window.addEventListener('contextmenu', function(e){
+                      e.preventDefault();
+                      var scale = window.devicePixelRatio || 1;
+                      var px = Math.round(e.screenX * scale);
+                      var py = Math.round(e.screenY * scale);
+                      var s = 'CTX|' + px + '|' + py;
+                      if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(s);
+                    }, true);
+                  )JS";
+                  g_webview->AddScriptToExecuteOnDocumentCreated(
+                    kFRZCtxJS,
+                    Microsoft::WRL::Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
+                      [](HRESULT /*ec*/, PCWSTR /*id*/) -> HRESULT { return S_OK; }
+                    ).Get());
+                }
+
+                // Receive 'CTX|x|y' and show the same local dock menu
+                g_webview->add_WebMessageReceived(
+                  Microsoft::WRL::Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+                    [](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args)->HRESULT {
+                      wil::unique_cotaskmem_string json;
+                      if (SUCCEEDED(args->get_WebMessageAsJson(&json)) && json) {
+                        std::string s = Narrow(json.get());
+                        if (!s.empty() && s.front()=='"' && s.back()=='"') s = s.substr(1, s.size()-2);
+                        if (s.rfind("CTX|", 0) == 0) {
+                          int sx=0, sy=0;
+                          #ifdef _WIN32
+                          sscanf_s(s.c_str()+4, "%d|%d", &sx, &sy);
+                          #else
+                          sscanf(s.c_str()+4, "%d|%d", &sx, &sy);
+                          #endif
+                          PostMessage(g_dlg, WM_CONTEXTMENU, (WPARAM)g_dlg, MAKELPARAM(sx, sy));
+                        }
+                      }
+                      return S_OK;
+                    }).Get(), nullptr);
+                // === END ADD ===
+
+                // после получения g_webview (сразу рядом с остальными add_* хендлерами)
+                Microsoft::WRL::ComPtr<ICoreWebView2_13> wv13;
+                if (g_webview && SUCCEEDED(g_webview.get()->QueryInterface(IID_PPV_ARGS(&wv13)))) {
+                  wv13->add_ContextMenuRequested(
+                    Microsoft::WRL::Callback<ICoreWebView2ContextMenuRequestedEventHandler>(
+                      [](ICoreWebView2* /*sender*/, ICoreWebView2ContextMenuRequestedEventArgs* args)->HRESULT {
+                        // Полностью подавляем дефолтное меню WebView
+                        args->put_Handled(TRUE);
+                        return S_OK;
+                      }).Get(),
+                    nullptr);
+                }
 
                 g_webview->add_DocumentTitleChanged(
                   Microsoft::WRL::Callback<ICoreWebView2DocumentTitleChangedEventHandler>(
@@ -636,11 +690,22 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
   LogF("CreateCoreWebView2EnvironmentWithOptions returned 0x%lX", (long)hrEnv);
 }
 #else
-@interface FRZWebViewDelegate : NSObject <WKNavigationDelegate>
+@interface FRZWebViewDelegate : NSObject <WKNavigationDelegate, WKScriptMessageHandler>
 @end
 @implementation FRZWebViewDelegate
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation
 { UpdateTitlesExtractAndApply((HWND)g_dlg); }
+- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message
+{
+  if (![message.name isEqualToString:@"frzCtx"]) return;
+  NSString* s = [message.body isKindOfClass:[NSString class]] ? (NSString*)message.body : @"";
+  NSArray<NSString*>* parts = [s componentsSeparatedByString:@"|"];
+  if (parts.count == 3 && [parts[0] isEqualToString:@"CTX"]) {
+    NSInteger sx = [parts[1] integerValue];
+    NSInteger sy = [parts[2] integerValue];
+    ShowLocalDockMenu((HWND)g_dlg, (int)sx, (int)sy);
+  }
+}
 @end
 static FRZWebViewDelegate* g_delegate = nil;
 
@@ -648,9 +713,19 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
 {
   NSView* host = (NSView*)hwnd; if (!host) return;
   WKWebViewConfiguration* cfg = [[WKWebViewConfiguration alloc] init];
+  // === ADD: set up user content controller, JS hook for contextmenu ===
+  WKUserContentController* ucc = [[WKUserContentController alloc] init];
+  [cfg setUserContentController:ucc];
+  // === END ADD ===
   g_webView = [[WKWebView alloc] initWithFrame:[host bounds] configuration:cfg];
   g_delegate = [[FRZWebViewDelegate alloc] init];
   g_webView.navigationDelegate = g_delegate;
+  // === ADD: inject script and hook message handler ===
+  NSString* js = @"window.addEventListener('contextmenu',function(e){e.preventDefault();window.webkit.messageHandlers.frzCtx.postMessage('CTX|' + Math.round(e.screenX) + '|' + Math.round(e.screenY));},true);";
+  WKUserScript* us = [[WKUserScript alloc] initWithSource:js injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO];
+  [ucc addUserScript:us];
+  [ucc addScriptMessageHandler:g_delegate name:@"frzCtx"];
+  // === END ADD ===
   [g_webView setAutoresizingMask:(NSViewWidthSizable|NSViewHeightSizable)];
   [host addSubview:g_webView];
 
@@ -773,7 +848,6 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_SIZE:
       SizeWebViewToClient(hwnd);
       return 0;
-
 
     case WM_SWELL_POST_UNDOCK_FIXSTYLE:
     {
