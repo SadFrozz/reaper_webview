@@ -170,6 +170,7 @@ static CGFloat      g_titlePadX    = 8.0;
 // fwd
 static INT_PTR WINAPI WebViewDlgProc(HWND, UINT, WPARAM, LPARAM);
 static void OpenOrActivate(const std::string& url);
+static void ShowLocalDockMenu(HWND hwnd, int x, int y); // <== ДОБАВЬТЕ ЭТУ СТРОКУ
 static bool g_api_registered  = false;
 static bool g_cmd_registered  = false;
 
@@ -636,11 +637,29 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
   LogF("CreateCoreWebView2EnvironmentWithOptions returned 0x%lX", (long)hrEnv);
 }
 #else
-@interface FRZWebViewDelegate : NSObject <WKNavigationDelegate>
+@interface FRZWebViewDelegate : NSObject <WKNavigationDelegate, WKUIDelegate>
 @end
 @implementation FRZWebViewDelegate
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation
 { UpdateTitlesExtractAndApply((HWND)g_dlg); }
+- (void)webView:(WKWebView *)webView contextMenuForElement:(WKContextMenuElementInfo *)elementInfo
+        willPresentWithDefaultMenu:(NSMenu *)defaultMenu
+        completionHandler:(void (^)(NSMenu * _Nullable))completionHandler
+{
+  // Получаем текущие экранные координаты мыши
+  NSPoint screenPoint = [NSEvent mouseLocation];
+  
+  // Упаковываем их в LPARAM для SWELL
+  LPARAM lp = MAKELPARAM((int)screenPoint.x, (int)screenPoint.y);
+  
+  // Отправляем сообщение нашему окну, чтобы оно показало свое меню
+  if (g_dlg) {
+    PostMessage(g_dlg, WM_CONTEXTMENU, (WPARAM)g_dlg, lp);
+  }
+
+  // Подавляем стандартное меню WebView
+  completionHandler(nil);
+}
 @end
 static FRZWebViewDelegate* g_delegate = nil;
 
@@ -651,6 +670,7 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
   g_webView = [[WKWebView alloc] initWithFrame:[host bounds] configuration:cfg];
   g_delegate = [[FRZWebViewDelegate alloc] init];
   g_webView.navigationDelegate = g_delegate;
+  g_webView.UIDelegate = g_delegate; // <== ДОБАВЬТЕ ЭТУ СТРОКУ
   [g_webView setAutoresizingMask:(NSViewWidthSizable|NSViewHeightSizable)];
   [host addSubview:g_webView];
 
