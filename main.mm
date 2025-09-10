@@ -179,6 +179,7 @@ static std::unordered_map<int, CommandHandler> g_cmd_handlers;
 // Важно: gaccel_register_t должен жить, пока плагин жив.
 // Храним указатели на отдельные объекты, чтобы их адреса не менялись.
 static std::vector<std::unique_ptr<gaccel_register_t>> g_gaccels;
+static const UINT WM_SWELL_POST_UNDOCK_FIXSTYLE = WM_USER + 0x101;
 
 // ============================== helpers ==============================
 #ifdef _WIN32
@@ -294,44 +295,29 @@ static void PlatformMakeTopLevel(HWND hwnd)
   ShowWindow(hwnd, SW_SHOWNORMAL);
   SetForegroundWindow(hwnd);
 #else
-  // --- Обновленный универсальный код для macOS ---
-  NSView* host = (NSView*)hwnd;
-  if (!host) return;
+  // ШАГ 1: Используем SWELL API, который работает.
+  // Это создаст окно, но без возможности изменения размера.
+  LogRaw("[PlatformMakeTopLevel] Reparenting with SetParent(NULL)...");
+  SetParent(hwnd, NULL);
 
-  // ШАГ 1: Если View "осиротел" (после андока), создаем для него новое окно-хост.
-  if (![host window])
-  {
-    LogRaw("[PlatformMakeTopLevel] View is an orphan. Calling SetParent(NULL) to wrap it.");
-    SetParent(hwnd, NULL);
-  }
-
-  // ШАГ 2: Теперь мы гарантированно имеем родительское окно. Настраиваем и показываем его.
-  NSWindow* win = [host window];
-  if (!win)
-  {
-    LogRaw("[PlatformMakeTopLevel] ERROR: View still has no host window!");
-    return;
-  }
-
-  // Задаем позицию и размер
-  RECT r; GetWindowRect(hwnd, &r); // Теперь hwnd - это View, но SWELL вернет Rect его NSWindow
+  // ШАГ 2: Задаем позицию и показываем окно стандартными средствами SWELL.
+  RECT r;
+  GetWindowRect(hwnd, &r);
   int w = r.right - r.left, h = r.bottom - r.top;
   if (w < 200 || h < 120) { w = 900; h = 600; }
-  
-  RECT reaper_r; GetWindowRect(g_hwndParent, &reaper_r);
+
+  RECT reaper_r;
+  GetWindowRect(g_hwndParent, &reaper_r);
   int x = reaper_r.left + (reaper_r.right - reaper_r.left - w) / 2;
   int y = reaper_r.top + (reaper_r.bottom - reaper_r.top - h) / 2;
-  
-  // SetWindowPos для HWND (который NSView) автоматически сдвинет его родительское NSWindow
-  SetWindowPos(hwnd, NULL, x, y, w, h, SWP_NOZORDER);
 
-  // Устанавливаем заголовок и показываем окно
-  [win setTitle:[NSString stringWithUTF8String:g_lastWndText.c_str()]];
-  [win setIsVisible:YES];
-  if ([win isMiniaturized]) [win deminiaturize:nil];
-  [win makeKeyAndOrderFront:nil];
-  [win orderFrontRegardless];
-  [NSApp activateIgnoringOtherApps:YES];
+  SetWindowPos(hwnd, NULL, x, y, w, h, SWP_NOZORDER | SWP_SHOWWINDOW);
+  ShowWindow(hwnd, SW_SHOW);
+  SetForegroundWindow(hwnd);
+
+  // ШАГ 3: Отправляем себе отложенное сообщение, чтобы исправить стиль окна.
+  // К моменту его обработки, [host window] уже будет валидным.
+  PostMessage(hwnd, WM_SWELL_POST_UNDOCK_FIXSTYLE, 0, 0);
 #endif
 }
 
@@ -787,6 +773,22 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_SIZE:
       SizeWebViewToClient(hwnd);
       return 0;
+
+    case WM_SWELL_POST_UNDOCK_FIXSTYLE:
+    {
+    #ifndef _WIN32
+      NSView* host = (NSView*)hwnd;
+      NSWindow* win = [host window];
+      if (win)
+      {
+        LogRaw("[POST_UNDOCK_FIXSTYLE] Applying resizable style mask.");
+        NSUInteger currentStyleMask = [win styleMask];
+        // Добавляем флаг NSWindowStyleMaskResizable
+        [win setStyleMask: currentStyleMask | NSWindowStyleMaskResizable];
+      }
+    #endif
+      return 0;
+    }
 
     case WM_CONTEXTMENU:
     {
