@@ -700,25 +700,24 @@ static void StartWebView(HWND hwnd, const std::string& initial_url)
 {
   if (![message.name isEqualToString:@"frzCtx"]) return;
 
-  // Текущая позиция курсора в системе (origin у экрана — СНИЗУ СЛЕВА)
+  // 1) Позиция курсора в глобальных координатах macOS (origin снизу слева у primary)
   NSPoint p = [NSEvent mouseLocation];
 
-  // Найдём экран, на котором находится курсор, чтобы корректно перевести Y в "от верха"
-  NSScreen *hit = nil;
+  // 2) Собираем виртуальные границы всего рабочего стола (включая все мониторы)
+  NSRect vr = NSZeroRect;
   for (NSScreen *s in [NSScreen screens]) {
-    if (NSPointInRect(p, s.frame)) { hit = s; break; }
+    vr = NSEqualRects(vr, NSZeroRect) ? s.frame : NSUnionRect(vr, s.frame);
   }
-  if (!hit) hit = [NSScreen mainScreen];
 
-  // Превращаем в "Windows-подобные" координаты: X слева, Y от верха
-  CGFloat yFromTop = hit.frame.origin.y + hit.frame.size.height - p.y;
+  // 3) Переводим в «виндовые» координаты: X от левого края ВИРТ.экрана, Y от его верха
+  const CGFloat top    = NSMaxY(vr);        // верхняя граница виртуального экрана
+  const CGFloat left   = vr.origin.x;       // левая граница виртуального экрана
+  int sx = (int)llround(p.x - left);        // смещение от левого края виртуального экрана
+  int sy = (int)llround(top - p.y);         // инверсия Y относительно верха виртуального экрана
 
-  int sx = (int)llround(p.x);
-  int sy = (int)llround(yFromTop);
-
-  // Отдаём в уже существующую логику меню (через WM_CONTEXTMENU — SWELL сам покажет его правильно)
+  // 4) Показываем меню (используй один из вариантов)
   PostMessage((HWND)g_dlg, WM_CONTEXTMENU, (WPARAM)g_dlg, MAKELPARAM(sx, sy));
-  // Если предпочитаешь прямой вызов:
+  // или, если удобнее:
   // ShowLocalDockMenu((HWND)g_dlg, sx, sy);
 }
 @end
