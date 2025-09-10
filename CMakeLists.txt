@@ -1,19 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(reaper_webview)
 
-# --- Логи по типу сборки ---
-# ENABLE_LOG можно принудительно включить: -DENABLE_LOG=ON
-option(ENABLE_LOG "Enable verbose logging in reaper_webview target" OFF)
-# Поддержка твоей переменной build_type (debug/rel и т.п.)
-if(DEFINED build_type)
-  string(TOLOWER "${build_type}" _bt_lower)
-  if(_bt_lower STREQUAL "release")
-    set(ENABLE_LOG OFF)
-  else()
-    set(ENABLE_LOG ON)
-  endif()
-endif()
-
 # Подключаем стандартные модули
 include(CheckIncludeFile)
 include(CheckFunctionExists)
@@ -33,14 +20,9 @@ set(SOURCES main.mm)
 # Создаем библиотеку
 add_library(reaper_webview MODULE ${SOURCES})
 
-# Включаем логи для основного таргета только если разрешено
-if(ENABLE_LOG)
-  target_compile_definitions(reaper_webview PRIVATE ENABLE_LOG=0)
-endif()
-
 # Второй таргет: всегда с логами
 add_library(reaper_webview_debug MODULE ${SOURCES})
-target_compile_definitions(reaper_webview_debug PRIVATE ENABLE_LOG=1)
+target_compile_definitions(reaper_webview_debug PRIVATE ENABLE_LOG)
 
 # Настройки для разных платформ
 if(APPLE)

@@ -71,15 +71,7 @@ using CommandHandler = bool(*)(int flag);
 #include "sdk/reaper_plugin_functions.h"
 
 // ============================== Build-time logging ==============================
-#ifndef ENABLE_LOG
-  #ifdef NDEBUG
-    #define ENABLE_LOG 0
-  #else
-    #define ENABLE_LOG 1
-  #endif
-#endif
-
-#if ENABLE_LOG
+#ifdef ENABLE_LOG
 static std::mutex& log_mutex() { static std::mutex m; return m; }
 static void LogRaw(const char* s)
 {
