@@ -15,7 +15,14 @@ include_directories(${WDL_PATH})
 include_directories(${WDL_PATH}/swell)
 
 # Добавляем исходники
-set(SOURCES main.mm)
+set(SOURCES
+  main.mm
+  api.mm
+  helpers.mm
+  webview_win.cpp
+  webview_darwin.mm
+  globals.mm
+)
 
 # Создаем библиотеку
 add_library(reaper_webview MODULE ${SOURCES})
@@ -58,7 +65,11 @@ if(APPLE)
     target_compile_definitions(reaper_webview_debug PRIVATE GA_ROOTOWNER=3)
 elseif(WIN32)
     # Настройки для Windows
-    set_target_properties(reaper_webview PROPERTIES SUFFIX ".dll")
+    set_target_properties(reaper_webview PROPERTIES
+        SUFFIX ".dll"
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO)
     
     # Добавляем пути к зависимостям WebView2 и WIL
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps)
@@ -95,7 +106,11 @@ elseif(WIN32)
     endif()
 
     # debug-вариант (идентичные дефайны/линковка + .dll суффикс)
-    set_target_properties(reaper_webview_debug PROPERTIES SUFFIX ".dll")
+    set_target_properties(reaper_webview_debug PROPERTIES
+        SUFFIX ".dll"
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO)
     target_compile_definitions(reaper_webview_debug PRIVATE 
         _WIN32_WINNT=0x0601
         NOMINMAX

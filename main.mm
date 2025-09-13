@@ -1,319 +1,26 @@
-// main.mm — SWELL/WebView2, док/андок без «передокивания», кастомный/дефолтный заголовок
-//  • default title ("WebView"):  dock tab="WebView", panel "DOMAIN[:port] - TITLE"; undock caption "DOMAIN[:port] - TITLE"
-//  • custom title (!= "WebView"): док/андок показывают ровно заданный текст; панель скрыта
-//  • порт показываем только если нестандартный (http:80, https:443 — скрываем)
+// Reaper WebView Plugin
+// (c) Andrew "SadFrozz" Brodsky
+// 2025 and later
+// main.mm
 
-#ifdef _WIN32
-  #ifndef WIN32_LEAN_AND_MEAN
-  #define WIN32_LEAN_AND_MEAN
-  #endif
-  #include <winsock2.h>
-  #include <windows.h>
-  #include <wrl.h>
-  #include <wil/com.h>
-  #include <objbase.h>
-  #include <shlwapi.h>
-  #include <direct.h>
-  #pragma comment(lib, "Shlwapi.lib")
-  #include "deps/WebView2.h"
-#else
-  #include "WDL/swell/swell.h"
-  #include "WDL/swell/swell-dlggen.h"
-  #include "WDL/swell/swell-menugen.h"
-  #import <Cocoa/Cocoa.h>
-  #import <WebKit/WebKit.h>
-  #ifndef AppendMenuA
-  #define AppendMenuA(hMenu, uFlags, uIDNewItem, lpNewItem) InsertMenu(hMenu, -1, MF_BYPOSITION | (uFlags), uIDNewItem, lpNewItem)
-  #endif
-  HWND GetAncestor(HWND hwnd, UINT gaFlags)
-  {
-      if (!hwnd) return NULL;
+// init section
 
-      if (gaFlags == GA_PARENT)
-      {
-          return GetParent(hwnd);
-      }
-
-      if (gaFlags == GA_ROOT || gaFlags == GA_ROOTOWNER)
-      {
-          HWND last_hwnd = hwnd;
-          HWND current_hwnd = hwnd;
-          while ((current_hwnd = GetParent(current_hwnd)) != NULL)
-          {
-              last_hwnd = current_hwnd;
-          }
-          return last_hwnd; // Возвращаем самое верхнее окно
-      }
-
-      return NULL; // Неподдерживаемый флаг
-  }
-#endif
-
-#include <vector>
-#include <string>
-#include <map>
-#include <mutex>
-#include <stdio.h>
-#include <stdarg.h>
-#include <string.h>
-#include <ctype.h>
-#include <unordered_map>
-#include <memory>
-
-using CommandHandler = bool(*)(int flag);
-
-#include "WDL/wdltypes.h"
-
+#define RWV_WITH_WEBVIEW2 1
 #ifndef REAPERAPI_IMPLEMENT
 #define REAPERAPI_IMPLEMENT
 #endif
-#include "sdk/reaper_plugin.h"
-#include "sdk/reaper_plugin_functions.h"
+#include "predef.h"
 
 // ============================== Build-time logging ==============================
-#ifdef ENABLE_LOG
-static std::mutex& log_mutex() { static std::mutex m; return m; }
-static void LogRaw(const char* s)
-{
-  if (!s) return;
-#ifdef _WIN32
-  OutputDebugStringA(s); OutputDebugStringA("\r\n");
-#endif
-  if (ShowConsoleMsg) { ShowConsoleMsg(s); ShowConsoleMsg("\n"); }
-  std::lock_guard<std::mutex> lk(log_mutex());
-  const char* res = GetResourcePath ? GetResourcePath() : nullptr;
-  std::string path = res && *res ? (std::string(res)
-#ifdef _WIN32
-    + "\\reaper_webview_log.txt"
-#else
-    + "/reaper_webview_log.txt"
-#endif
-  ) : "reaper_webview_log.txt";
-  FILE* f = nullptr;
-#ifdef _WIN32
-  fopen_s(&f, path.c_str(), "ab");
-#else
-  f = fopen(path.c_str(), "ab");
-#endif
-  if (f) { fwrite(s, 1, strlen(s), f); fwrite("\n", 1, 1, f); fclose(f); }
-}
-static void LogF(const char* fmt, ...) {
-  char buf[4096] = {0}; va_list ap; va_start(ap, fmt);
-#ifdef _WIN32
-  _vsnprintf(buf, sizeof(buf)-1, fmt, ap);
-#else
-  vsnprintf(buf, sizeof(buf)-1, fmt, ap);
-#endif
-  va_end(ap); LogRaw(buf);
-}
-#else
-  static inline void LogRaw(const char*) {}
-  static inline void LogF(const char*, ...) {}
-#endif
+#include "log.h"
 
-// ============================== Globals ==============================
-static REAPER_PLUGIN_HINSTANCE g_hInst = nullptr;
-static HWND   g_hwndParent = nullptr;
-static int    g_command_id = 0;
+// ==================== include Globals and helpers ====================
 
-static const char* kDockIdent  = "reaper_webview";
-static const char* kDefaultURL = "https://www.reaper.fm/";
-static const char* kTitleBase  = "WebView"; // «дефолт» для логики
+#include "api.h"
+#include "globals.h"   // extern-глобалы/прототипы
+#include "helpers.h"
 
-#ifdef _WIN32
-static HWND   g_dlg = nullptr;
-static wil::com_ptr<ICoreWebView2Controller> g_controller;
-static wil::com_ptr<ICoreWebView2>           g_webview;
-static HMODULE g_hWebView2Loader = nullptr;
-static bool   g_com_initialized = false;
-#else
-static HWND       g_dlg = nullptr;
-static WKWebView* g_webView = nil;
-#endif
-
-// заголовки/панель
-static std::string g_lastTabTitle;
-static std::string g_lastWndText;
-
-static std::string g_titleOverride = kTitleBase; // API SetTitle; "WebView" == дефолтная логика
-
-// док-состояние (для инфо/refresh)
-static int   g_last_dock_idx   = -1;
-static bool  g_last_dock_float = false;
-static int   g_want_dock_on_create = -1; // -1 unknown(first run), 0 undock, 1 dock
-
-// панель (в доке)
-static const int IDC_TITLEBAR = 1002;
-#ifdef _WIN32
-static HWND   g_titleBar = nullptr;
-static HFONT  g_titleFont = nullptr;
-static HBRUSH g_titleBrush = nullptr;
-static COLORREF g_titleTextColor = RGB(0,0,0);
-static COLORREF g_titleBkColor   = GetSysColor(COLOR_BTNFACE);
-static int    g_titleBarH = 24;       // фикс, без привязки к системному DPI
-static int    g_titlePadX = 8;        // отступ слева
-#else
-static NSView*      g_titleBarView = nil;
-static NSTextField* g_titleLabel   = nil;
-static CGFloat      g_titleBarH    = 24.0;
-static CGFloat      g_titlePadX    = 8.0;
-#endif
-
-// fwd
-static INT_PTR WINAPI WebViewDlgProc(HWND, UINT, WPARAM, LPARAM);
-static void OpenOrActivate(const std::string& url);
-static bool g_api_registered  = false;
-static bool g_cmd_registered  = false;
-
-static std::unordered_map<std::string,int> g_registered_commands;
-static std::unordered_map<int, CommandHandler> g_cmd_handlers;
-
-// Важно: gaccel_register_t должен жить, пока плагин жив.
-// Храним указатели на отдельные объекты, чтобы их адреса не менялись.
-static std::vector<std::unique_ptr<gaccel_register_t>> g_gaccels;
-static const UINT WM_SWELL_POST_UNDOCK_FIXSTYLE = WM_USER + 0x101;
-
-// ============================== helpers ==============================
-#ifdef _WIN32
-static std::wstring Widen(const std::string& s)
-{
-  if (s.empty()) return std::wstring();
-  int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-  std::wstring w; w.resize(n ? (n-1) : 0);
-  if (n > 1) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], n);
-  return w;
-}
-static std::string Narrow(const std::wstring& w)
-{
-  if (w.empty()) return std::string();
-  int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
-  std::string s; s.resize(n ? (n-1) : 0);
-  if (n > 1) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, &s[0], n, nullptr, nullptr);
-  return s;
-}
-#endif
-
-static inline std::string ToLower(std::string s){ for (auto& c:s) c=(char)tolower((unsigned char)c); return s; }
-
-// host[:port] (порт скрыть если http:80 / https:443)
-static std::string ExtractDomainFromUrl(const std::string& url)
-{
-  if (url.empty()) return {};
-  size_t scheme_end = url.find("://");
-  std::string scheme; size_t host_start = 0;
-  if (scheme_end != std::string::npos){ scheme = url.substr(0, scheme_end); host_start = scheme_end+3; }
-  std::string scheme_l = ToLower(scheme);
-
-  size_t end = url.find_first_of("/?#", host_start);
-  std::string hostport = url.substr(host_start, (end==std::string::npos)?std::string::npos:(end-host_start));
-
-  size_t at = hostport.rfind('@'); if (at != std::string::npos) hostport = hostport.substr(at+1);
-
-  std::string host = hostport, port_str;
-  if (!hostport.empty() && hostport[0]=='[') {
-    size_t rb = hostport.find(']'); if (rb!=std::string::npos){ host=hostport.substr(0,rb+1); if (rb+1<hostport.size() && hostport[rb+1]==':') port_str=hostport.substr(rb+2); }
-  } else {
-    size_t colon = hostport.rfind(':');
-    if (colon!=std::string::npos){ host=hostport.substr(0,colon); port_str=hostport.substr(colon+1); }
-  }
-  if (!host.empty() && host[0] != '[' && host.rfind("www.",0)==0) host = host.substr(4);
-
-  bool drop_port = false;
-  if (!port_str.empty()){
-    int p=0; for(char c:port_str){ if(c<'0'||c>'9'){ p=-1; break;} p=p*10+(c-'0');}
-    if (p>0 && ((scheme_l=="http" && p==80) || (scheme_l=="https" && p==443))) drop_port = true;
-  }
-  return drop_port || port_str.empty() ? host : (host + ":" + port_str);
-}
-
-static void SetWndText(HWND hwnd, const std::string& s)
-{
-  if (g_lastWndText == s) return;
-#ifdef _WIN32
-  SetWindowTextA(hwnd, s.c_str());
-#else
-  SetWindowText(hwnd, s.c_str());
-#endif
-  g_lastWndText = s;
-}
-
-static void SaveDockState(HWND hwnd)
-{
-  bool ff=false; int ii=-1;
-  HWND cand[3] = { hwnd, GetParent(hwnd), GetAncestor(hwnd, GA_ROOT) };
-  for (int k=0; k<3; ++k)
-  {
-    HWND h = cand[k]; if (!h) continue;
-    bool f=false; int i = DockIsChildOfDock ? DockIsChildOfDock(h, &f) : -1;
-    if (i >= 0) { g_last_dock_idx = i; g_last_dock_float = f; return; }
-  }
-  g_last_dock_idx = -1; g_last_dock_float = false;
-}
-
-static void SetTabTitleInplace(HWND hwnd, const std::string& tabCaption)
-{
-  SetWndText(hwnd, tabCaption);
-  if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
-  if (DockWindowRefresh) DockWindowRefresh();
-}
-
-static inline void SafePluginRegister(const char* name, void* p)
-{
-  if (!plugin_register || !name || !*name) return;
-  plugin_register(name, p);
-}
-static inline void SafePluginRegister(const char* name, const char* sig)
-{ SafePluginRegister(name, (void*)sig); }
-
-// удобный helper для снятия регистрации
-static inline void SafePluginRegisterNull(const char* name) {
-  SafePluginRegister(name, (void*)NULL);
-}
-
-static void PlatformMakeTopLevel(HWND hwnd)
-{
-#ifdef _WIN32
-  LONG_PTR st  = GetWindowLongPtr(hwnd, GWL_STYLE);
-  LONG_PTR exs = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-  st &= ~WS_CHILD; st |= WS_OVERLAPPEDWINDOW;
-  SetWindowLongPtr(hwnd, GWL_STYLE, st);
-  SetWindowLongPtr(hwnd, GWL_EXSTYLE, exs & ~WS_EX_TOOLWINDOW);
-  SetParent(hwnd, NULL);
-  RECT rr{}; GetWindowRect(hwnd, &rr);
-  int w = rr.right-rr.left, h = rr.bottom-rr.top;
-  if (w < 200 || h < 120) { w = 900; h = 600; }
-  SetWindowPos(hwnd, NULL, rr.left, rr.top, w, h,
-               SWP_NOZORDER|SWP_FRAMECHANGED|SWP_SHOWWINDOW);
-  ShowWindow(hwnd, SW_SHOWNORMAL);
-  SetForegroundWindow(hwnd);
-#else
-  // ШАГ 1: Используем SWELL API, который работает.
-  // Это создаст окно, но без возможности изменения размера.
-  LogRaw("[PlatformMakeTopLevel] Reparenting with SetParent(NULL)...");
-  SetParent(hwnd, NULL);
-
-  // ШАГ 2: Задаем позицию и показываем окно стандартными средствами SWELL.
-  RECT r;
-  GetWindowRect(hwnd, &r);
-  int w = r.right - r.left, h = r.bottom - r.top;
-  if (w < 200 || h < 120) { w = 900; h = 600; }
-
-  RECT reaper_r;
-  GetWindowRect(g_hwndParent, &reaper_r);
-  int x = reaper_r.left + (reaper_r.right - reaper_r.left - w) / 2;
-  int y = reaper_r.top + (reaper_r.bottom - reaper_r.top - h) / 2;
-
-  SetWindowPos(hwnd, NULL, x, y, w, h, SWP_NOZORDER | SWP_SHOWWINDOW);
-  ShowWindow(hwnd, SW_SHOW);
-  SetForegroundWindow(hwnd);
-
-  // ШАГ 3: Отправляем себе отложенное сообщение, чтобы исправить стиль окна.
-  // К моменту его обработки, [host window] уже будет валидным.
-  PostMessage(hwnd, WM_SWELL_POST_UNDOCK_FIXSTYLE, 0, 0);
-#endif
-}
-
-// ============================== Title panel (dock) ==============================
+// ======================== Title panel (dock) =========================
 #ifdef _WIN32
 static void DestroyTitleGdi()
 {
@@ -322,7 +29,7 @@ static void DestroyTitleGdi()
 }
 static void EnsureTitleBarCreated(HWND hwnd)
 {
-  if (g_titleBar && !IsWindow(g_titleBar)) g_titleBar = nullptr; // <=== анти-зомби
+  if (g_titleBar && !IsWindow(g_titleBar)) g_titleBar = nullptr;
   if (g_titleBar) return;
   LOGFONT lf{}; SystemParametersInfo(SPI_GETICONTITLELOGFONT, sizeof(lf), &lf, 0);
   lf.lfHeight = -12; lf.lfWeight = FW_SEMIBOLD;
@@ -336,7 +43,7 @@ static void EnsureTitleBarCreated(HWND hwnd)
                                (HINSTANCE)g_hInst, NULL);
   if (g_titleBar && g_titleFont) SendMessage(g_titleBar, WM_SETFONT, (WPARAM)g_titleFont, TRUE);
 }
-static void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
+void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
   RECT rc; GetClientRect(hwnd, &rc);
   int top = 0;
@@ -367,7 +74,7 @@ static void EnsureTitleBarCreated(HWND hwnd)
   [g_titleBarView addSubview:g_titleLabel]; [host addSubview:g_titleBarView];
   [g_titleBarView setHidden:YES];
 }
-static void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
+void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
   NSView* host = (NSView*)hwnd; if (!host) return;
   CGFloat top = 0;
@@ -404,25 +111,25 @@ static void UpdateTitleBarUI(HWND hwnd, const std::string& domain, const std::st
   LayoutTitleBarAndWebView(hwnd, wantVisible);
 }
 
-// ============================== титулы (общая логика) ==============================
-static void UpdateTitlesExtractAndApply(HWND hwnd)
+// ============================== Titles (common) ==============================
+void UpdateTitlesExtractAndApply(HWND hwnd)
 {
   std::string domain, pageTitle;
 
-#ifdef _WIN32
-  if (g_webview)
-  {
-    wil::unique_cotaskmem_string wsrc, wtitle;
-    if (SUCCEEDED(g_webview->get_Source(&wsrc))  && wsrc)  domain    = ExtractDomainFromUrl(Narrow(wsrc.get()));
-    if (SUCCEEDED(g_webview->get_DocumentTitle(&wtitle)) && wtitle) pageTitle = Narrow(wtitle.get());
-  }
-#else
-  if (g_webView)
-  {
-    NSURL* u = g_webView.URL; if (u) domain = ExtractDomainFromUrl([[u absoluteString] UTF8String]);
-    NSString* t = g_webView.title; if (t) pageTitle = [t UTF8String];
-  }
-#endif
+  #ifdef _WIN32
+    if (g_webview)
+    {
+      wil::unique_cotaskmem_string wsrc, wtitle;
+      if (SUCCEEDED(g_webview->get_Source(&wsrc))  && wsrc)  domain    = ExtractDomainFromUrl(Narrow(std::wstring(wsrc.get())));
+      if (SUCCEEDED(g_webview->get_DocumentTitle(&wtitle)) && wtitle) pageTitle = Narrow(std::wstring(wtitle.get()));
+    }
+  #else
+    if (g_webView)
+    {
+      NSURL* u = g_webView.URL; if (u) domain = ExtractDomainFromUrl([[u absoluteString] UTF8String]);
+      NSString* t = g_webView.title; if (t) pageTitle = [t UTF8String];
+    }
+  #endif
 
   SaveDockState(hwnd);
   const bool inDock = (g_last_dock_idx >= 0);
@@ -431,7 +138,6 @@ static void UpdateTitlesExtractAndApply(HWND hwnd)
 
   if (defaultMode)
   {
-    // док: вкладка "WebView", панель DOMAIN[:port] - TITLE
     if (inDock)
     {
       const std::string tabCaption = kTitleBase;
@@ -445,17 +151,15 @@ static void UpdateTitlesExtractAndApply(HWND hwnd)
     }
     else
     {
-      // андок: просто "DOMAIN[:port] - TITLE"
       std::string wndCaption = domain.empty() ? "…" : domain;
       if (!pageTitle.empty()) wndCaption += " - " + pageTitle;
       SetWndText(hwnd, wndCaption);
-      UpdateTitleBarUI(hwnd, domain, pageTitle, false, true); // панель скрыта макетом
+      UpdateTitleBarUI(hwnd, domain, pageTitle, false, true);
       LogF("[TitleUpdate] undock caption='%s'", wndCaption.c_str());
     }
   }
   else
   {
-    // кастомный заголовок
     if (inDock)
     {
       if (g_titleOverride != g_lastTabTitle)
@@ -464,7 +168,7 @@ static void UpdateTitlesExtractAndApply(HWND hwnd)
         g_lastTabTitle = g_titleOverride;
       }
       SetTabTitleInplace(hwnd, g_titleOverride);
-      UpdateTitleBarUI(hwnd, domain, pageTitle, true, false); // панель скрыта
+      UpdateTitleBarUI(hwnd, domain, pageTitle, true, false);
     }
     else
     {
@@ -475,17 +179,17 @@ static void UpdateTitlesExtractAndApply(HWND hwnd)
   }
 }
 
-// ============================== диалог/докер ==============================
+// ============================== dlg/docker ==============================
 #ifndef _WIN32
 #define IDD_WEBVIEW 2001
-SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(
-  IDD_WEBVIEW,
-  WS_CAPTION|WS_THICKFRAME|WS_SYSMENU|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
-  "WebView",
-  900, 600, 1.0
-)
-  { "", -1, "customcontrol", WS_CHILD|WS_VISIBLE, 0, 0, 300, 200, 0 }
-SWELL_DEFINE_DIALOG_RESOURCE_END(IDD_WEBVIEW)
+  SWELL_DEFINE_DIALOG_RESOURCE_BEGIN(
+    IDD_WEBVIEW,
+    WS_CAPTION|WS_THICKFRAME|WS_SYSMENU|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
+    "WebView",
+    900, 600, 1.0
+  )
+    { "", -1, "customcontrol", WS_CHILD|WS_VISIBLE, 0, 0, 300, 200, 0 }
+  SWELL_DEFINE_DIALOG_RESOURCE_END(IDD_WEBVIEW)
 #endif
 
 static void SizeWebViewToClient(HWND hwnd)
@@ -497,254 +201,9 @@ static void SizeWebViewToClient(HWND hwnd)
 }
 
 // ============================== WebView init ==============================
-#ifdef _WIN32
-static HMODULE LoadWebView2Loader()
-{
-  // 1) пробуем короткое имя (вдруг REAPER не ограничил поиск)
-  HMODULE h = LoadLibraryA("WebView2Loader.dll");
-  if (h) { LogRaw("LoadLibrary(WebView2Loader.dll) -> OK (default search)"); return h; }
-
-  // 2) директория плагина
-  char mod[MAX_PATH]{};
-  GetModuleFileNameA((HMODULE)g_hInst, mod, MAX_PATH);
-  std::string dir = mod;
-  auto p = dir.find_last_of("\\/"); if (p != std::string::npos) dir.resize(p);
-  std::string full = dir + "\\WebView2Loader.dll";
-  h = LoadLibraryA(full.c_str());
-  if (h) { LogF("LoadLibrary -> OK (plugin dir): %s", full.c_str()); return h; }
-
-  // 3) директория REAPER.exe (про запас)
-  char exe[MAX_PATH]{};
-  GetModuleFileNameA(NULL, exe, MAX_PATH);
-  dir = exe; p = dir.find_last_of("\\/"); if (p != std::string::npos) dir.resize(p);
-  full = dir + "\\WebView2Loader.dll";
-  h = LoadLibraryA(full.c_str());
-  if (h) { LogF("LoadLibrary -> OK (reaper.exe dir): %s", full.c_str()); return h; }
-
-  DWORD gle = GetLastError();
-  LogF("LoadLibrary(WebView2Loader.dll) FAILED, GetLastError=%lu", gle);
-  return NULL;
-}
-static void StartWebView(HWND hwnd, const std::string& initial_url)
-{
-  if (!g_com_initialized)
-  {
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    g_com_initialized = SUCCEEDED(hr);
-    LogF("CoInitializeEx -> 0x%lX (ok=%d)", (long)hr, (int)g_com_initialized);
-  }
-
-  const char* res = GetResourcePath ? GetResourcePath() : nullptr;
-  std::string base = (res && *res) ? std::string(res) : ".";
-  std::string udf  = base + "\\WebView2Data";
-  LogF("userDataFolder: %s", udf.c_str());
-  _mkdir(udf.c_str());
-
-  if (!g_hWebView2Loader)
-  {
-    g_hWebView2Loader = LoadWebView2Loader();
-    LogF("LoadLibrary(WebView2Loader) -> %p", (void*)g_hWebView2Loader);
-  }
-  if (!g_hWebView2Loader) { LogRaw("FATAL: missing WebView2Loader.dll"); return; }
-
-  using PFN_GetVer = HRESULT (STDMETHODCALLTYPE *)(PCWSTR, LPWSTR*);
-  if (auto pGetVer = (PFN_GetVer)GetProcAddress(g_hWebView2Loader, "GetAvailableCoreWebView2BrowserVersionString"))
-  {
-    LPWSTR ver = nullptr; HRESULT hr = pGetVer(nullptr, &ver);
-    LogF("GetAvailableCoreWebView2BrowserVersionString -> hr=0x%lX ver=%S", (long)hr, ver?ver:L"(null)");
-    if (ver) CoTaskMemFree(ver);
-  }
-
-  using CreateEnv_t = HRESULT (STDMETHODCALLTYPE*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*,
-    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*);
-  auto pCreateEnv = (CreateEnv_t)GetProcAddress(g_hWebView2Loader, "CreateCoreWebView2EnvironmentWithOptions");
-  LogF("GetProcAddress(CreateCoreWebView2EnvironmentWithOptions) -> %p", (void*)pCreateEnv);
-  if (!pCreateEnv) { LogRaw("FATAL: CreateCoreWebView2EnvironmentWithOptions not found"); return; }
-
-  std::wstring wurl; wurl.assign(initial_url.begin(), initial_url.end());
-  std::wstring wudf; wudf.assign(udf.begin(), udf.end());
-
-  LogRaw("Start WebView2 environment...");
-  HRESULT hrEnv = pCreateEnv(nullptr, wudf.c_str(), nullptr,
-    Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-      [hwnd, wurl](HRESULT result, ICoreWebView2Environment* env)->HRESULT
-      {
-        LogF("[EnvCompleted] hr=0x%lX env=%p", (long)result, (void*)env);
-        if (FAILED(result) || !env) return S_OK;
-
-        env->CreateCoreWebView2Controller(hwnd,
-          Microsoft::WRL::Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-            [hwnd, wurl](HRESULT result, ICoreWebView2Controller* controller)->HRESULT
-            {
-              LogF("[ControllerCompleted] hr=0x%lX controller=%p", (long)result, (void*)controller);
-              if (!controller) return S_OK;
-              g_controller = controller;
-              g_controller->get_CoreWebView2(&g_webview);
-
-              if (g_webview)
-              {
-                wil::com_ptr<ICoreWebView2Settings> settings;
-                if (SUCCEEDED(g_webview->get_Settings(&settings)) && settings)
-                  settings->put_AreDefaultContextMenusEnabled(FALSE);
-                
-                // === ADD: JS bridge for right-click inside WebView2 ===
-                {
-                  static const wchar_t* kFRZCtxJS = LR"JS(
-                    window.addEventListener('contextmenu', function(e){
-                      e.preventDefault();
-                      var scale = window.devicePixelRatio || 1;
-                      var px = Math.round(e.screenX * scale);
-                      var py = Math.round(e.screenY * scale);
-                      var s = 'CTX|' + px + '|' + py;
-                      if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(s);
-                    }, true);
-                  )JS";
-                  g_webview->AddScriptToExecuteOnDocumentCreated(
-                    kFRZCtxJS,
-                    Microsoft::WRL::Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
-                      [](HRESULT /*ec*/, PCWSTR /*id*/) -> HRESULT { return S_OK; }
-                    ).Get());
-                }
-
-                // Receive 'CTX|x|y' and show the same local dock menu
-                g_webview->add_WebMessageReceived(
-                  Microsoft::WRL::Callback<ICoreWebView2WebMessageReceivedEventHandler>(
-                    [](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args)->HRESULT {
-                      wil::unique_cotaskmem_string json;
-                      if (SUCCEEDED(args->get_WebMessageAsJson(&json)) && json) {
-                        std::string s = Narrow(json.get());
-                        if (!s.empty() && s.front()=='"' && s.back()=='"') s = s.substr(1, s.size()-2);
-                        if (s.rfind("CTX|", 0) == 0) {
-                          int sx=0, sy=0;
-                          #ifdef _WIN32
-                          sscanf_s(s.c_str()+4, "%d|%d", &sx, &sy);
-                          #else
-                          sscanf(s.c_str()+4, "%d|%d", &sx, &sy);
-                          #endif
-                          PostMessage(g_dlg, WM_CONTEXTMENU, (WPARAM)g_dlg, MAKELPARAM(sx, sy));
-                        }
-                      }
-                      return S_OK;
-                    }).Get(), nullptr);
-                // === END ADD ===
-
-                // после получения g_webview (сразу рядом с остальными add_* хендлерами)
-                Microsoft::WRL::ComPtr<ICoreWebView2_13> wv13;
-                if (g_webview && SUCCEEDED(g_webview.get()->QueryInterface(IID_PPV_ARGS(&wv13)))) {
-                  wv13->add_ContextMenuRequested(
-                    Microsoft::WRL::Callback<ICoreWebView2ContextMenuRequestedEventHandler>(
-                      [](ICoreWebView2* /*sender*/, ICoreWebView2ContextMenuRequestedEventArgs* args)->HRESULT {
-                        // Полностью подавляем дефолтное меню WebView
-                        args->put_Handled(TRUE);
-                        return S_OK;
-                      }).Get(),
-                    nullptr);
-                }
-
-                g_webview->add_DocumentTitleChanged(
-                  Microsoft::WRL::Callback<ICoreWebView2DocumentTitleChangedEventHandler>(
-                    [](ICoreWebView2*, IUnknown*)->HRESULT
-                    { UpdateTitlesExtractAndApply(g_dlg); return S_OK; }).Get(), nullptr);
-
-                g_webview->add_NavigationStarting(
-                  Microsoft::WRL::Callback<ICoreWebView2NavigationStartingEventHandler>(
-                    [](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args)->HRESULT
-                    {
-                      wil::unique_cotaskmem_string uri;
-                      if (args && SUCCEEDED(args->get_Uri(&uri))) LogF("[NavigationStarting] %S", uri.get());
-                      UpdateTitlesExtractAndApply(g_dlg);
-                      return S_OK;
-                    }).Get(), nullptr);
-
-                g_webview->add_NavigationCompleted(
-                  Microsoft::WRL::Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                    [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args)->HRESULT
-                    {
-                      BOOL ok = FALSE; if (args) args->get_IsSuccess(&ok);
-                      COREWEBVIEW2_WEB_ERROR_STATUS st = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
-                      if (args) args->get_WebErrorStatus(&st);
-                      LogF("[NavigationCompleted] ok=%d status=%d", (int)ok, (int)st);
-                      UpdateTitlesExtractAndApply(g_dlg);
-                      return S_OK;
-                    }).Get(), nullptr);
-              }
-
-              RECT rc; GetClientRect(hwnd, &rc);
-              LayoutTitleBarAndWebView(hwnd, false);
-              g_controller->put_IsVisible(TRUE);
-              LogRaw("Navigate initial URL...");
-              if (g_webview) g_webview->Navigate(wurl.c_str());
-              UpdateTitlesExtractAndApply(hwnd);
-              return S_OK;
-            }).Get());
-        return S_OK;
-      }).Get());
-  LogF("CreateCoreWebView2EnvironmentWithOptions returned 0x%lX", (long)hrEnv);
-}
-#else
-@interface FRZWebViewDelegate : NSObject <WKNavigationDelegate, WKScriptMessageHandler>
-@end
-@implementation FRZWebViewDelegate
-- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation
-{ UpdateTitlesExtractAndApply((HWND)g_dlg); }
-- (void)userContentController:(WKUserContentController *)userContentController
-      didReceiveScriptMessage:(WKScriptMessage *)message
-{
-  if (![message.name isEqualToString:@"frzCtx"]) return;
-
-  // Глобальная позиция курсора в системе Cocoa: (0,0) внизу слева
-  NSPoint p = [NSEvent mouseLocation];
-
-  // Ничего не инвертируем и не сдвигаем по экранам
-  int sx = (int)llround(p.x);
-  int sy = (int)llround(p.y);
-
-  // Показываем меню (любой из вариантов)
-  PostMessage((HWND)g_dlg, WM_CONTEXTMENU, (WPARAM)g_dlg, MAKELPARAM(sx, sy));
-  // или:
-  // ShowLocalDockMenu((HWND)g_dlg, sx, sy);
-}
-@end
-static FRZWebViewDelegate* g_delegate = nil;
-
-static void StartWebView(HWND hwnd, const std::string& initial_url)
-{
-  NSView* host = (NSView*)hwnd; if (!host) return;
-  WKWebViewConfiguration* cfg = [[WKWebViewConfiguration alloc] init];
-  // === ADD: set up user content controller, JS hook for contextmenu ===
-  WKUserContentController* ucc = [[WKUserContentController alloc] init];
-  [cfg setUserContentController:ucc];
-  // === END ADD ===
-  g_webView = [[WKWebView alloc] initWithFrame:[host bounds] configuration:cfg];
-  g_delegate = [[FRZWebViewDelegate alloc] init];
-  g_webView.navigationDelegate = g_delegate;
-  // === ADD: inject script and hook message handler ===
-  NSString *js =
-  @"(function(){"
-    // Глушим собственное меню страницы и не даём браузеру выделять слово по ПКМ
-    "window.addEventListener('contextmenu', function(e){ e.preventDefault(); "
-      "try{ window.webkit.messageHandlers.frzCtx.postMessage('CTX'); }catch(_){ }"
-    "}, true);"
-
-    // Глушим выделение текста вообще
-    "var st = document.createElement('style');"
-    "st.textContent='*{ -webkit-user-select:none !important; user-select:none !important; }';"
-    "document.documentElement.appendChild(st);"
-
-    // Глушим клик правой кнопкой как событие (чтобы не было доп. выделений)
-    "window.addEventListener('mousedown', function(e){ if(e.button===2){ e.preventDefault(); } }, true);"
-  "})();";
-  WKUserScript* us = [[WKUserScript alloc] initWithSource:js injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:NO];
-  [ucc addUserScript:us];
-  [ucc addScriptMessageHandler:g_delegate name:@"frzCtx"];
-  // === END ADD ===
-  [g_webView setAutoresizingMask:(NSViewWidthSizable|NSViewHeightSizable)];
-  [host addSubview:g_webView];
-
-  NSString* s = [NSString stringWithUTF8String:initial_url.c_str()];
-  NSURL* u = [NSURL URLWithString:s]; if (u) [g_webView loadRequest:[NSURLRequest requestWithURL:u]];
-  UpdateTitlesExtractAndApply(hwnd);
-}
+#ifndef WEBVIEWINITIALIZED
+  #define WEBVIEWINITIALIZED
+  #include "webview.h"
 #endif
 
 // ============================== контекстное меню дока ==============================
@@ -765,7 +224,6 @@ static bool QueryDockState(HWND hwnd, bool* outFloat, int* outIdx)
   *outFloat=false; *outIdx=-1;
   return false;
 }
-
 
 static void RememberWantDock(HWND hwnd)
 {
@@ -793,17 +251,15 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
     bool nowFloat=false; int nowIdx=-1;
     const bool nowDock = QueryDockState(hwnd,&nowFloat,&nowIdx);
 
-  if (nowDock) {
-    // было докнуто — снимаем с дока
-    LogRaw("[Undock] Removing from dock...");
-    if (DockWindowRemove) DockWindowRemove(hwnd); PlatformMakeTopLevel(hwnd);
-  } else {
-    // было ан-док — пристыковываем
-    LogRaw("[Dock] Adding to dock...");
-    if (DockWindowAddEx) DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
-    if (DockWindowActivate) DockWindowActivate(hwnd);
-  }
-  UpdateTitlesExtractAndApply(hwnd);
+    if (nowDock) {
+      LogRaw("[Undock] Removing from dock...");
+      if (DockWindowRemove) DockWindowRemove(hwnd); PlatformMakeTopLevel(hwnd);
+    } else {
+      LogRaw("[Dock] Adding to dock...");
+      if (DockWindowAddEx) DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
+      if (DockWindowActivate) DockWindowActivate(hwnd);
+    }
+    UpdateTitlesExtractAndApply(hwnd);
   }
   else if (cmd == 10099) SendMessage(hwnd, WM_CLOSE, 0, 0);
 }
@@ -823,10 +279,8 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       EnsureTitleBarCreated(hwnd);
       LayoutTitleBarAndWebView(hwnd, false);
 
-      // просто для логов
       bool isFloat=false; int idx=-1; (void)QueryDockState(hwnd, &isFloat, &idx);
 
-      // восстановление
       const bool wantDock = (g_want_dock_on_create == 1) || (g_want_dock_on_create < 0);
       if (wantDock && DockWindowAddEx) {
         DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
@@ -870,7 +324,6 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       {
         LogRaw("[POST_UNDOCK_FIXSTYLE] Applying resizable style mask.");
         NSUInteger currentStyleMask = [win styleMask];
-        // Добавляем флаг NSWindowStyleMaskResizable
         [win setStyleMask: currentStyleMask | NSWindowStyleMaskResizable];
       }
     #endif
@@ -879,7 +332,7 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_CONTEXTMENU:
     {
-      int x = GET_LP_X(lp), y = GET_LP_Y(lp);
+      int x = (int)(short)LOWORD(lp), y = (int)(short)HIWORD(lp);
       if (x == -1 && y == -1) { RECT r{}; GetWindowRect(hwnd, &r); x=(r.left+r.right)/2; y=(r.top+r.bottom)/2; }
       ShowLocalDockMenu(hwnd, x, y);
       return 0;
@@ -897,7 +350,7 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_CLOSE:
       LogRaw("[WM_CLOSE]");
-      RememberWantDock(hwnd); // сохранить DOCK/UNDOCK для следующего запуска
+      RememberWantDock(hwnd);
 
       { bool f=false; int idx=-1;
         bool id = DockIsChildOfDock ? (DockIsChildOfDock(hwnd,&f) >= 0) : false;
@@ -911,33 +364,32 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       return 0;
 
     case WM_DESTROY:
-    LogRaw("[WM_DESTROY]");
+      LogRaw("[WM_DESTROY]");
     #ifdef _WIN32
-    // сбрасываем указатель, чтобы панель пересоздалась на новом окне
-    g_titleBar = nullptr;
-    DestroyTitleGdi();
-    if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
-    if (g_com_initialized) { CoUninitialize(); g_com_initialized = false; }
+      g_titleBar = nullptr;
+      DestroyTitleGdi();
+      if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
+      if (g_com_initialized) { CoUninitialize(); g_com_initialized = false; }
     #else
-    g_webView = nil;
-    g_titleBarView = nil; g_titleLabel = nil;
+      g_webView = nil;
+      g_titleBarView = nil; g_titleLabel = nil;
     #endif
-    return 0;
+      return 0;
   }
   return 0;
 }
 
 // ============================== open/activate ==============================
-static void OpenOrActivate(const std::string& url)
+void OpenOrActivate(const std::string& url)
 {
   if (g_dlg && IsWindow(g_dlg))
   {
     bool floating=false;
     const int dockId = DockIsChildOfDock ? DockIsChildOfDock(g_dlg, &floating) : -1;
     if (dockId >= 0) {
-      if (DockWindowActivate) DockWindowActivate(g_dlg);      // док: активируем вкладку
+      if (DockWindowActivate) DockWindowActivate(g_dlg);
     } else {
-      PlatformMakeTopLevel(g_dlg);                            // ан-док: реальный top-level + фокус
+      PlatformMakeTopLevel(g_dlg);
     }
     return;
   }
@@ -965,32 +417,9 @@ static void OpenOrActivate(const std::string& url)
   }
 }
 
-// ============================== API ==============================
-static void API_WEBVIEW_Navigate(const char* url)
-{
-  if (!url || !*url) return;
-#ifdef _WIN32
-  if (!g_dlg || !IsWindow(g_dlg)) { OpenOrActivate(url); return; }
-  if (g_webview) { std::wstring wurl = Widen(std::string(url)); g_webview->Navigate(wurl.c_str()); }
-#else
-  if (!g_dlg || !IsWindow(g_dlg)) { OpenOrActivate(url); return; }
-  if (g_webView) { NSString* s=[NSString stringWithUTF8String:url]; NSURL* u=[NSURL URLWithString:s]; if (u) [g_webView loadRequest:[NSURLRequest requestWithURL:u]]; }
-#endif
-  UpdateTitlesExtractAndApply(g_dlg);
-}
-
-// NEW: SetTitle (default = "WebView")
-static void API_WEBVIEW_SetTitle(const char* title_or_null)
-{
-  g_titleOverride = (title_or_null && *title_or_null) ? std::string(title_or_null) : std::string(kTitleBase);
-  if (g_dlg && IsWindow(g_dlg)) UpdateTitlesExtractAndApply(g_dlg);
-}
-
 // ============================== Hook command ==============================
-
 static bool HookCommandProc(int cmd, int flag)
 {
-  // быстрый путь на случай, если оставишь совместимость со старым кодом
   if (cmd == g_command_id) {
     OpenOrActivate(kDefaultURL);
     return true;
@@ -1004,7 +433,6 @@ static bool HookCommandProc(int cmd, int flag)
 }
 
 // ============================== Handlers ===================================
-
 static bool Act_OpenDefault(int /*flag*/)
 {
   OpenOrActivate(kDefaultURL);
@@ -1012,31 +440,19 @@ static bool Act_OpenDefault(int /*flag*/)
 }
 
 // ============================ structures =============================
-
-// Структура для описания одной API-функции
-struct ApiRegistrationInfo {
-    const char* name;           // e.g., "WEBVIEW_Navigate"
-    const char* signature;      // e.g., "void,const char*"
-    void* functionPointer;  // e.g., (void*)API_WEBVIEW_Navigate
-};
-
-// Структура для описания команды
 struct CommandSpec {
   const char* name;      // "FRZZ_WEBVIEW_OPEN"
   const char* desc;      // "WebView: Open (default url)"
-  CommandHandler handler;// обработчик
+  CommandHandler handler;
 };
 
 static const CommandSpec kCommandSpecs[] = {
   { "FRZZ_WEBVIEW_OPEN", "WebView: Open (default url)", &Act_OpenDefault },
-  // сюда добавляй дальше: { "NAME", "Desc", &Handler }
 };
 
 // ============================== Registration blocks ==============================
-
 static void RegisterCommandId()
 {
-  // регистрируем хук ровно 1 раз
   plugin_register("hookcommand", (void*)HookCommandProc);
 
   for (const auto& spec : kCommandSpecs)
@@ -1047,11 +463,9 @@ static void RegisterCommandId()
     g_registered_commands[spec.name] = id;
     g_cmd_handlers[id] = spec.handler;
 
-    // Совместимость со старым кодом: помним основной экшн (если нужен где-то ещё)
     if (!strcmp(spec.name, "FRZZ_WEBVIEW_OPEN"))
       g_command_id = id;
 
-    // gaccel должен жить в памяти — делаем отдельный объект на каждый экшн
     auto acc = std::make_unique<gaccel_register_t>();
     memset(&acc->accel, 0, sizeof(acc->accel));
     acc->accel.cmd = id;
@@ -1072,38 +486,7 @@ static void UnregisterCommandId()
       plugin_register("command_id", (void*)pair.first.c_str());
       LogF("Unregistered command '%s'", pair.first.c_str());
   }
-  g_registered_commands.clear(); 
-}
-static void RegisterAPI()
-{
-    // Список всех API-функций для регистрации. Легко добавлять новые.
-    const std::vector<ApiRegistrationInfo> apis_to_register = {
-        {
-            "WEBVIEW_Navigate",
-            "void,const char*",
-            (void*)API_WEBVIEW_Navigate
-        },
-        {
-            "WEBVIEW_SetTitle",
-            "void,const char*",
-            (void*)API_WEBVIEW_SetTitle
-        }
-        // Сюда можно легко добавить новые функции
-        // ,{ "NEW_FUNCTION", "ret_type,arg_type", (void*)API_NEW_FUNCTION }
-    };
-
-    for (const auto& api : apis_to_register)
-    {
-        // Формируем имена для регистрации определения и самой функции
-        std::string def_name = "APIdef_" + std::string(api.name);
-        std::string api_name = "API_" + std::string(api.name);
-
-        // Регистрируем
-        plugin_register(def_name.c_str(), (void*)api.signature);
-        plugin_register(api_name.c_str(), api.functionPointer);
-        
-        LogF("Registered API: %s", api.name);
-    }
+  g_registered_commands.clear();
 }
 
 // ============================== Entry ==============================
@@ -1114,23 +497,19 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
 
   if (rec)
   {
-    // Лог до любых отказов — чтобы видеть хотя бы версию хоста
     LogF("Plugin entry: caller=0x%08X plugin=0x%08X",
          rec->caller_version, (unsigned)REAPER_PLUGIN_VERSION);
 
     if (!rec->GetFunc) return 0;
 
-    // НЕ заваливаемся при несовпадении версий — только предупреждаем
     if (rec->caller_version != REAPER_PLUGIN_VERSION)
       LogRaw("WARNING: REAPER/SDK version mismatch. Плагин продолжит работу. "
              "Если что-то не работает — проверьте обновления плагина и/или REAPER.");
 
-    // Загружаем API; НЕ выходим при неполной загрузке — просто логируем, что отстуствует
     const int missing = REAPERAPI_LoadAPI(rec->GetFunc);
     if (missing)
       LogF("REAPERAPI_LoadAPI: missing=%d (продолжаем, используем доступные функции)", missing);
 
-    // Минимально необходимое для работы расширения — plugin_register
     if (!plugin_register)
     {
       LogRaw("FATAL: essential API missing: plugin_register == NULL. "
