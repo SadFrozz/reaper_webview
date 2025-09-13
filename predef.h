@@ -39,7 +39,7 @@
   #ifndef AppendMenuA
   #define AppendMenuA(hMenu, uFlags, uIDNewItem, lpNewItem) InsertMenu(hMenu, -1, MF_BYPOSITION | (uFlags), uIDNewItem, lpNewItem)
   #endif
-  HWND GetAncestor(HWND hwnd, UINT gaFlags)
+  static inline HWND GetAncestor(HWND hwnd, UINT gaFlags)
   {
       if (!hwnd) return NULL;
 
