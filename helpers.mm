@@ -120,18 +120,18 @@ void SetTabTitleInplace(HWND hwnd, const std::string& tabCaption)
   if (DockWindowRefresh)        DockWindowRefresh();
 }
 
-static inline void SafePluginRegister(const char* name, void* p)
+inline void SafePluginRegister(const char* name, void* p)
 {
   if (!plugin_register || !name || !*name) return;
   plugin_register(name, p);
 }
-static inline void SafePluginRegister(const char* name, const char* sig)
+inline void SafePluginRegister(const char* name, const char* sig)
 {
   SafePluginRegister(name, (void*)sig);
 }
 
 // удобный helper для снятия регистрации
-static inline void SafePluginRegisterNull(const char* name)
+inline void SafePluginRegisterNull(const char* name)
 {
   SafePluginRegister(name, (void*)NULL);
 }

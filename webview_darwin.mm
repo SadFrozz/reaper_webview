@@ -6,6 +6,12 @@
 #ifdef __APPLE__
 
 #include "predef.h"
+#include "globals.h"
+#include "helpers.h"
+#include "webview.h"
+
+
+extern WKWebView* g_webView;
 
 @interface FRZWebViewDelegate : NSObject <WKNavigationDelegate, WKScriptMessageHandler>
 @end
