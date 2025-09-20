@@ -31,6 +31,14 @@ static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
   if (rec->titleFont) { DeleteObject(rec->titleFont); rec->titleFont=nullptr; }
   if (rec->titleBrush){ DeleteObject(rec->titleBrush); rec->titleBrush=nullptr; }
   if (rec->titleBar && IsWindow(rec->titleBar)) { DestroyWindow(rec->titleBar); rec->titleBar=nullptr; }
+  // Search panel controls (do not destroy if reused across navigations unless explicitly closed)
+  if (rec->searchPanelHwnd && IsWindow(rec->searchPanelHwnd)) {
+    DestroyWindow(rec->searchPanelHwnd); rec->searchPanelHwnd=nullptr;
+    rec->searchEdit = rec->searchBtnPrev = rec->searchBtnNext = nullptr;
+    rec->searchChkCase = rec->searchChkAll = nullptr;
+    rec->searchCloseBtn = nullptr;
+    rec->searchPanelVisible = false;
+  }
 }
 static void EnsureTitleBarCreated(HWND hwnd)
 {
@@ -62,9 +70,79 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
   else if (rec && rec->titleBar) ShowWindow(rec->titleBar, SW_HIDE);
 
   RECT brc = rc; brc.top += top;
+  // Reserve space at bottom if search panel visible
+  int bottomReserve = 0;
+  if (rec && rec->searchPanelVisible && rec->searchPanelHwnd && IsWindow(rec->searchPanelHwnd)) {
+    RECT prc; GetWindowRect(rec->searchPanelHwnd, &prc);
+    bottomReserve = prc.bottom - prc.top; // panel height
+  }
+  brc.bottom -= bottomReserve;
   if (rec && rec->controller) rec->controller->put_Bounds(brc);
+  // Position search panel at bottom
+  if (rec && rec->searchPanelVisible && rec->searchPanelHwnd && IsWindow(rec->searchPanelHwnd)) {
+    int ph = 0; RECT pr; GetClientRect(rec->searchPanelHwnd, &pr); ph = pr.bottom - pr.top;
+    MoveWindow(rec->searchPanelHwnd, 0, rc.bottom - ph, rc.right - rc.left, ph, TRUE);
+  }
 }
 static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if (rec && rec->titleBar) SetWindowTextW(rec->titleBar, Widen(s).c_str()); }
+
+// ================= Search Panel (Windows) =================
+static const int kSearchPanelHeight = 32; // px
+static void EnsureSearchPanel(WebViewInstanceRecord* rec)
+{
+  if (!rec || !rec->hwnd) return;
+  if (rec->searchPanelHwnd && !IsWindow(rec->searchPanelHwnd)) rec->searchPanelHwnd = nullptr;
+  if (rec->searchPanelHwnd) return; // already created
+  HWND parent = rec->hwnd;
+  rec->searchPanelHwnd = CreateWindowExW(0, L"STATIC", L"", WS_CHILD|WS_VISIBLE|SS_LEFT,
+    0, 0, 10, kSearchPanelHeight, parent, NULL, (HINSTANCE)g_hInst, NULL);
+  if (!rec->searchPanelHwnd) return;
+  HFONT sysFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+  int x = 10; int y = 6; int hCtrl = 20;
+  auto mkEdit = [&](int w){ HWND h=CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, x,y,w,hCtrl,parent,(HMENU)0,(HINSTANCE)g_hInst,NULL); if(h&&sysFont) SendMessageW(h,WM_SETFONT,(WPARAM)sysFont,TRUE); x+=w+6; return h; };
+  auto mkBtn = [&](const wchar_t* txt,int w){ HWND h=CreateWindowExW(0,L"BUTTON",txt,WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,x,y,w,hCtrl,parent,(HMENU)0,(HINSTANCE)g_hInst,NULL); if(h&&sysFont) SendMessageW(h,WM_SETFONT,(WPARAM)sysFont,TRUE); x+=w+6; return h; };
+  auto mkChk = [&](const wchar_t* txt){ int w= (int)(8 + wcslen(txt)*7); HWND h=CreateWindowExW(0,L"BUTTON",txt,WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX,x,y,w,hCtrl,parent,(HMENU)0,(HINSTANCE)g_hInst,NULL); if(h&&sysFont) SendMessageW(h,WM_SETFONT,(WPARAM)sysFont,TRUE); x+=w+12; return h; };
+  rec->searchEdit     = mkEdit(200);
+  rec->searchBtnPrev  = mkBtn(L"Prev",48);
+  rec->searchBtnNext  = mkBtn(L"Next",48);
+  rec->searchChkCase  = mkChk(L"Case");
+  rec->searchChkAll   = mkChk(L"All");
+  // Counter label (Static) placed after checkboxes; dynamic text like "0/0"
+  rec->searchMatchCount = 0; rec->searchMatchIndex = -1;
+  HWND counter = CreateWindowExW(0,L"STATIC",L"0/0",WS_CHILD|WS_VISIBLE|SS_LEFT, x,y+3,60,hCtrl,parent,(HMENU)0,(HINSTANCE)g_hInst,NULL);
+  if(counter&&sysFont) SendMessageW(counter,WM_SETFONT,(WPARAM)sysFont,TRUE);
+  x += 60;
+  // Close button docked to right: create now and reposition later in layout pass
+  rec->searchCloseBtn = CreateWindowExW(0,L"BUTTON",L"X",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 0,y,28,hCtrl,parent,(HMENU)0,(HINSTANCE)g_hInst,NULL);
+  if (rec->searchCloseBtn && sysFont) SendMessageW(rec->searchCloseBtn, WM_SETFONT, (WPARAM)sysFont, TRUE);
+  rec->searchPanelVisible = true;
+}
+
+static void UpdateSearchCounter(WebViewInstanceRecord* rec)
+{
+  if (!rec || !rec->hwnd || !rec->searchPanelHwnd) return;
+  // naive: find static after All checkbox (we didn't store handle; for simplicity iterate children)
+  wchar_t buf[64]; int cur = (rec->searchMatchIndex>=0)?(rec->searchMatchIndex+1):0; int total = rec->searchMatchCount; swprintf(buf,64,L"%d/%d",cur,total);
+  HWND child = GetWindow(rec->hwnd, GW_CHILD);
+  while(child){ wchar_t cls[16]; GetClassNameW(child, cls, 16); if(!wcscmp(cls,L"Static")) {
+      // heuristic: width ~60 and text contains '/'
+      wchar_t t[64]; GetWindowTextW(child,t,64); if (wcschr(t,L'/')) { SetWindowTextW(child, buf); break; }
+    } child = GetWindow(child, GW_HWNDNEXT); }
+}
+
+static void ShowSearchPanel(WebViewInstanceRecord* rec, bool show)
+{
+  if (!rec) return;
+  if (show) {
+    EnsureSearchPanel(rec);
+    if (rec->searchPanelHwnd) ShowWindow(rec->searchPanelHwnd, SW_SHOWNA);
+    rec->searchPanelVisible = true;
+  } else if (rec->searchPanelHwnd) {
+    ShowWindow(rec->searchPanelHwnd, SW_HIDE);
+    rec->searchPanelVisible = false;
+  }
+  if (rec->hwnd) LayoutTitleBarAndWebView(rec->hwnd, false); // recompute bounds
+}
 #else
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
 {
