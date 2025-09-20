@@ -23,11 +23,9 @@
 #include "globals.h"   // extern-глобалы/прототипы
 #include "helpers.h"
 
-#ifdef _WIN32
-// forward declarations (implemented in webview_win.cpp)
+// forward declarations (implemented per-platform in webview_win.cpp / webview_darwin.mm)
 void InstanceSearchApply(WebViewInstanceRecord* rec, const std::string& query, int index, bool highlightAll, bool caseSens);
 void InstanceSearchClear(WebViewInstanceRecord* rec);
-#endif
 
 // ======================== Title panel (dock) =========================
 #ifdef _WIN32
@@ -525,7 +523,8 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
   else if (cmd == 10110) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); InstanceGoBack(r); }
   else if (cmd == 10111) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); InstanceGoForward(r); }
   else if (cmd == 10112) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); InstanceReload(r); }
-  else if (cmd == 10120) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); /* Panel-based search will replace prompt; guarded call for now */ if (r) InstanceFindPrompt(r); }
+  else if (cmd == 10120) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r) { ShowSearchPanelUnified(r, true); }
+  }
   else if (cmd == 10099) SendMessage(hwnd, WM_CLOSE, 0, 0);
 }
 
@@ -828,9 +827,7 @@ static bool Act_SearchActive(int /*flag*/)
 #endif
   // Initial apply if query already present
   if (!rec->searchQuery.empty()) {
-#ifdef _WIN32
     InstanceSearchApply(rec, rec->searchQuery, rec->searchMatchIndex<0?0:rec->searchMatchIndex, rec->searchHighlightAll, rec->searchCaseSensitive);
-#endif
   }
   return true;
 }

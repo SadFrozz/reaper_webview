@@ -16,9 +16,22 @@ void InstanceGoForward(WebViewInstanceRecord* rec) {
   if (!rec || !rec->webView) return; [rec->webView goForward]; }
 void InstanceReload(WebViewInstanceRecord* rec) {
   if (!rec || !rec->webView) return; [rec->webView reload]; }
-void InstanceFindPrompt(WebViewInstanceRecord* rec) {
+// New panel-based search API (macOS)
+void InstanceSearchApply(WebViewInstanceRecord* rec, const std::string& query, int index, bool highlightAll, bool caseSens)
+{
   if (!rec || !rec->webView) return;
-  NSString* js = @"(function(){var q=prompt('Find text:',''); if(q===null) return; q=q.trim(); var old=document.querySelectorAll('mark.__frzfind'); for(var i=0;i<old.length;i++){var m=old[i];var t=document.createTextNode(m.textContent);m.parentNode.replaceChild(t,m);} if(!q){return;} var rx=new RegExp(q.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&'),'gi'); var first=null; function mark(n){ if(n.nodeType!==3) return; var txt=n.nodeValue; var m,last=0; var out=null; while((m=rx.exec(txt))){ if(!out){out=document.createDocumentFragment();} out.appendChild(document.createTextNode(txt.substring(last,m.index))); var hi=document.createElement('mark'); hi.className='__frzfind'; hi.style.background='#ff0'; hi.style.color='#000'; hi.textContent=m[0]; out.appendChild(hi); if(!first) first=hi; last=m.index+m[0].length;} if(out){ out.appendChild(document.createTextNode(txt.substring(last))); n.parentNode.replaceChild(out,n);} } (function walk(el){ if(el.tagName==='SCRIPT'||el.tagName==='STYLE') return; for(var c=el.firstChild;c;){ var next=c.nextSibling; if(c.nodeType===3) mark(c); else walk(c); c=next;} })(document.body); if(first){ first.scrollIntoView({block:'center'}); first.style.outline='2px solid #f80'; setTimeout(function(){if(first) first.style.outline='';},1500);} })();";
+  std::string safe=query; size_t p=0; while((p=safe.find("\\",p))!=std::string::npos){ safe.replace(p,1,"\\\\"); p+=2; }
+  p=0; while((p=safe.find("\"",p))!=std::string::npos){ safe.replace(p,1,"\\\""); p+=2; }
+  char buf[4096]; snprintf(buf,sizeof(buf),
+    "(function(){if(!window.__frzFindApply)return; var r=window.__frzFindApply(\"%s\",%d,%s,%s); if(r){ try{ window.webkit.messageHandlers.frzCtx.postMessage('FINDMETA|'+r.count+'|'+r.index); }catch(e){} } })();",
+    safe.c_str(), index, highlightAll?"true":"false", caseSens?"true":"false");
+  NSString* js = [NSString stringWithUTF8String:buf];
+  [rec->webView evaluateJavaScript:js completionHandler:nil];
+}
+void InstanceSearchClear(WebViewInstanceRecord* rec)
+{
+  if (!rec || !rec->webView) return;
+  NSString* js = @"(function(){ if(window.__frzFindClear) window.__frzFindClear(); })();";
   [rec->webView evaluateJavaScript:js completionHandler:nil];
 }
 bool InstanceCanGoBack(WebViewInstanceRecord* rec) { if (!rec || !rec->webView) return false; return [rec->webView canGoBack]; }
@@ -43,13 +56,19 @@ static void ObserveTitleIfNeeded(WKWebView* wv, HWND hwnd);
       didReceiveScriptMessage:(WKScriptMessage *)message
 {
   if (![message.name isEqualToString:@"frzCtx"]) return;
-
-  // Глобальные координаты курсора (Cocoa: 0,0 — снизу слева)
-  NSPoint p = [NSEvent mouseLocation];
-  int sx = (int)llround(p.x);
-  int sy = (int)llround(p.y);
-
-  if (s_hostHwnd) PostMessage((HWND)s_hostHwnd, WM_CONTEXTMENU, (WPARAM)s_hostHwnd, MAKELPARAM(sx, sy));
+  id body = message.body;
+  if ([body isKindOfClass:[NSString class]]) {
+    NSString* str = (NSString*)body;
+    if ([str hasPrefix:@"CTX"]) {
+      NSPoint p = [NSEvent mouseLocation];
+      int sx = (int)llround(p.x); int sy = (int)llround(p.y);
+      if (s_hostHwnd) PostMessage((HWND)s_hostHwnd, WM_CONTEXTMENU, (WPARAM)s_hostHwnd, MAKELPARAM(sx, sy));
+    } else if ([str hasPrefix:@"FINDMETA|"]) {
+      int cnt=0, idx=0; sscanf([str UTF8String]+9, "%d|%d", &cnt, &idx);
+      WebViewInstanceRecord* rec = GetInstanceByHwnd((HWND)s_hostHwnd);
+      if (rec) { rec->searchMatchCount=cnt; rec->searchMatchIndex=idx; }
+    }
+  }
 }
 @end
 
@@ -70,18 +89,11 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
 
   NSString *js =
   @"(function(){"
-    // Глушим собственное контекстное меню страницы
-    "window.addEventListener('contextmenu', function(e){ e.preventDefault(); "
-      "try{ window.webkit.messageHandlers.frzCtx.postMessage('CTX'); }catch(_){ }"
-    "}, true);"
-
-    // Отключаем выделение
-    "var st = document.createElement('style');"
-    "st.textContent='*{ -webkit-user-select:none !important; user-select:none !important; }';"
-    "document.documentElement.appendChild(st);"
-
-    // Блокируем mousedown правой кнопкой
+    "window.addEventListener('contextmenu', function(e){ e.preventDefault(); try{ window.webkit.messageHandlers.frzCtx.postMessage('CTX'); }catch(_){ } }, true);"
+    "var st = document.createElement('style'); st.textContent='*{ -webkit-user-select:none !important; user-select:none !important; }'; document.documentElement.appendChild(st);"
     "window.addEventListener('mousedown', function(e){ if(e.button===2){ e.preventDefault(); } }, true);"
+    // Search engine
+    "if(!window.__frzFindApply){(function(){function clearMarks(){var old=document.querySelectorAll('mark.__frzfind');for(var i=0;i<old.length;i++){var m=old[i];var t=document.createTextNode(m.textContent);m.parentNode.replaceChild(t,m);}} window.__frzFindClear=clearMarks; window.__frzFindApply=function(q,idx,hiAll,caseSens){clearMarks(); if(!q){return {count:0,index:-1};} var flags=caseSens?'g':'gi'; var rx; try{rx=new RegExp(q.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&'),flags);}catch(e){return {count:0,index:-1};} var matches=[]; function mark(n){ if(n.nodeType!==3) return; var txt=n.nodeValue; var m,last=0; var out=null; while((m=rx.exec(txt))){ if(!out) out=document.createDocumentFragment(); out.appendChild(document.createTextNode(txt.substring(last,m.index))); var hi=document.createElement('mark'); hi.className='__frzfind'; hi.style.background='#fff59d'; hi.style.color='#000'; hi.textContent=m[0]; out.appendChild(hi); matches.push(hi); last=m.index+m[0].length; if(!hiAll) break;} if(out){ out.appendChild(document.createTextNode(txt.substring(last))); n.parentNode.replaceChild(out,n);} } (function walk(el){ if(el.tagName==='SCRIPT'||el.tagName==='STYLE') return; for(var c=el.firstChild;c;){ var n=c.nextSibling; if(c.nodeType===3) mark(c); else walk(c); c=n;} })(document.body); if(!matches.length) return {count:0,index:-1}; if(idx<0) idx=0; if(idx>=matches.length) idx=matches.length-1; var cur=matches[idx]; cur.scrollIntoView({block:'center'}); cur.style.outline='2px solid #f57c00'; return {count:matches.length,index:idx};};})();}"
   "})();";
 
   WKUserScript* us = [[WKUserScript alloc] initWithSource:js

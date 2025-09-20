@@ -34,6 +34,5 @@ ShowPanelMode ParseShowPanel(const std::string& v);
 void InstanceGoBack(WebViewInstanceRecord* rec);
 void InstanceGoForward(WebViewInstanceRecord* rec);
 void InstanceReload(WebViewInstanceRecord* rec);
-void InstanceFindPrompt(WebViewInstanceRecord* rec); // basic JS prompt implementation
 bool InstanceCanGoBack(WebViewInstanceRecord* rec);
 bool InstanceCanGoForward(WebViewInstanceRecord* rec);
