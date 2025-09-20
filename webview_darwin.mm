@@ -9,6 +9,7 @@
 #include "globals.h"
 #include "helpers.h"
 #include "webview.h"
+#include <unordered_map>
 
 
 // Используется пер-инстансовое хранение WKWebView (WebViewInstanceRecord)
@@ -99,7 +100,9 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
 }
 
 // ===================== Title Observation =====================
-static void* kTitleObservationContext = &kTitleObservationContext;
+// Отдельный статический sentinel для KVO контекста
+static int g_titleObsSentinel = 0;
+static void* kTitleObservationContext = &g_titleObsSentinel;
 
 @interface FRZKVOWrapper : NSObject
 @property (nonatomic, assign) HWND hwnd;
@@ -131,6 +134,17 @@ static void ObserveTitleIfNeeded(WKWebView* wv, HWND hwnd)
   [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
 }
 @end
+
+// (Опционально) функция очистки наблюдателей — может вызываться при полном завершении плагина/инстансов
+static void CleanupTitleObservers()
+{
+  for (auto &kv : g_kvoWrappers) {
+    WKWebView* wv = kv.first; FRZKVOWrapper* wrap = kv.second;
+    @try { [wv removeObserver:wrap forKeyPath:@"title" context:kTitleObservationContext]; }
+    @catch(...) { }
+  }
+  g_kvoWrappers.clear();
+}
 
 
 void NavigateExisting(const std::string& url)
