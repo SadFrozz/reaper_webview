@@ -685,7 +685,7 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
     if (g_com_initialized) { CoUninitialize(); g_com_initialized = false; }
 #else
-    g_titleBarView = nil; g_titleLabel = nil;
+  // macOS: per-instance UI элементы уже освобождены при уничтожении окон (нет глобальных g_titleBarView/g_titleLabel)
 #endif
   }
   return 0;

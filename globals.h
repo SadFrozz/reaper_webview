@@ -44,8 +44,12 @@ extern const char* kTitleBase;
   extern HMODULE g_hWebView2Loader;
   extern bool   g_com_initialized;
 #else
-  // macOS: форвард объявление класса (пер-инстансовый webView хранится в WebViewInstanceRecord)
-  class WKWebView; // forward declare Objective-C class
+  // macOS: Objective-C forward declaration (используем @class чтобы не конфликтовать с фреймворком)
+  #ifdef __OBJC__
+    @class WKWebView;
+  #else
+    struct WKWebView; // в чисто C++ контексте достаточно неполного типа
+  #endif
 #endif
 
 // (deprecated globals for title caching removed; caching now per-instance)
