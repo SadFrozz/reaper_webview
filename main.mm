@@ -133,9 +133,10 @@ static void EnsureSearchPanel(WebViewInstanceRecord* rec)
   rec->searchEdit     = mkEdit(200);
   rec->searchBtnPrev  = mkBtn(L"Prev",48);
   rec->searchBtnNext  = mkBtn(L"Next",48);
-  rec->searchChkCase  = mkChk(L"Case");
-  rec->searchChkAll   = mkChk(L"All");
+  rec->searchChkCase  = mkChk(L"Case Sensitive");
+  rec->searchChkAll   = mkChk(L"Highlight All");
   rec->searchMatchCount = 0; rec->searchMatchIndex = -1;
+  // Counter label (baseline aligned with other controls)
   rec->searchCounterLabel = CreateWindowExW(0,L"STATIC",L"0/0",WS_CHILD|WS_VISIBLE|SS_LEFT, 0,0,60,20,rec->searchPanelHwnd,(HMENU)0,(HINSTANCE)g_hInst,NULL);
   if(rec->searchCounterLabel && sysFont) SendMessageW(rec->searchCounterLabel,WM_SETFONT,(WPARAM)sysFont,TRUE);
   rec->searchCloseBtn = CreateWindowExW(0,L"BUTTON",L"X",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 0,0,28,20,rec->searchPanelHwnd,(HMENU)0,(HINSTANCE)g_hInst,NULL);
@@ -237,8 +238,8 @@ static void EnsureSearchPanelMac(WebViewInstanceRecord* rec)
   rec->searchField      = makeField(200);
   rec->searchPrevButton = makeBtn(@"Prev",48);
   rec->searchNextButton = makeBtn(@"Next",48);
-  rec->searchCaseCheck  = makeChk(@"Case");
-  rec->searchAllCheck   = makeChk(@"All");
+  rec->searchCaseCheck  = makeChk(@"Case Sensitive");
+  rec->searchAllCheck   = makeChk(@"Highlight All");
   // Counter label
   rec->searchCounterField = [[NSTextField alloc] initWithFrame:NSMakeRect(x,y+2,60,h)];
   [rec->searchCounterField setEditable:NO]; [rec->searchCounterField setBordered:NO]; [rec->searchCounterField setBezeled:NO]; [rec->searchCounterField setDrawsBackground:NO];
@@ -309,7 +310,7 @@ static void ShowSearchPanelUnified(WebViewInstanceRecord* rec, bool show)
 #endif
 }
 
-static void UpdateSearchCounterUnified(WebViewInstanceRecord* rec)
+void UpdateSearchCounterUnified(WebViewInstanceRecord* rec)
 {
   if (!rec) return;
 #ifdef _WIN32
@@ -624,6 +625,30 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       if ((int)wp == 'F' && (GetKeyState(VK_CONTROL) & 0x8000)) {
         // Swallow Ctrl+F so built-in WebView2 search UI never appears; user assigns their own shortcut to FRZZ_WEBVIEW_SEARCH command.
         return 0; // Do NOT open prompt here (panel command driven)
+      }
+      if ((int)wp == VK_RETURN) {
+        WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+        if (rec && rec->searchPanelVisible && rec->searchMatchCount>0) {
+          bool shift = (GetKeyState(VK_SHIFT) & 0x8000)!=0;
+          if (shift) {
+            rec->searchMatchIndex = (rec->searchMatchIndex<=0)? (rec->searchMatchCount-1) : (rec->searchMatchIndex-1);
+          } else {
+            rec->searchMatchIndex = (rec->searchMatchIndex+1) % rec->searchMatchCount;
+          }
+          InstanceSearchApply(rec, rec->searchQuery, rec->searchMatchIndex, rec->searchHighlightAll, rec->searchCaseSensitive);
+          UpdateSearchCounterUnified(rec);
+          return 0;
+        }
+      }
+      if ((int)wp == VK_ESCAPE) {
+        WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+        if (rec && rec->searchPanelVisible) {
+          InstanceSearchClear(rec);
+          ShowSearchPanelUnified(rec, false);
+          rec->searchQuery.clear(); rec->searchMatchCount=0; rec->searchMatchIndex=-1;
+          UpdateSearchCounterUnified(rec);
+          return 0;
+        }
       }
       break;
     case WM_INITDIALOG:

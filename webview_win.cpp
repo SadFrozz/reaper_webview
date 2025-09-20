@@ -18,6 +18,7 @@
 #include "log.h"
 #include "globals.h"
 #include "helpers.h"
+#include "globals.h"
 void InstanceGoBack(WebViewInstanceRecord* rec) {
   if (!rec || !rec->webview) return;
   rec->webview->GoBack();
@@ -219,7 +220,9 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
                           (function walk(el){ if(el.tagName==='SCRIPT'||el.tagName==='STYLE') return; for(var c=el.firstChild;c;){ var n=c.nextSibling; if(c.nodeType===3) mark(c); else walk(c); c=n;} })(document.body);
                           if(!matches.length) return {count:0,index:-1};
                           if(idx<0) idx=0; if(idx>=matches.length) idx = matches.length-1;
-                          var cur = matches[idx]; cur.scrollIntoView({block:'center'}); cur.style.outline='2px solid #f57c00';
+                          var cur = matches[idx];
+                          for(var i=0;i<matches.length;i++){ var mm=matches[i]; mm.style.outline=''; mm.style.background='#fff59d'; }
+                          cur.scrollIntoView({block:'center'}); cur.style.outline='2px solid #f57c00'; cur.style.background='#ffcf5a';
                           return {count:matches.length, index:idx};
                         };
                       })();
@@ -251,7 +254,7 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
                         } else if (s.rfind("FINDMETA|",0)==0) {
                           int cnt=0, idx=0; sscanf_s(s.c_str()+9, "%d|%d", &cnt, &idx);
                           WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
-                          if (rec) { rec->searchMatchCount = cnt; rec->searchMatchIndex = idx; }
+                          if (rec) { rec->searchMatchCount = cnt; rec->searchMatchIndex = idx; UpdateSearchCounterUnified(rec); }
                         }
                       }
                       return S_OK;

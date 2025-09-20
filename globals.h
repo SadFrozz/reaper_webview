@@ -155,3 +155,5 @@ void NavigateExisting(const std::string& url); // legacy single active instance 
 void NavigateExistingInstance(const std::string& instanceId, const std::string& url);
 // per-instance open/activate (creates window if missing)
 void OpenOrActivateInstance(const std::string& instanceId, const std::string& url);
+// search counter unified updater (implemented in main.mm)
+void UpdateSearchCounterUnified(WebViewInstanceRecord* rec);
