@@ -124,15 +124,9 @@ void PurgeDeadInstances()
 		if (dead) {
 			LogF("[InstancePurge] removing dead record id='%s'", it->first.c_str());
 #ifndef _WIN32
-			// Очистим KVO наблюдатель для title, если зарегистрирован (webview_darwin.mm хранит обёртки в g_kvoWrappers)
-			extern std::unordered_map<class WKWebView*, id> g_kvoWrappers; // forward (тип id для обёртки)
-			if (r->webView) {
-				auto itWrap = g_kvoWrappers.find(r->webView);
-				if (itWrap != g_kvoWrappers.end()) {
-					@try { [r->webView removeObserver:itWrap->second forKeyPath:@"title"]; } @catch(...) {}
-					g_kvoWrappers.erase(itWrap);
-				}
-			}
+			// Снятие KVO наблюдателя теперь инкапсулировано
+			extern "C" void FRZ_RemoveTitleObserverFor(class WKWebView*);
+			if (r->webView) FRZ_RemoveTitleObserverFor(r->webView);
 #endif
 			it = g_instances.erase(it);
 		} else ++it;

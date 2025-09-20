@@ -121,6 +121,18 @@ static void ObserveTitleIfNeeded(WKWebView* wv, HWND hwnd)
   [wv addObserver:wrap forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:kTitleObservationContext];
 }
 
+// Внешняя точка для безопасного снятия наблюдателя по WKWebView (используется из PurgeDeadInstances)
+extern "C" void FRZ_RemoveTitleObserverFor(WKWebView* wv)
+{
+  if (!wv) return;
+  auto it = g_kvoWrappers.find(wv);
+  if (it != g_kvoWrappers.end()) {
+    FRZKVOWrapper* wrap = it->second;
+    @try { [wv removeObserver:wrap forKeyPath:@"title" context:kTitleObservationContext]; } @catch(...) {}
+    g_kvoWrappers.erase(it);
+  }
+}
+
 // Override observeValueForKeyPath via category on FRZKVOWrapper
 @interface FRZKVOWrapper (Observer)
 @end
