@@ -123,6 +123,14 @@ void PurgeDeadInstances()
 #endif
 		if (dead) {
 			LogF("[InstancePurge] removing dead record id='%s'", it->first.c_str());
+#ifndef _WIN32
+			// Очистим KVO наблюдатель для title если есть
+			if (r->webView) {
+				try {
+					[r->webView removeObserver:nil forKeyPath:@"title"]; // защитный вызов
+				} catch(...) {}
+			}
+#endif
 			it = g_instances.erase(it);
 		} else ++it;
 	}
