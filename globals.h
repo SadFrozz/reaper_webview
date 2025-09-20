@@ -104,6 +104,7 @@ struct WebViewInstanceRecord {
   HWND    searchChkCase = nullptr;
   HWND    searchChkAll = nullptr;
   HWND    searchCloseBtn = nullptr;   // the 'X' button
+  HWND    searchCounterLabel = nullptr; // static label for match counter
 #else
   NSView* searchPanelView = nil;      // container view
   NSTextField* searchField = nil;
@@ -112,6 +113,8 @@ struct WebViewInstanceRecord {
   NSButton* searchCaseCheck = nil;
   NSButton* searchAllCheck = nil;
   NSButton* searchCloseButton = nil;  // the 'X'
+  NSTextField* searchCounterField = nil; // counter label
+  void*  searchHelper = nullptr; // reserved for Objective-C helper object (cast id) for actions
 #endif
 };
 

@@ -92,46 +92,63 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
 
 // ================= Search Panel (Windows) =================
 static const int kSearchPanelHeight = 32; // px
+
+static void LayoutSearchPanel(WebViewInstanceRecord* rec)
+{
+  if (!rec || !rec->searchPanelHwnd || !IsWindow(rec->searchPanelHwnd)) return;
+  RECT pr; GetClientRect(rec->searchPanelHwnd, &pr);
+  const int totalW = pr.right - pr.left;
+  const int hCtrl = 20;
+  int y = 6; int x = 10;
+  auto place = [&](HWND h, int w){ if(!h) return; MoveWindow(h, x, y, w, hCtrl, TRUE); x += w + 6; };
+  place(rec->searchEdit, 200);
+  place(rec->searchBtnPrev, 48);
+  place(rec->searchBtnNext, 48);
+  // dynamic width for checkboxes based on text
+  auto widthFromText = [](HWND h){ if(!h) return 40; wchar_t buf[64]; GetWindowTextW(h, buf, 64); int len = (int)wcslen(buf); return 8 + len*7; };
+  place(rec->searchChkCase, widthFromText(rec->searchChkCase));
+  place(rec->searchChkAll, widthFromText(rec->searchChkAll));
+  // Counter fixed width
+  place(rec->searchCounterLabel, 60);
+  // Close button pinned right
+  if (rec->searchCloseBtn) {
+    MoveWindow(rec->searchCloseBtn, totalW - 10 - 28, y, 28, hCtrl, TRUE);
+  }
+}
+
 static void EnsureSearchPanel(WebViewInstanceRecord* rec)
 {
   if (!rec || !rec->hwnd) return;
   if (rec->searchPanelHwnd && !IsWindow(rec->searchPanelHwnd)) rec->searchPanelHwnd = nullptr;
   if (rec->searchPanelHwnd) return; // already created
   HWND parent = rec->hwnd;
-  rec->searchPanelHwnd = CreateWindowExW(0, L"STATIC", L"", WS_CHILD|WS_VISIBLE|SS_LEFT,
+  rec->searchPanelHwnd = CreateWindowExW(0, L"STATIC", L"", WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
     0, 0, 10, kSearchPanelHeight, parent, NULL, (HINSTANCE)g_hInst, NULL);
   if (!rec->searchPanelHwnd) return;
   HFONT sysFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-  int x = 10; int y = 6; int hCtrl = 20;
-  auto mkEdit = [&](int w){ HWND h=CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, x,y,w,hCtrl,parent,(HMENU)0,(HINSTANCE)g_hInst,NULL); if(h&&sysFont) SendMessageW(h,WM_SETFONT,(WPARAM)sysFont,TRUE); x+=w+6; return h; };
-  auto mkBtn = [&](const wchar_t* txt,int w){ HWND h=CreateWindowExW(0,L"BUTTON",txt,WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,x,y,w,hCtrl,parent,(HMENU)0,(HINSTANCE)g_hInst,NULL); if(h&&sysFont) SendMessageW(h,WM_SETFONT,(WPARAM)sysFont,TRUE); x+=w+6; return h; };
-  auto mkChk = [&](const wchar_t* txt){ int w= (int)(8 + wcslen(txt)*7); HWND h=CreateWindowExW(0,L"BUTTON",txt,WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX,x,y,w,hCtrl,parent,(HMENU)0,(HINSTANCE)g_hInst,NULL); if(h&&sysFont) SendMessageW(h,WM_SETFONT,(WPARAM)sysFont,TRUE); x+=w+12; return h; };
+  // Create child controls parented to panel (NOT main window)
+  auto mkEdit = [&](int w){ HWND h=CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 0,0,w,20,rec->searchPanelHwnd,(HMENU)0,(HINSTANCE)g_hInst,NULL); if(h&&sysFont) SendMessageW(h,WM_SETFONT,(WPARAM)sysFont,TRUE); return h; };
+  auto mkBtn = [&](const wchar_t* txt,int w){ HWND h=CreateWindowExW(0,L"BUTTON",txt,WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON,0,0,w,20,rec->searchPanelHwnd,(HMENU)0,(HINSTANCE)g_hInst,NULL); if(h&&sysFont) SendMessageW(h,WM_SETFONT,(WPARAM)sysFont,TRUE); return h; };
+  auto mkChk = [&](const wchar_t* txt){ int w=(int)(8+wcslen(txt)*7); HWND h=CreateWindowExW(0,L"BUTTON",txt,WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX,0,0,w,20,rec->searchPanelHwnd,(HMENU)0,(HINSTANCE)g_hInst,NULL); if(h&&sysFont) SendMessageW(h,WM_SETFONT,(WPARAM)sysFont,TRUE); return h; };
   rec->searchEdit     = mkEdit(200);
   rec->searchBtnPrev  = mkBtn(L"Prev",48);
   rec->searchBtnNext  = mkBtn(L"Next",48);
   rec->searchChkCase  = mkChk(L"Case");
   rec->searchChkAll   = mkChk(L"All");
-  // Counter label (Static) placed after checkboxes; dynamic text like "0/0"
   rec->searchMatchCount = 0; rec->searchMatchIndex = -1;
-  HWND counter = CreateWindowExW(0,L"STATIC",L"0/0",WS_CHILD|WS_VISIBLE|SS_LEFT, x,y+3,60,hCtrl,parent,(HMENU)0,(HINSTANCE)g_hInst,NULL);
-  if(counter&&sysFont) SendMessageW(counter,WM_SETFONT,(WPARAM)sysFont,TRUE);
-  x += 60;
-  // Close button docked to right: create now and reposition later in layout pass
-  rec->searchCloseBtn = CreateWindowExW(0,L"BUTTON",L"X",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 0,y,28,hCtrl,parent,(HMENU)0,(HINSTANCE)g_hInst,NULL);
+  rec->searchCounterLabel = CreateWindowExW(0,L"STATIC",L"0/0",WS_CHILD|WS_VISIBLE|SS_LEFT, 0,0,60,20,rec->searchPanelHwnd,(HMENU)0,(HINSTANCE)g_hInst,NULL);
+  if(rec->searchCounterLabel && sysFont) SendMessageW(rec->searchCounterLabel,WM_SETFONT,(WPARAM)sysFont,TRUE);
+  rec->searchCloseBtn = CreateWindowExW(0,L"BUTTON",L"X",WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 0,0,28,20,rec->searchPanelHwnd,(HMENU)0,(HINSTANCE)g_hInst,NULL);
   if (rec->searchCloseBtn && sysFont) SendMessageW(rec->searchCloseBtn, WM_SETFONT, (WPARAM)sysFont, TRUE);
   rec->searchPanelVisible = true;
+  LayoutSearchPanel(rec);
 }
 
 static void UpdateSearchCounter(WebViewInstanceRecord* rec)
 {
-  if (!rec || !rec->hwnd || !rec->searchPanelHwnd) return;
-  // naive: find static after All checkbox (we didn't store handle; for simplicity iterate children)
+  if (!rec || !rec->searchPanelHwnd || !IsWindow(rec->searchPanelHwnd) || !rec->searchCounterLabel) return;
   wchar_t buf[64]; int cur = (rec->searchMatchIndex>=0)?(rec->searchMatchIndex+1):0; int total = rec->searchMatchCount; swprintf(buf,64,L"%d/%d",cur,total);
-  HWND child = GetWindow(rec->hwnd, GW_CHILD);
-  while(child){ wchar_t cls[16]; GetClassNameW(child, cls, 16); if(!wcscmp(cls,L"Static")) {
-      // heuristic: width ~60 and text contains '/'
-      wchar_t t[64]; GetWindowTextW(child,t,64); if (wcschr(t,L'/')) { SetWindowTextW(child, buf); break; }
-    } child = GetWindow(child, GW_HWNDNEXT); }
+  SetWindowTextW(rec->searchCounterLabel, buf);
 }
 
 static void ShowSearchPanel(WebViewInstanceRecord* rec, bool show)
@@ -145,7 +162,11 @@ static void ShowSearchPanel(WebViewInstanceRecord* rec, bool show)
     ShowWindow(rec->searchPanelHwnd, SW_HIDE);
     rec->searchPanelVisible = false;
   }
-  if (rec->hwnd) LayoutTitleBarAndWebView(rec->hwnd, false); // recompute bounds
+  if (rec->hwnd) {
+    // Preserve title bar visibility decision via UpdateTitlesExtractAndApply call
+    UpdateTitlesExtractAndApply(rec->hwnd);
+    LayoutSearchPanel(rec);
+  }
 }
 #else
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
@@ -219,14 +240,26 @@ static void EnsureSearchPanelMac(WebViewInstanceRecord* rec)
   rec->searchCaseCheck  = makeChk(@"Case");
   rec->searchAllCheck   = makeChk(@"All");
   // Counter label
-  NSTextField* counter = [[NSTextField alloc] initWithFrame:NSMakeRect(x,y+2,60,h)];
-  [counter setEditable:NO]; [counter setBordered:NO]; [counter setBezeled:NO]; [counter setDrawsBackground:NO];
-  [counter setStringValue:@"0/0"]; [rec->searchPanelView addSubview:counter];
+  rec->searchCounterField = [[NSTextField alloc] initWithFrame:NSMakeRect(x,y+2,60,h)];
+  [rec->searchCounterField setEditable:NO]; [rec->searchCounterField setBordered:NO]; [rec->searchCounterField setBezeled:NO]; [rec->searchCounterField setDrawsBackground:NO];
+  [rec->searchCounterField setStringValue:@"0/0"]; [rec->searchPanelView addSubview:rec->searchCounterField];
   x += 60;
   // Close button pinned to right
   rec->searchCloseButton = [[NSButton alloc] initWithFrame:NSMakeRect(host.bounds.size.width-34,y,28,h)];
   [rec->searchCloseButton setTitle:@"X"]; [rec->searchCloseButton setButtonType:NSMomentaryPushInButton];
   [rec->searchPanelView addSubview:rec->searchCloseButton];
+  // Helper wiring
+  if (!rec->searchHelper) {
+    FRZSearchPanelHelper* helper = [[FRZSearchPanelHelper alloc] init];
+    helper.rec = rec; rec->searchHelper = (__bridge_retained void*)helper;
+    // Edit field change notifications
+    [[NSNotificationCenter defaultCenter] addObserver:helper selector:@selector(onEditChange:) name:NSControlTextDidChangeNotification object:rec->searchField];
+    [rec->searchPrevButton setTarget:helper]; [rec->searchPrevButton setAction:@selector(onPrev:)];
+    [rec->searchNextButton setTarget:helper]; [rec->searchNextButton setAction:@selector(onNext:)];
+    [rec->searchCaseCheck setTarget:helper]; [rec->searchCaseCheck setAction:@selector(onCase:)];
+    [rec->searchAllCheck setTarget:helper]; [rec->searchAllCheck setAction:@selector(onAll:)];
+    [rec->searchCloseButton setTarget:helper]; [rec->searchCloseButton setAction:@selector(onClose:)];
+  }
   rec->searchPanelVisible = true;
   [host addSubview:rec->searchPanelView];
 }
@@ -645,6 +678,11 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_SIZE:
       SizeWebViewToClient(hwnd);
+#ifdef _WIN32
+      if (WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd)) {
+        LayoutSearchPanel(rec);
+      }
+#endif
       return 0;
 
     case WM_SWELL_POST_UNDOCK_FIXSTYLE:
@@ -667,6 +705,12 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       int x = (int)(short)LOWORD(lp), y = (int)(short)HIWORD(lp);
       if (x == -1 && y == -1) { RECT r{}; GetWindowRect(hwnd, &r); x=(r.left+r.right)/2; y=(r.top+r.bottom)/2; }
       ShowLocalDockMenu(hwnd, x, y);
+      return 0;
+    }
+    case WM_MBUTTONUP:
+    {
+      // Close on middle-click (dock tab area will route message to child window in most cases)
+      SendMessage(hwnd, WM_CLOSE, 0, 0);
       return 0;
     }
 
@@ -813,6 +857,13 @@ static bool Act_SearchActive(int /*flag*/)
   WebViewInstanceRecord* rec = GetInstanceById(id);
   if (!rec || !rec->hwnd || !IsWindow(rec->hwnd) || !IsWindowVisible(rec->hwnd)) {
     LogRaw("[SearchGuard] No active visible WebView instance to search");
+#ifdef _WIN32
+    MessageBoxW(g_hwndParent?g_hwndParent:nullptr, L"Нет активного WebView для поиска", L"WebView Search", MB_OK|MB_ICONINFORMATION);
+#else
+    // macOS message box via Cocoa
+    NSAlert* alert = [[NSAlert alloc] init];
+    [alert setMessageText:@"Нет активного WebView для поиска"]; [alert addButtonWithTitle:@"OK"]; [alert runModal];
+#endif
     return false;
   }
   // Show panel if hidden

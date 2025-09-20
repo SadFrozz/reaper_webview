@@ -37,6 +37,61 @@ void InstanceSearchClear(WebViewInstanceRecord* rec)
 bool InstanceCanGoBack(WebViewInstanceRecord* rec) { if (!rec || !rec->webView) return false; return [rec->webView canGoBack]; }
 bool InstanceCanGoForward(WebViewInstanceRecord* rec) { if (!rec || !rec->webView) return false; return [rec->webView canGoForward]; }
 
+// ===== Панель поиска: helper для событий (macOS) =====
+@interface FRZSearchPanelHelper : NSObject
+@property (nonatomic, assign) WebViewInstanceRecord* rec;
+@end
+@implementation FRZSearchPanelHelper
+- (void)applyCurrentQueryPreserveIndex:(BOOL)preserveIdx {
+  WebViewInstanceRecord* r = self.rec; if (!r) return;
+  int idx = preserveIdx ? (r->searchMatchIndex<0?0:r->searchMatchIndex) : 0;
+  InstanceSearchApply(r, r->searchQuery, idx, r->searchHighlightAll, r->searchCaseSensitive);
+}
+- (void)onEditChange:(NSNotification*)n {
+  WebViewInstanceRecord* r = self.rec; if(!r) return;
+  if (!r->searchField) return;
+  r->searchQuery = [[r->searchField stringValue] UTF8String];
+  r->searchMatchIndex = 0;
+  [self applyCurrentQueryPreserveIndex:NO];
+}
+- (void)onPrev:(id)sender {
+  WebViewInstanceRecord* r = self.rec; if(!r) return; if (r->searchMatchCount>0) {
+    r->searchMatchIndex = (r->searchMatchIndex<=0)? (r->searchMatchCount-1) : (r->searchMatchIndex-1);
+    [self applyCurrentQueryPreserveIndex:YES];
+  }
+}
+- (void)onNext:(id)sender {
+  WebViewInstanceRecord* r = self.rec; if(!r) return; if (r->searchMatchCount>0) {
+    r->searchMatchIndex = (r->searchMatchIndex+1) % r->searchMatchCount;
+    [self applyCurrentQueryPreserveIndex:YES];
+  }
+}
+- (void)onCase:(id)sender {
+  WebViewInstanceRecord* r = self.rec; if(!r) return;
+  r->searchCaseSensitive = ([r->searchCaseCheck state] == NSControlStateValueOn);
+  r->searchMatchIndex = 0; [self applyCurrentQueryPreserveIndex:NO];
+}
+- (void)onAll:(id)sender {
+  WebViewInstanceRecord* r = self.rec; if(!r) return;
+  r->searchHighlightAll = ([r->searchAllCheck state] == NSControlStateValueOn);
+  [self applyCurrentQueryPreserveIndex:YES];
+}
+- (void)onClose:(id)sender {
+  WebViewInstanceRecord* r = self.rec; if(!r) return;
+  InstanceSearchClear(r);
+  r->searchQuery.clear(); r->searchMatchCount = 0; r->searchMatchIndex = -1;
+  if (r->searchCounterField) [r->searchCounterField setStringValue:@"0/0"];
+  if (r->searchPanelView) [r->searchPanelView setHidden:YES];
+  r->searchPanelVisible = false;
+}
+@end
+
+static void FRZ_UpdateSearchCounterMac(WebViewInstanceRecord* rec) {
+  if (!rec || !rec->searchCounterField) return;
+  int cur = (rec->searchMatchIndex>=0)?(rec->searchMatchIndex+1):0; int total = rec->searchMatchCount;
+  [rec->searchCounterField setStringValue:[NSString stringWithFormat:@"%d/%d",cur,total]];
+}
+
 
 // Используется пер-инстансовое хранение WKWebView (WebViewInstanceRecord)
 
