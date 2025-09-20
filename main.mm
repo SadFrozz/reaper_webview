@@ -80,27 +80,95 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
 { if(!rec) return; if(rec->titleLabel){ [rec->titleLabel removeFromSuperview]; rec->titleLabel=nil;} if(rec->titleBarView){ [rec->titleBarView removeFromSuperview]; rec->titleBarView=nil;} }
 
+// Convert 24-bit int (RGB) -> NSColor
+static inline NSColor* RWVColorFromInt(int v)
+{
+  if (v < 0) return nil;
+  CGFloat r = ((v >> 16) & 0xFF) / 255.0;
+  CGFloat g = ((v >> 8)  & 0xFF) / 255.0;
+  CGFloat b = (v & 0xFF) / 255.0;
+  return [NSColor colorWithCalibratedRed:r green:g blue:b alpha:1.0];
+}
+
+static void UpdateMacTitleBarColors(WebViewInstanceRecord* rec)
+{
+  if (!rec || !rec->titleLabel) return;
+  int bg=-1, tx=-1; GetPanelThemeColorsMac(&bg,&tx);
+  NSColor* bgC = RWVColorFromInt(bg) ?: [NSColor controlBackgroundColor];
+  NSColor* txC = RWVColorFromInt(tx) ?: [NSColor controlTextColor];
+  [rec->titleLabel setBackgroundColor:bgC];
+  [rec->titleLabel setTextColor:txC];
+}
+
 static void EnsureTitleBarCreated(HWND hwnd)
 {
-  WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); if(!rec) return; if(rec->titleBarView) return; NSView* host=(NSView*)hwnd; if(!host) return;
-  rec->titleBarView=[[NSView alloc] initWithFrame:NSMakeRect(0,0, host.bounds.size.width, g_titleBarH)];
-  rec->titleLabel=[[NSTextField alloc] initWithFrame:NSMakeRect(g_titlePadX,2, host.bounds.size.width-2*g_titlePadX, g_titleBarH-4)];
-  [rec->titleLabel setEditable:NO]; [rec->titleLabel setBordered:NO]; [rec->titleLabel setBezeled:NO]; [rec->titleLabel setDrawsBackground:YES];
-  int bg=-1, tx=-1; GetPanelThemeColorsMac(&bg,&tx);
-  auto colorFrom = ^NSColor*(int v){ if(v<0) return (NSColor*)nil; CGFloat r=((v>>16)&0xFF)/255.0,g=((v>>8)&0xFF)/255.0,b=(v&0xFF)/255.0; return [NSColor colorWithCalibratedRed:r green:g blue:b alpha:1.0]; };
-  NSColor* bgC = colorFrom(bg); NSColor* txC = colorFrom(tx);
-  [rec->titleLabel setBackgroundColor:bgC?bgC:[NSColor controlBackgroundColor]];
-  [rec->titleLabel setTextColor:txC?txC:[NSColor controlTextColor]];
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if(!rec) return; NSView* host = (NSView*)hwnd; if(!host) return;
+
+  // If view exists but somehow detached (different superview), re-add it.
+  if (rec->titleBarView && [rec->titleBarView superview] != host) {
+    [rec->titleBarView removeFromSuperview];
+    rec->titleBarView = nil; // force recreate below
+  }
+  if (rec->titleBarView) return; // already valid
+
+  // Frame: place at TOP (Cocoa origin bottom-left) => y = host.height - g_titleBarH
+  CGFloat hostH = host.bounds.size.height;
+  rec->titleBarView = [[NSView alloc] initWithFrame:NSMakeRect(0, hostH - g_titleBarH, host.bounds.size.width, g_titleBarH)];
+  [rec->titleBarView setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)]; // keep pinned to top, stretch width
+
+  rec->titleLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(g_titlePadX, 2, host.bounds.size.width - 2*g_titlePadX, g_titleBarH - 4)];
+  [rec->titleLabel setEditable:NO];
+  [rec->titleLabel setBordered:NO];
+  [rec->titleLabel setBezeled:NO];
+  [rec->titleLabel setDrawsBackground:YES];
   [rec->titleLabel setFont:[NSFont systemFontOfSize:[NSFont systemFontSize]]];
-  [rec->titleBarView addSubview:rec->titleLabel]; [host addSubview:rec->titleBarView]; [rec->titleBarView setHidden:YES];
+  [rec->titleLabel setAutoresizingMask:(NSViewWidthSizable)];
+  UpdateMacTitleBarColors(rec);
+
+  [rec->titleBarView addSubview:rec->titleLabel];
+  // Ensure it sits above the webview
+  if (rec->webView)
+    [host addSubview:rec->titleBarView positioned:NSWindowAbove relativeTo:rec->webView];
+  else
+    [host addSubview:rec->titleBarView];
+  [rec->titleBarView setHidden:YES];
 }
 
 void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
-  NSView* host=(NSView*)hwnd; if(!host) return; WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); CGFloat top=0;
-  if(titleVisible && rec && rec->titleBarView){ [rec->titleBarView setFrame:NSMakeRect(0,0, host.bounds.size.width, g_titleBarH)]; [rec->titleLabel setFrame:NSMakeRect(g_titlePadX,2, host.bounds.size.width-2*g_titlePadX, g_titleBarH-4)]; [rec->titleBarView setHidden:NO]; top=g_titleBarH; }
-  else if(rec && rec->titleBarView) [rec->titleBarView setHidden:YES];
-  if(rec && rec->webView){ NSRect b=NSMakeRect(0, top, host.bounds.size.width, host.bounds.size.height-top); [rec->webView setFrame:b]; }
+  NSView* host = (NSView*)hwnd; if(!host) return; WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+  if (!rec) return;
+  if (!rec->titleBarView) EnsureTitleBarCreated(hwnd);
+
+  CGFloat hostW = host.bounds.size.width;
+  CGFloat hostH = host.bounds.size.height;
+  CGFloat panelH = (titleVisible && rec->titleBarView)? g_titleBarH : 0;
+
+  if (rec->titleBarView) {
+    if (titleVisible) {
+      // Recompute frame at top each layout (handles resize & docking changes)
+      [rec->titleBarView setFrame:NSMakeRect(0, hostH - g_titleBarH, hostW, g_titleBarH)];
+      [rec->titleLabel setFrame:NSMakeRect(g_titlePadX, 2, hostW - 2*g_titlePadX, g_titleBarH - 4)];
+      UpdateMacTitleBarColors(rec); // dynamic theme refresh
+      [rec->titleBarView setHidden:NO];
+      // Maintain z-order above webview
+      if (rec->webView) {
+        // Bring to front if needed by re-adding positioned above
+        if ([rec->titleBarView superview] == host) {
+          [rec->titleBarView removeFromSuperviewWithoutNeedingDisplay];
+          [host addSubview:rec->titleBarView positioned:NSWindowAbove relativeTo:rec->webView];
+        }
+      }
+    } else {
+      [rec->titleBarView setHidden:YES];
+    }
+  }
+
+  if (rec->webView) {
+    // WebView occupies remaining area below the panel
+    NSRect webF = NSMakeRect(0, 0, hostW, hostH - panelH);
+    [rec->webView setFrame:webF];
+  }
 }
 static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); if(!rec||!rec->titleLabel) return; NSString* t=[NSString stringWithUTF8String:s.c_str()]; [rec->titleLabel setStringValue:t?t:@""]; }
 #endif
