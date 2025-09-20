@@ -10,15 +10,37 @@ static inline void frz_log_write_line(const char* s)
 {
   if (!s) return;
 
+  // Build timestamp prefix: YYYY-MM-DD HH:MM:SS.mmm
+  char linebuf[4600];
+  linebuf[0] = '\0';
 #ifdef _WIN32
-  ::OutputDebugStringA(s);
+  SYSTEMTIME st; GetLocalTime(&st);
+  int n = _snprintf_s(linebuf, sizeof(linebuf), _TRUNCATE,
+                      "%04d-%02d-%02d %02d:%02d:%02d.%03d %s",
+                      (int)st.wYear,(int)st.wMonth,(int)st.wDay,
+                      (int)st.wHour,(int)st.wMinute,(int)st.wSecond,(int)st.wMilliseconds,
+                      s);
+  if (n < 0) return;
+#else
+  struct timeval tv; gettimeofday(&tv, NULL);
+  struct tm tmv; localtime_r(&tv.tv_sec, &tmv);
+  int n = snprintf(linebuf, sizeof(linebuf),
+                   "%04d-%02d-%02d %02d:%02d:%02d.%03ld %s",
+                   tmv.tm_year+1900, tmv.tm_mon+1, tmv.tm_mday,
+                   tmv.tm_hour, tmv.tm_min, tmv.tm_sec, (long)(tv.tv_usec/1000), s);
+  if (n < 0) return;
+#endif
+  const char* out = linebuf;
+
+#ifdef _WIN32
+  ::OutputDebugStringA(out);
   ::OutputDebugStringA("\r\n");
 #else
-  std::fputs(s, stderr);
+  std::fputs(out, stderr);
   std::fputc('\n', stderr);
 #endif
 
-  if (ShowConsoleMsg) { ShowConsoleMsg(s); ShowConsoleMsg("\n"); }
+  if (ShowConsoleMsg) { ShowConsoleMsg(out); ShowConsoleMsg("\n"); }
 
   const char* res = GetResourcePath ? GetResourcePath() : nullptr;
   std::string path;
@@ -36,7 +58,7 @@ static inline void frz_log_write_line(const char* s)
 #else
   f = std::fopen(path.c_str(), "ab");
 #endif
-  if (f) { std::fputs(s, f); std::fputc('\n', f); std::fclose(f); }
+  if (f) { std::fputs(out, f); std::fputc('\n', f); std::fclose(f); }
 }
 
 static inline void LogRaw(const char* s) { frz_log_write_line(s); }

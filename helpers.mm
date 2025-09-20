@@ -5,6 +5,7 @@
 
 #include "predef.h"
 #include "helpers.h"
+#include "log.h"
 
 #ifdef _WIN32
 // --- UTF-8 <-> UTF-16 ---
@@ -91,13 +92,14 @@ std::string ExtractDomainFromUrl(const std::string& url)
 
 void SetWndText(HWND hwnd, const std::string& s)
 {
-  if (g_lastWndText == s) return;
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+  if (rec && rec->lastWndText == s) return;
 #ifdef _WIN32
-  SetWindowTextA(hwnd, s.c_str());
+  SetWindowTextW(hwnd, Widen(s).c_str());
 #else
   SetWindowText(hwnd, s.c_str()); // SWELL
 #endif
-  g_lastWndText = s;
+  if (rec) rec->lastWndText = s;
 }
 
 void SaveDockState(HWND hwnd)
@@ -115,9 +117,37 @@ void SaveDockState(HWND hwnd)
 
 void SetTabTitleInplace(HWND hwnd, const std::string& tabCaption)
 {
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+  if (rec && rec->lastTabTitle == tabCaption) {
+    // всё равно обновим fallback ANSI если докер мог потерять
+  }
   SetWndText(hwnd, tabCaption);
+#ifdef _WIN32
+  // Всегда отправляем ANSI WM_SETTEXT — докер может не подхватить только wide.
+  std::wstring w = Widen(tabCaption);
+  if (!w.empty()) {
+    int n = WideCharToMultiByte(CP_ACP, 0, w.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (n > 1) {
+      std::string acp; acp.resize(n-1);
+      WideCharToMultiByte(CP_ACP, 0, w.c_str(), -1, &acp[0], n, nullptr, nullptr);
+      SetWindowTextA(hwnd, acp.c_str());
+    }
+  }
+#endif
   if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
   if (DockWindowRefresh)        DockWindowRefresh();
+  // Дополнительный шаг: активируем окно в докере, чтобы форсировать обновление вкладки после смены текста
+#ifdef _WIN32
+  bool isFloat2=false; int dIdx = DockIsChildOfDock ? DockIsChildOfDock(hwnd, &isFloat2) : -1;
+  if (dIdx >= 0 && DockWindowActivate) DockWindowActivate(hwnd);
+  char buf[512]; buf[0]=0; GetWindowTextA(hwnd, buf, sizeof(buf));
+  if (strcmp(buf, tabCaption.c_str()) != 0) {
+    LogF("[TabTitleDiag] mismatch want='%s' got='%s' dockIdx=%d", tabCaption.c_str(), buf, dIdx);
+  } else {
+    LogF("[TabTitleDiag] applied='%s' dockIdx=%d", buf, dIdx);
+  }
+#endif
+  if (rec) rec->lastTabTitle = tabCaption;
 }
 
 inline void SafePluginRegister(const char* name, void* p)

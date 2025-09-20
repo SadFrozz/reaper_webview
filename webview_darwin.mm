@@ -11,13 +11,14 @@
 #include "webview.h"
 
 
-extern WKWebView* g_webView;
+// Используется пер-инстансовое хранение WKWebView (WebViewInstanceRecord)
 
 @interface FRZWebViewDelegate : NSObject <WKNavigationDelegate, WKScriptMessageHandler>
 @end
 
 static HWND s_hostHwnd = NULL;
 static FRZWebViewDelegate* g_delegate = nil;
+static void ObserveTitleIfNeeded(WKWebView* wv, HWND hwnd);
 
 @implementation FRZWebViewDelegate
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation
@@ -42,6 +43,7 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
 {
   if (!hwnd) return;
   s_hostHwnd = hwnd;
+  std::string activeId = g_instanceId.empty()?std::string("wv_default"):g_instanceId;
 
   NSView* host = (NSView*)hwnd;
   if (!host) return;
@@ -77,17 +79,80 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
   [ucc addScriptMessageHandler:g_delegate name:@"frzCtx"];
 
   // Создаём и вставляем WKWebView
-  g_webView = [[WKWebView alloc] initWithFrame:[host bounds] configuration:cfg];
-  g_webView.navigationDelegate = g_delegate;
-  [g_webView setAutoresizingMask:(NSViewWidthSizable|NSViewHeightSizable)];
-  [host addSubview:g_webView];
+  WKWebView* localWV = [[WKWebView alloc] initWithFrame:[host bounds] configuration:cfg];
+  localWV.navigationDelegate = g_delegate;
+  [localWV setAutoresizingMask:(NSViewWidthSizable|NSViewHeightSizable)];
+  [host addSubview:localWV];
+
+  // KVO на title чтобы оперативно подхватывать изменения заголовка документа
+  ObserveTitleIfNeeded(localWV, hwnd);
+
+  WebViewInstanceRecord* rec = GetInstanceById(activeId);
+  if (rec) { rec->webView = localWV; if (!rec->hwnd) rec->hwnd = hwnd; }
 
   // Навигация
   NSString* s = [NSString stringWithUTF8String:initial_url.c_str()];
   NSURL* u = [NSURL URLWithString:s];
-  if (u) [g_webView loadRequest:[NSURLRequest requestWithURL:u]];
+  if (u) [localWV loadRequest:[NSURLRequest requestWithURL:u]];
 
   UpdateTitlesExtractAndApply(hwnd);
+}
+
+// ===================== Title Observation =====================
+static void* kTitleObservationContext = &kTitleObservationContext;
+
+@interface FRZKVOWrapper : NSObject
+@property (nonatomic, assign) HWND hwnd;
+@end
+@implementation FRZKVOWrapper @end
+
+static std::unordered_map<WKWebView*, FRZKVOWrapper*> g_kvoWrappers;
+
+static void ObserveTitleIfNeeded(WKWebView* wv, HWND hwnd)
+{
+  if (!wv) return;
+  if (g_kvoWrappers.find(wv) != g_kvoWrappers.end()) return; // already
+  FRZKVOWrapper* wrap = [[FRZKVOWrapper alloc] init];
+  wrap.hwnd = hwnd;
+  g_kvoWrappers[wv] = wrap;
+  [wv addObserver:wrap forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:kTitleObservationContext];
+}
+
+// Override observeValueForKeyPath via category on FRZKVOWrapper
+@interface FRZKVOWrapper (Observer)
+@end
+@implementation FRZKVOWrapper (Observer)
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey,id> *)change context:(void *)context
+{
+  if (context == kTitleObservationContext) {
+    if (self.hwnd) UpdateTitlesExtractAndApply(self.hwnd);
+    return;
+  }
+  [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+}
+@end
+
+
+void NavigateExisting(const std::string& url)
+{
+  if (url.empty()) return;
+  std::string activeId = g_instanceId.empty()?std::string("wv_default"):g_instanceId;
+  WebViewInstanceRecord* rec = GetInstanceById(activeId);
+  if (!rec || !rec->webView) return;
+  NSString* s = [NSString stringWithUTF8String:url.c_str()];
+  NSURL* u = [NSURL URLWithString:s];
+  if (u) [rec->webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+
+void NavigateExistingInstance(const std::string& instanceId, const std::string& url)
+{
+  if (url.empty()) return;
+  WebViewInstanceRecord* rec = GetInstanceById(instanceId);
+  if (!rec || !rec->webView || url.empty()) return;
+  rec->lastUrl = url;
+  NSString* s = [NSString stringWithUTF8String:url.c_str()];
+  NSURL* u = [NSURL URLWithString:s];
+  if (u) [rec->webView loadRequest:[NSURLRequest requestWithURL:u]];
 }
 
 #endif // __APPLE__

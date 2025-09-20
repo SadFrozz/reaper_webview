@@ -78,7 +78,9 @@ elseif(WIN32)
         _WIN32_WINNT=0x0601
         NOMINMAX
         WIN32_LEAN_AND_MEAN
-        _CRT_SECURE_NO_WARNINGS)
+        _CRT_SECURE_NO_WARNINGS
+        UNICODE
+        _UNICODE)
     
     # Добавляем линковку с WebView2
     target_link_libraries(reaper_webview 
@@ -115,7 +117,9 @@ elseif(WIN32)
         _WIN32_WINNT=0x0601
         NOMINMAX
         WIN32_LEAN_AND_MEAN
-        _CRT_SECURE_NO_WARNINGS)
+        _CRT_SECURE_NO_WARNINGS
+        UNICODE
+        _UNICODE)
     target_link_libraries(reaper_webview_debug 
         comctl32 
         ole32 

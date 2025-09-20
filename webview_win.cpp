@@ -9,6 +9,9 @@
 #define RWV_WITH_WEBVIEW2 1
 #include "predef.h"
 
+// Use WIL only in this translation unit to manage COM smart pointers; the global record stores raw pointers.
+#include "deps/wil/com.h"
+
 #include <shlwapi.h>
 #include <direct.h>
 #pragma comment(lib, "Shlwapi.lib")
@@ -82,29 +85,47 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
   if (!pCreateEnv) { LogRaw("FATAL: CreateCoreWebView2EnvironmentWithOptions not found"); return; }
 
   std::wstring wurl(initial_url.begin(), initial_url.end());
+  // Determine current active instance id for association
+  std::string activeId = g_instanceId.empty()?std::string("wv_default"):g_instanceId;
   std::wstring wudf(udf.begin(), udf.end());
 
   LogRaw("Start WebView2 environment...");
   HRESULT hrEnv = pCreateEnv(nullptr, wudf.c_str(), nullptr,
     Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-      [hwnd, wurl](HRESULT result, ICoreWebView2Environment* env)->HRESULT
+  [hwnd, wurl, activeId](HRESULT result, ICoreWebView2Environment* env)->HRESULT
       {
         LogF("[EnvCompleted] hr=0x%lX env=%p", (long)result, (void*)env);
         if (FAILED(result) || !env) return S_OK;
 
         env->CreateCoreWebView2Controller(hwnd,
           Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-            [hwnd, wurl](HRESULT result, ICoreWebView2Controller* controller)->HRESULT
+            [hwnd, wurl, activeId](HRESULT result, ICoreWebView2Controller* controller)->HRESULT
             {
               LogF("[ControllerCompleted] hr=0x%lX controller=%p", (long)result, (void*)controller);
               if (!controller) return S_OK;
-              g_controller = controller;
-              g_controller->get_CoreWebView2(&g_webview);
+              wil::com_ptr<ICoreWebView2> localWebView;
+              controller->get_CoreWebView2(&localWebView);
 
-              if (g_webview)
+              // Store into instance record
+              WebViewInstanceRecord* rec = GetInstanceById(activeId);
+              if (rec) {
+                // Release any previous pointers before overwriting (should normally be null for first creation)
+                if (rec->controller) { rec->controller->Release(); rec->controller = nullptr; }
+                if (rec->webview)    { rec->webview->Release();    rec->webview = nullptr; }
+                rec->controller = controller; if (rec->controller) rec->controller->AddRef();
+                rec->webview    = localWebView.get(); if (rec->webview) rec->webview->AddRef();
+                if (!rec->hwnd) rec->hwnd = hwnd;
+              }
+              else {
+                LogF("[ControllerCompleted] instance '%s' not found, releasing controller immediately", activeId.c_str());
+                controller->Close();
+                return S_OK;
+              }
+
+              if (localWebView)
               {
                 wil::com_ptr<ICoreWebView2Settings> settings;
-                if (SUCCEEDED(g_webview->get_Settings(&settings)) && settings)
+                if (SUCCEEDED(localWebView->get_Settings(&settings)) && settings)
                   settings->put_AreDefaultContextMenusEnabled(FALSE);
 
                 // JS bridge: ПКМ из WebView2 -> локальное меню
@@ -119,7 +140,7 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
                       if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(s);
                     }, true);
                   )JS";
-                  g_webview->AddScriptToExecuteOnDocumentCreated(
+                  localWebView->AddScriptToExecuteOnDocumentCreated(
                     kFRZCtxJS,
                     Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
                       [](HRESULT /*ec*/, PCWSTR /*id*/) -> HRESULT { return S_OK; }
@@ -127,9 +148,9 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
                 }
 
                 // Receive 'CTX|x|y' и показать локальное меню
-                g_webview->add_WebMessageReceived(
+                localWebView->add_WebMessageReceived(
                   Callback<ICoreWebView2WebMessageReceivedEventHandler>(
-                    [](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args)->HRESULT {
+                    [hwnd](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args)->HRESULT {
                       wil::unique_cotaskmem_string json;
                       if (SUCCEEDED(args->get_WebMessageAsJson(&json)) && json) {
                         std::string s = Narrow(std::wstring(json.get()));
@@ -141,7 +162,7 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
                           #else
                             sscanf(s.c_str()+4, "%d|%d", &sx, &sy);
                           #endif
-                          PostMessage(g_dlg, WM_CONTEXTMENU, (WPARAM)g_dlg, MAKELPARAM(sx, sy));
+                          PostMessage(hwnd, WM_CONTEXTMENU, (WPARAM)hwnd, MAKELPARAM(sx, sy));
                         }
                       }
                       return S_OK;
@@ -149,7 +170,7 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
 
                 // Глушим дефолтное контекстное меню Edge
                 Microsoft::WRL::ComPtr<ICoreWebView2_13> wv13;
-                if (g_webview && SUCCEEDED(g_webview.get()->QueryInterface(IID_PPV_ARGS(&wv13)))) {
+                if (localWebView && SUCCEEDED(localWebView.get()->QueryInterface(IID_PPV_ARGS(&wv13)))) {
                   wv13->add_ContextMenuRequested(
                     Callback<ICoreWebView2ContextMenuRequestedEventHandler>(
                       [](ICoreWebView2*, ICoreWebView2ContextMenuRequestedEventArgs* args)->HRESULT {
@@ -159,45 +180,78 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
                     nullptr);
                 }
 
-                g_webview->add_DocumentTitleChanged(
+                localWebView->add_DocumentTitleChanged(
                   Callback<ICoreWebView2DocumentTitleChangedEventHandler>(
-                    [](ICoreWebView2*, IUnknown*)->HRESULT
-                    { UpdateTitlesExtractAndApply(g_dlg); return S_OK; }).Get(), nullptr);
-
-                g_webview->add_NavigationStarting(
-                  Callback<ICoreWebView2NavigationStartingEventHandler>(
-                    [](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args)->HRESULT
+                    [activeId, hwnd](ICoreWebView2*, IUnknown*)->HRESULT
                     {
-                      wil::unique_cotaskmem_string uri;
-                      if (args && SUCCEEDED(args->get_Uri(&uri))) LogF("[NavigationStarting] %S", uri.get());
-                      UpdateTitlesExtractAndApply(g_dlg);
+                      WebViewInstanceRecord* r = GetInstanceById(activeId);
+                      HWND target = (r && r->hwnd && IsWindow(r->hwnd)) ? r->hwnd : (IsWindow(hwnd)?hwnd:NULL);
+                      if (target) UpdateTitlesExtractAndApply(target); else LogF("[CallbackSkip] TitleChanged dead hwnd activeId='%s'", activeId.c_str());
                       return S_OK;
                     }).Get(), nullptr);
 
-                g_webview->add_NavigationCompleted(
+                localWebView->add_NavigationStarting(
+                  Callback<ICoreWebView2NavigationStartingEventHandler>(
+                    [activeId, hwnd](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args)->HRESULT
+                    {
+                      wil::unique_cotaskmem_string uri;
+                      if (args && SUCCEEDED(args->get_Uri(&uri))) LogF("[NavigationStarting] %S", uri.get());
+                      WebViewInstanceRecord* r = GetInstanceById(activeId);
+                      HWND target = (r && r->hwnd && IsWindow(r->hwnd)) ? r->hwnd : (IsWindow(hwnd)?hwnd:NULL);
+                      if (target) UpdateTitlesExtractAndApply(target); else LogF("[CallbackSkip] NavStarting dead hwnd activeId='%s'", activeId.c_str());
+                      return S_OK;
+                    }).Get(), nullptr);
+
+                localWebView->add_NavigationCompleted(
                   Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                    [](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args)->HRESULT
+                    [activeId, hwnd](ICoreWebView2*, ICoreWebView2NavigationCompletedEventArgs* args)->HRESULT
                     {
                       BOOL ok = FALSE; if (args) args->get_IsSuccess(&ok);
                       COREWEBVIEW2_WEB_ERROR_STATUS st = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
                       if (args) args->get_WebErrorStatus(&st);
                       LogF("[NavigationCompleted] ok=%d status=%d", (int)ok, (int)st);
-                      UpdateTitlesExtractAndApply(g_dlg);
+                      WebViewInstanceRecord* r = GetInstanceById(activeId);
+                      HWND target = (r && r->hwnd && IsWindow(r->hwnd)) ? r->hwnd : (IsWindow(hwnd)?hwnd:NULL);
+                      if (target) UpdateTitlesExtractAndApply(target); else LogF("[CallbackSkip] NavCompleted dead hwnd activeId='%s'", activeId.c_str());
                       return S_OK;
                     }).Get(), nullptr);
               }
 
               RECT rc; GetClientRect(hwnd, &rc);
               LayoutTitleBarAndWebView(hwnd, false);
-              g_controller->put_IsVisible(TRUE);
+              controller->put_IsVisible(TRUE);
               LogRaw("Navigate initial URL...");
-              if (g_webview) g_webview->Navigate(wurl.c_str());
+              WebViewInstanceRecord* recInit = GetInstanceById(activeId);
+              if (recInit && recInit->webview) recInit->webview->Navigate(wurl.c_str());
               UpdateTitlesExtractAndApply(hwnd);
               return S_OK;
             }).Get());
         return S_OK;
       }).Get());
   LogF("CreateCoreWebView2EnvironmentWithOptions returned 0x%lX", (long)hrEnv);
+}
+
+void NavigateExisting(const std::string& url)
+{
+  if (url.empty()) return;
+  // Use active instance id
+  std::string activeId = g_instanceId.empty()?std::string("wv_default"):g_instanceId;
+  WebViewInstanceRecord* rec = GetInstanceById(activeId);
+  if (!rec || !rec->webview) { LogF("[NavigateExisting] active instance '%s' has no webview", activeId.c_str()); return; }
+  std::wstring wurl(url.begin(), url.end());
+  HRESULT hr = rec->webview->Navigate(wurl.c_str());
+  LogF("[NavigateExisting] id='%s' Navigate('%s') hr=0x%lX", activeId.c_str(), url.c_str(), (long)hr);
+}
+
+void NavigateExistingInstance(const std::string& instanceId, const std::string& url)
+{
+  if (url.empty()) return;
+  WebViewInstanceRecord* rec = GetInstanceById(instanceId);
+  if (!rec || !rec->webview) { LogF("[NavigateExistingInstance] instance '%s' has no webview yet", instanceId.c_str()); return; }
+  std::wstring wurl(url.begin(), url.end());
+  HRESULT hr = rec->webview->Navigate(wurl.c_str());
+  LogF("[NavigateExistingInstance] id='%s' Navigate('%s') hr=0x%lX", instanceId.c_str(), url.c_str(), (long)hr);
+  rec->lastUrl = url;
 }
 
 #endif // _WIN32

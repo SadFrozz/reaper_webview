@@ -2,6 +2,9 @@
 // (c) Andrew "SadFrozz" Brodsky
 // 2025 and later
 // main.mm
+// Notes:
+//  - Legacy global g_dlg removed; all window handles resolved via instance records (GetInstanceById / GetInstanceByHwnd).
+//  - Persistence stubs SaveInstanceStateAll/LoadInstanceStateAll currently just log state (no disk IO).
 
 // init section
 
@@ -22,139 +25,174 @@
 
 // ======================== Title panel (dock) =========================
 #ifdef _WIN32
-static void DestroyTitleGdi()
+static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
 {
-  if (g_titleFont) { DeleteObject(g_titleFont); g_titleFont=nullptr; }
-  if (g_titleBrush){ DeleteObject(g_titleBrush); g_titleBrush=nullptr; }
+  if (!rec) return;
+  if (rec->titleFont) { DeleteObject(rec->titleFont); rec->titleFont=nullptr; }
+  if (rec->titleBrush){ DeleteObject(rec->titleBrush); rec->titleBrush=nullptr; }
+  if (rec->titleBar && IsWindow(rec->titleBar)) { DestroyWindow(rec->titleBar); rec->titleBar=nullptr; }
 }
 static void EnsureTitleBarCreated(HWND hwnd)
 {
-  if (g_titleBar && !IsWindow(g_titleBar)) g_titleBar = nullptr;
-  if (g_titleBar) return;
-  LOGFONT lf{}; SystemParametersInfo(SPI_GETICONTITLELOGFONT, sizeof(lf), &lf, 0);
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if (!rec) return;
+  if (rec->titleBar && !IsWindow(rec->titleBar)) rec->titleBar = nullptr;
+  if (rec->titleBar) return;
+  LOGFONTW lf{}; SystemParametersInfoW(SPI_GETICONTITLELOGFONT, sizeof(lf), &lf, 0);
   lf.lfHeight = -12; lf.lfWeight = FW_SEMIBOLD;
-  g_titleFont = CreateFontIndirect(&lf);
-  g_titleBkColor   = GetSysColor(COLOR_BTNFACE);
-  g_titleTextColor = GetSysColor(COLOR_BTNTEXT);
-  g_titleBrush = CreateSolidBrush(g_titleBkColor);
-
-  g_titleBar = CreateWindowExA(0, "STATIC","", WS_CHILD|SS_LEFT|SS_NOPREFIX,
+  rec->titleFont = CreateFontIndirectW(&lf);
+  rec->titleBkColor   = GetSysColor(COLOR_BTNFACE);
+  rec->titleTextColor = GetSysColor(COLOR_BTNTEXT);
+  rec->titleBrush = CreateSolidBrush(rec->titleBkColor);
+  rec->titleBar = CreateWindowExW(0, L"STATIC", L"", WS_CHILD|SS_LEFT|SS_NOPREFIX,
                                g_titlePadX, 0, 10, g_titleBarH, hwnd, (HMENU)(INT_PTR)IDC_TITLEBAR,
                                (HINSTANCE)g_hInst, NULL);
-  if (g_titleBar && g_titleFont) SendMessage(g_titleBar, WM_SETFONT, (WPARAM)g_titleFont, TRUE);
+  if (rec->titleBar && rec->titleFont) SendMessageW(rec->titleBar, WM_SETFONT, (WPARAM)rec->titleFont, TRUE);
 }
 void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
   RECT rc; GetClientRect(hwnd, &rc);
   int top = 0;
-  if (titleVisible && g_titleBar)
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+  if (titleVisible && rec && rec->titleBar)
   {
-    MoveWindow(g_titleBar, g_titlePadX, 0, (rc.right-rc.left) - 2*g_titlePadX, g_titleBarH, TRUE);
-    ShowWindow(g_titleBar, SW_SHOWNA);
+    MoveWindow(rec->titleBar, g_titlePadX, 0, (rc.right-rc.left) - 2*g_titlePadX, g_titleBarH, TRUE);
+    ShowWindow(rec->titleBar, SW_SHOWNA);
     top = g_titleBarH;
   }
-  else if (g_titleBar) ShowWindow(g_titleBar, SW_HIDE);
+  else if (rec && rec->titleBar) ShowWindow(rec->titleBar, SW_HIDE);
 
   RECT brc = rc; brc.top += top;
-  if (g_controller) g_controller->put_Bounds(brc);
+  if (rec && rec->controller) rec->controller->put_Bounds(brc);
 }
-static void SetTitleBarText(const std::string& s){ if (g_titleBar) SetWindowTextA(g_titleBar, s.c_str()); }
+static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if (rec && rec->titleBar) SetWindowTextW(rec->titleBar, Widen(s).c_str()); }
 #else
+static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
+{
+  if (!rec) return;
+  if (rec->titleLabel) { [rec->titleLabel removeFromSuperview]; rec->titleLabel = nil; }
+  if (rec->titleBarView) { [rec->titleBarView removeFromSuperview]; rec->titleBarView = nil; }
+}
 static void EnsureTitleBarCreated(HWND hwnd)
 {
-  if (g_titleBarView) return;
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if (!rec) return;
+  if (rec->titleBarView) return;
   NSView* host = (NSView*)hwnd; if (!host) return;
-  g_titleBarView = [[NSView alloc] initWithFrame:NSMakeRect(0,0, host.bounds.size.width, g_titleBarH)];
-  g_titleLabel   = [[NSTextField alloc] initWithFrame:NSMakeRect(g_titlePadX, 2, host.bounds.size.width-2*g_titlePadX, g_titleBarH-4)];
-  [g_titleLabel setEditable:NO]; [g_titleLabel setBordered:NO]; [g_titleLabel setBezeled:NO];
-  [g_titleLabel setDrawsBackground:YES];
-  [g_titleLabel setBackgroundColor:[NSColor controlBackgroundColor]];
-  [g_titleLabel setTextColor:[NSColor controlTextColor]];
-  [g_titleLabel setFont:[NSFont systemFontOfSize:[NSFont systemFontSize]]];
-  [g_titleBarView addSubview:g_titleLabel]; [host addSubview:g_titleBarView];
-  [g_titleBarView setHidden:YES];
+  rec->titleBarView = [[NSView alloc] initWithFrame:NSMakeRect(0,0, host.bounds.size.width, g_titleBarH)];
+  rec->titleLabel   = [[NSTextField alloc] initWithFrame:NSMakeRect(g_titlePadX, 2, host.bounds.size.width-2*g_titlePadX, g_titleBarH-4)];
+  [rec->titleLabel setEditable:NO]; [rec->titleLabel setBordered:NO]; [rec->titleLabel setBezeled:NO];
+  [rec->titleLabel setDrawsBackground:YES];
+  [rec->titleLabel setBackgroundColor:[NSColor controlBackgroundColor]];
+  [rec->titleLabel setTextColor:[NSColor controlTextColor]];
+  [rec->titleLabel setFont:[NSFont systemFontOfSize:[NSFont systemFontSize]]];
+  [rec->titleBarView addSubview:rec->titleLabel]; [host addSubview:rec->titleBarView];
+  [rec->titleBarView setHidden:YES];
 }
 void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
   NSView* host = (NSView*)hwnd; if (!host) return;
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
   CGFloat top = 0;
-  if (titleVisible && g_titleBarView)
+  if (titleVisible && rec && rec->titleBarView)
   {
-    [g_titleBarView setFrame:NSMakeRect(0,0, host.bounds.size.width, g_titleBarH)];
-    [g_titleLabel   setFrame:NSMakeRect(g_titlePadX,2, host.bounds.size.width-2*g_titlePadX, g_titleBarH-4)];
-    [g_titleBarView setHidden:NO];
+    [rec->titleBarView setFrame:NSMakeRect(0,0, host.bounds.size.width, g_titleBarH)];
+    [rec->titleLabel   setFrame:NSMakeRect(g_titlePadX,2, host.bounds.size.width-2*g_titlePadX, g_titleBarH-4)];
+    [rec->titleBarView setHidden:NO];
     top = g_titleBarH;
-  } else if (g_titleBarView) [g_titleBarView setHidden:YES];
-
-  if (g_webView)
+  } else if (rec && rec->titleBarView) [rec->titleBarView setHidden:YES];
+  if (rec && rec->webView)
   {
     NSRect b = NSMakeRect(0, top, host.bounds.size.width, host.bounds.size.height - top);
-    [g_webView setFrame:b];
+    [rec->webView setFrame:b];
   }
 }
-static void SetTitleBarText(const std::string& s)
+static void SetTitleBarText(HWND hwnd, const std::string& s)
 {
-  if (!g_titleLabel) return;
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+  if (!rec || !rec->titleLabel) return;
   NSString* t = [NSString stringWithUTF8String:s.c_str()];
-  [g_titleLabel setStringValue:t ? t : @""];
+  [rec->titleLabel setStringValue:t ? t : @""];
 }
 #endif
 
 // показать/скрыть панель + текст
-static void UpdateTitleBarUI(HWND hwnd, const std::string& domain, const std::string& pageTitle, bool inDock, bool usePanel)
+static void UpdateTitleBarUI(HWND hwnd, const std::string& domain, const std::string& pageTitle, const std::string& effectiveTitle,
+                             bool inDock, bool finalPanelVisible, ShowPanelMode mode)
 {
   EnsureTitleBarCreated(hwnd);
-  const bool wantVisible = inDock && usePanel;
+  const bool wantVisible = finalPanelVisible; // уже рассчитано выше с учётом режима
+  // Формирование текста панели:
+  // Требование: панель НИКОГДА не показывает кастомный (override) заголовок.
+  // Всегда используется fallback: домен [+ " - " + pageTitle].
+  // (Кастомный заголовок по-прежнему может использоваться для таба докера или окна, но не для панели.)
   std::string panelText = domain.empty() ? "…" : domain;
   if (!pageTitle.empty()) panelText += " - " + pageTitle;
-  SetTitleBarText(panelText);
+  SetTitleBarText(hwnd, panelText);
   LayoutTitleBarAndWebView(hwnd, wantVisible);
+  LogF("[Panel] inDock=%d mode=%d visible=%d title='%s' (fallback only)", (int)inDock, (int)mode, (int)wantVisible, panelText.c_str());
 }
 
 // ============================== Titles (common) ==============================
 void UpdateTitlesExtractAndApply(HWND hwnd)
 {
+  // Выбор текущей записи инстанса (active id определяется по hwnd -> ищем запись с таким hwnd)
+    WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+  if (!rec) { // fallback на активный id
+    rec = GetInstanceById(g_instanceId.empty()?std::string("wv_default"):g_instanceId);
+  }
+  if (!rec) rec = GetInstanceById(std::string("wv_default"));
+  const std::string effectiveTitle = (rec && !rec->titleOverride.empty()) ? rec->titleOverride : kTitleBase;
+  const ShowPanelMode effectivePanelMode = rec ? rec->panelMode : ShowPanelMode::Unset;
   std::string domain, pageTitle;
 
   #ifdef _WIN32
-    if (g_webview)
+  if (rec && rec->webview)
     {
       wil::unique_cotaskmem_string wsrc, wtitle;
-      if (SUCCEEDED(g_webview->get_Source(&wsrc))  && wsrc)  domain    = ExtractDomainFromUrl(Narrow(std::wstring(wsrc.get())));
-      if (SUCCEEDED(g_webview->get_DocumentTitle(&wtitle)) && wtitle) pageTitle = Narrow(std::wstring(wtitle.get()));
+  if (SUCCEEDED(rec->webview->get_Source(&wsrc))  && wsrc)  domain    = ExtractDomainFromUrl(Narrow(std::wstring(wsrc.get())));
+  if (SUCCEEDED(rec->webview->get_DocumentTitle(&wtitle)) && wtitle) pageTitle = Narrow(std::wstring(wtitle.get()));
     }
   #else
-    if (g_webView)
+    if (rec && rec->webView)
     {
-      NSURL* u = g_webView.URL; if (u) domain = ExtractDomainFromUrl([[u absoluteString] UTF8String]);
-      NSString* t = g_webView.title; if (t) pageTitle = [t UTF8String];
+      NSURL* u = rec->webView.URL; if (u) domain = ExtractDomainFromUrl([[u absoluteString] UTF8String]);
+      NSString* t = rec->webView.title; if (t) pageTitle = [t UTF8String];
     }
   #endif
 
   SaveDockState(hwnd);
   const bool inDock = (g_last_dock_idx >= 0);
 
-  const bool defaultMode = (g_titleOverride.empty() || g_titleOverride == kTitleBase);
+  const bool defaultMode = (effectiveTitle.empty() || effectiveTitle == kTitleBase);
+
+  auto panelVisible = [&](bool inDockLocal, bool defaultTitle){
+  // ShowPanel per-instance: Unset, Hide, Docker, Always
+  switch (effectivePanelMode)
+    {
+      case ShowPanelMode::Hide:   return false;
+      case ShowPanelMode::Docker: return inDockLocal; // только в докере
+      case ShowPanelMode::Always: return true;        // всегда
+      case ShowPanelMode::Unset:  default:            return defaultTitle && inDockLocal; // старое поведение
+    }
+  };
 
   if (defaultMode)
   {
     if (inDock)
     {
       const std::string tabCaption = kTitleBase;
-      if (tabCaption != g_lastTabTitle)
-      {
+      WebViewInstanceRecord* rLocal = GetInstanceByHwnd(hwnd);
+      if (rLocal && rLocal->lastTabTitle != tabCaption) {
         LogF("[TabTitle] in-dock (idx=%d float=%d) -> '%s'", g_last_dock_idx, (int)g_last_dock_float, tabCaption.c_str());
-        g_lastTabTitle = tabCaption;
       }
       SetTabTitleInplace(hwnd, tabCaption);
-      UpdateTitleBarUI(hwnd, domain, pageTitle, true, true);
+  UpdateTitleBarUI(hwnd, domain, pageTitle, effectiveTitle, true, panelVisible(true, true), effectivePanelMode);
     }
     else
     {
       std::string wndCaption = domain.empty() ? "…" : domain;
       if (!pageTitle.empty()) wndCaption += " - " + pageTitle;
-      SetWndText(hwnd, wndCaption);
-      UpdateTitleBarUI(hwnd, domain, pageTitle, false, true);
+  SetWndText(hwnd, wndCaption);
+  UpdateTitleBarUI(hwnd, domain, pageTitle, effectiveTitle, false, panelVisible(false, true), effectivePanelMode);
       LogF("[TitleUpdate] undock caption='%s'", wndCaption.c_str());
     }
   }
@@ -162,19 +200,40 @@ void UpdateTitlesExtractAndApply(HWND hwnd)
   {
     if (inDock)
     {
-      if (g_titleOverride != g_lastTabTitle)
-      {
-        LogF("[TabTitle] in-dock custom -> '%s'", g_titleOverride.c_str());
-        g_lastTabTitle = g_titleOverride;
+      WebViewInstanceRecord* rLocal = GetInstanceByHwnd(hwnd);
+      if (rLocal && rLocal->lastTabTitle != effectiveTitle) {
+        LogF("[TabTitle] in-dock custom -> '%s' (last='%s')", effectiveTitle.c_str(), rLocal->lastTabTitle.c_str());
+        // Принудительный редок: некоторые версии REAPER не обновляют вкладку корректно только через SetWindowText
+        if (DockWindowRemove && DockWindowAddEx) {
+          DockWindowRemove(hwnd);
+          DockWindowAddEx(hwnd, effectiveTitle.c_str(), kDockIdent, true);
+          if (DockWindowActivate) DockWindowActivate(hwnd);
+          if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
+          if (DockWindowRefresh) DockWindowRefresh();
+        }
       }
-      SetTabTitleInplace(hwnd, g_titleOverride);
-      UpdateTitleBarUI(hwnd, domain, pageTitle, true, false);
+      SetTabTitleInplace(hwnd, effectiveTitle);
+  UpdateTitleBarUI(hwnd, domain, pageTitle, effectiveTitle, true, panelVisible(true, false), effectivePanelMode);
     }
     else
     {
-      SetWndText(hwnd, g_titleOverride);
-      UpdateTitleBarUI(hwnd, domain, pageTitle, false, false);
-      LogF("[TitleUpdate] undock custom='%s'", g_titleOverride.c_str());
+  SetWndText(hwnd, effectiveTitle);
+  UpdateTitleBarUI(hwnd, domain, pageTitle, effectiveTitle, false, panelVisible(false, false), effectivePanelMode);
+    LogF("[TitleUpdate] undock custom='%s'", effectiveTitle.c_str());
+    }
+  }
+
+  // Retrofit: если мы в доке, есть кастомный effectiveTitle, но вкладка осталась базовой, попробуем пере-регистрировать.
+  if (inDock && !defaultMode && rec && rec->lastTabTitle == kTitleBase && effectiveTitle != kTitleBase) {
+    LogF("[DockRetrofitCheck] tab still '%s' want '%s' -> re-add", rec->lastTabTitle.c_str(), effectiveTitle.c_str());
+    if (DockWindowRemove && DockWindowAddEx) {
+      DockWindowRemove(hwnd);
+      DockWindowAddEx(hwnd, effectiveTitle.c_str(), kDockIdent, true);
+      if (DockWindowActivate) DockWindowActivate(hwnd);
+      if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
+      if (DockWindowRefresh) DockWindowRefresh();
+      // Обновим заголовок ещё раз сразу
+      SetTabTitleInplace(hwnd, effectiveTitle);
     }
   }
 }
@@ -196,7 +255,14 @@ static void SizeWebViewToClient(HWND hwnd)
 {
   bool isFloat=false; int idx=-1;
   bool inDock = DockIsChildOfDock ? (DockIsChildOfDock(hwnd, &isFloat) >= 0) : false;
-  const bool wantPanel = inDock && (g_titleOverride == kTitleBase);
+  // derive per-instance title
+  bool wantPanel=false;
+  if (inDock) {
+        WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+    std::string t = rec ? rec->titleOverride : kTitleBase;
+    if (t.empty()) t = kTitleBase;
+    wantPanel = (t == kTitleBase);
+  }
   LayoutTitleBarAndWebView(hwnd, wantPanel);
 }
 
@@ -227,10 +293,24 @@ static bool QueryDockState(HWND hwnd, bool* outFloat, int* outIdx)
 
 static void RememberWantDock(HWND hwnd)
 {
-  bool isFloat=false; int idx=-1;
-  bool inDock = DockIsChildOfDock ? (DockIsChildOfDock(hwnd, &isFloat) >= 0) : false;
-  g_want_dock_on_create = inDock ? 1 : 0;
-  LogF("[DockRemember] last=%s (float=%d, idx=%d)", inDock?"DOCK":"UNDOCK", (int)isFloat, idx);
+  // Use same multi-candidate detection logic as SaveDockState to avoid false positives/negatives
+  bool detected=false; bool isFloat=false; int idx=-1;
+  HWND cand[3] = { hwnd, GetParent(hwnd), GetAncestor(hwnd, GA_ROOT) };
+  for (int k=0;k<3;k++)
+  {
+    HWND h = cand[k]; if(!h) continue;
+    bool f=false; int i = DockIsChildOfDock ? DockIsChildOfDock(h,&f) : -1;
+    LogF("[DockRememberProbe] cand=%p -> idx=%d float=%d", (void*)h, i, (int)f);
+    if (i>=0) { detected=true; isFloat=f; idx=i; break; }
+  }
+  g_want_dock_on_create = detected ? 1 : 0;
+  // persist into instance record
+  WebViewInstanceRecord* rec = GetInstanceById(g_instanceId.empty()?std::string("wv_default"):g_instanceId);
+  if (rec) {
+    rec->wantDockOnCreate = g_want_dock_on_create;
+    if (detected) { rec->lastDockIdx = idx; rec->lastDockFloat = isFloat; }
+  }
+  LogF("[DockRemember] stored want_dock=%d (detected=%d idx=%d float=%d inst=%s)", g_want_dock_on_create, (int)detected, idx, (int)isFloat, rec?rec->id.c_str():"<none>");
 }
 
 static void ShowLocalDockMenu(HWND hwnd, int x, int y)
@@ -256,7 +336,13 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
       if (DockWindowRemove) DockWindowRemove(hwnd); PlatformMakeTopLevel(hwnd);
     } else {
       LogRaw("[Dock] Adding to dock...");
-      if (DockWindowAddEx) DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
+      if (DockWindowAddEx) {
+        WebViewInstanceRecord* recC = GetInstanceByHwnd(hwnd);
+        const char* initTitle = kTitleBase;
+        if (recC && !recC->titleOverride.empty() && recC->titleOverride != kTitleBase)
+          initTitle = recC->titleOverride.c_str();
+        DockWindowAddEx(hwnd, initTitle, kDockIdent, true);
+      }
       if (DockWindowActivate) DockWindowActivate(hwnd);
     }
     UpdateTitlesExtractAndApply(hwnd);
@@ -271,7 +357,6 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
   {
     case WM_INITDIALOG:
     {
-      g_dlg = hwnd;
       char* initial = (char*)lp;
       std::string url = (initial && *initial) ? std::string(initial) : std::string(kDefaultURL);
       if (initial) free(initial);
@@ -280,15 +365,24 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       LayoutTitleBarAndWebView(hwnd, false);
 
       bool isFloat=false; int idx=-1; (void)QueryDockState(hwnd, &isFloat, &idx);
-
+      LogF("[DockInit] g_want_dock_on_create=%d (idx=%d float=%d)", g_want_dock_on_create, idx, (int)isFloat);
+      WebViewInstanceRecord* recInit = GetInstanceById(g_instanceId.empty()?std::string("wv_default"):g_instanceId);
+      if (recInit && recInit->wantDockOnCreate >= 0) g_want_dock_on_create = recInit->wantDockOnCreate; // sync from instance
       const bool wantDock = (g_want_dock_on_create == 1) || (g_want_dock_on_create < 0);
       if (wantDock && DockWindowAddEx) {
-        DockWindowAddEx(hwnd, kTitleBase, kDockIdent, true);
+        const char* initTitle = kTitleBase;
+        if (recInit && !recInit->titleOverride.empty() && recInit->titleOverride != kTitleBase)
+          initTitle = recInit->titleOverride.c_str();
+        DockWindowAddEx(hwnd, initTitle, kDockIdent, true);
         if (DockWindowActivate) DockWindowActivate(hwnd);
         if (DockWindowRefreshForHWND) DockWindowRefreshForHWND(hwnd);
         if (DockWindowRefresh) DockWindowRefresh();
       } else {
         PlatformMakeTopLevel(hwnd);
+      }
+      if (recInit) {
+        recInit->hwnd = hwnd; // bind window to instance (single-window model for now)
+        if (recInit->wantDockOnCreate < 0) recInit->wantDockOnCreate = wantDock?1:0; // initialize inheritance
       }
 
       SaveDockState(hwnd);
@@ -299,16 +393,16 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     }
 
 #ifdef _WIN32
-    case WM_CTLCOLORSTATIC:
-      if ((HWND)lp == g_titleBar)
-      {
+    case WM_CTLCOLORSTATIC: {
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+      if (rec && rec->titleBar && (HWND)lp == rec->titleBar) {
         HDC hdc = (HDC)wp;
-        SetBkColor(hdc, g_titleBkColor);
-        SetTextColor(hdc, g_titleTextColor);
-        if (!g_titleBrush) g_titleBrush = CreateSolidBrush(g_titleBkColor);
-        return (INT_PTR)g_titleBrush;
+        SetBkColor(hdc, rec->titleBkColor);
+        SetTextColor(hdc, rec->titleTextColor);
+        if (!rec->titleBrush) rec->titleBrush = CreateSolidBrush(rec->titleBkColor);
+        return (INT_PTR)rec->titleBrush;
       }
-      break;
+      break; }
 #endif
 
     case WM_SIZE:
@@ -346,84 +440,127 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
           SendMessage(hwnd, WM_CLOSE, 0, 0);
           return 0;
       }
-      break;
+      return 0; // other commands not handled
 
     case WM_CLOSE:
       LogRaw("[WM_CLOSE]");
       RememberWantDock(hwnd);
-
-      { bool f=false; int idx=-1;
-        bool id = DockIsChildOfDock ? (DockIsChildOfDock(hwnd,&f) >= 0) : false;
-        if (id && DockWindowRemove) DockWindowRemove(hwnd);
+      // Очистить ссылки в записи инстанса
+      for (auto &kv : g_instances) {
+        if (kv.second && kv.second->hwnd == hwnd) {
+          kv.second->hwnd = nullptr;
+#ifdef _WIN32
+          if (kv.second->controller) { kv.second->controller->Release(); kv.second->controller = nullptr; }
+          if (kv.second->webview)    { kv.second->webview->Release();    kv.second->webview = nullptr; }
+#else
+          kv.second->webView = nil;
+#endif
+          LogF("[InstanceCleanup] id='%s' cleared on WM_CLOSE", kv.first.c_str());
+          break;
+        }
       }
-    #ifdef _WIN32
-      g_controller = nullptr; g_webview = nullptr;
-    #endif
+      PurgeDeadInstances();
+      { bool f=false; int idx=-1; bool id = DockIsChildOfDock ? (DockIsChildOfDock(hwnd,&f) >= 0) : false; if (id && DockWindowRemove) DockWindowRemove(hwnd); }
       DestroyWindow(hwnd);
-      g_dlg = nullptr;
       return 0;
 
     case WM_DESTROY:
       LogRaw("[WM_DESTROY]");
+    case WM_TIMER:
+      // (таймеры для повторного обновления заголовка удалены как лишняя нагрузка)
+      break;
+#ifdef _WIN32
+      for (auto &kv : g_instances) {
+        if (kv.second && kv.second->hwnd == hwnd) {
+          kv.second->hwnd = nullptr; 
+          if (kv.second->controller) { kv.second->controller->Release(); kv.second->controller = nullptr; }
+          if (kv.second->webview)    { kv.second->webview->Release();    kv.second->webview = nullptr; }
+          LogF("[InstanceCleanup] id='%s' cleared on WM_DESTROY", kv.first.c_str());
+        }
+      }
+      PurgeDeadInstances();
+#else
+      for (auto &kv : g_instances) {
+        if (kv.second && kv.second->hwnd == hwnd) {
+          kv.second->hwnd = nullptr; kv.second->webView = nil;
+          LogF("[InstanceCleanup] id='%s' cleared on WM_DESTROY", kv.first.c_str());
+        }
+      }
+#endif
     #ifdef _WIN32
-      g_titleBar = nullptr;
-      DestroyTitleGdi();
+  DestroyTitleBarResources(GetInstanceByHwnd(hwnd));
       if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
       if (g_com_initialized) { CoUninitialize(); g_com_initialized = false; }
     #else
-      g_webView = nil;
-      g_titleBarView = nil; g_titleLabel = nil;
+  DestroyTitleBarResources(GetInstanceByHwnd(hwnd));
     #endif
       return 0;
   }
   return 0;
 }
 
-// ============================== open/activate ==============================
-void OpenOrActivate(const std::string& url)
+// ============================== window creation helper ==============================
+static HWND CreateNewWebViewWindow(const std::string& url)
 {
-  if (g_dlg && IsWindow(g_dlg))
-  {
-    bool floating=false;
-    const int dockId = DockIsChildOfDock ? DockIsChildOfDock(g_dlg, &floating) : -1;
-    if (dockId >= 0) {
-      if (DockWindowActivate) DockWindowActivate(g_dlg);
-    } else {
-      PlatformMakeTopLevel(g_dlg);
-    }
-    return;
-  }
-
 #ifdef _WIN32
   struct MyDLGTEMPLATE : DLGTEMPLATE { WORD ext[3]; MyDLGTEMPLATE(){ memset(this,0,sizeof(*this)); } } t;
   t.style = DS_SETFONT | DS_FIXEDSYS | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_CLIPCHILDREN;
   t.cx = 900; t.cy = 600; t.dwExtendedStyle = 0;
   char* urlParam = _strdup(url.c_str());
-  g_dlg = CreateDialogIndirectParam((HINSTANCE)g_hInst, &t, g_hwndParent, (DLGPROC)WebViewDlgProc, (LPARAM)urlParam);
+  HWND hwnd = CreateDialogIndirectParam((HINSTANCE)g_hInst, &t, g_hwndParent, (DLGPROC)WebViewDlgProc, (LPARAM)urlParam);
 #else
   char* urlParam = strdup(url.c_str());
-  g_dlg = CreateDialogParam((HINSTANCE)g_hInst, MAKEINTRESOURCE(IDD_WEBVIEW), g_hwndParent, WebViewDlgProc, (LPARAM)urlParam);
+  HWND hwnd = CreateDialogParam((HINSTANCE)g_hInst, MAKEINTRESOURCE(IDD_WEBVIEW), g_hwndParent, WebViewDlgProc, (LPARAM)urlParam);
 #endif
-
-  if (g_dlg && IsWindow(g_dlg))
-  {
-    bool floating=false;
-    const int dockId = DockIsChildOfDock ? DockIsChildOfDock(g_dlg, &floating) : -1;
+  if (hwnd && IsWindow(hwnd)) {
+    bool floating=false; int dockId = DockIsChildOfDock ? DockIsChildOfDock(hwnd,&floating) : -1;
     if (dockId >= 0) {
-      if (DockWindowActivate) DockWindowActivate(g_dlg);
+      if (DockWindowActivate) DockWindowActivate(hwnd);
     } else {
-      PlatformMakeTopLevel(g_dlg);
+      PlatformMakeTopLevel(hwnd);
     }
   }
+  return hwnd;
+}
+
+// ============================== per-instance open/activate ==============================
+void OpenOrActivateInstance(const std::string& instanceId, const std::string& url)
+{
+  WebViewInstanceRecord* rec = GetInstanceById(instanceId);
+  if (!rec) {
+    LogF("[InstanceOpen] unknown id '%s' (creating via EnsureInstance...)", instanceId.c_str());
+    rec = EnsureInstanceAndMaybeNavigate(instanceId, url, false, std::string(), ShowPanelMode::Unset);
+  }
+  if (!rec) return;
+  LogF("[InstanceOpen] id='%s' hwnd=%p wantDock=%d url='%s'", instanceId.c_str(), (void*)rec->hwnd, rec->wantDockOnCreate, url.c_str());
+
+  // If this rec already has its own hwnd, just activate it
+  if (rec->hwnd && IsWindow(rec->hwnd)) {
+    g_instanceId = instanceId; // switch active context (still used by StartWebView callbacks)
+    if (!url.empty()) NavigateExistingInstance(instanceId, url);
+    else if (!rec->lastUrl.empty()) LogF("[InstanceActivate] id='%s' reuse lastUrl='%s'", instanceId.c_str(), rec->lastUrl.c_str());
+    bool floating=false; int dockId = DockIsChildOfDock ? DockIsChildOfDock(rec->hwnd,&floating) : -1;
+    if (dockId >= 0) { if (DockWindowActivate) DockWindowActivate(rec->hwnd); }
+    else PlatformMakeTopLevel(rec->hwnd);
+    UpdateTitlesExtractAndApply(rec->hwnd);
+    return;
+  }
+
+  // Create new window for this instance
+  g_instanceId = instanceId; // set before creation so StartWebView associates controller correctly
+  if (rec->wantDockOnCreate >= 0) g_want_dock_on_create = rec->wantDockOnCreate; // supply hint
+  HWND hwnd = CreateNewWebViewWindow(url);
+  LogF("[InstanceCreate] created window %p for id='%s'", (void*)hwnd, instanceId.c_str());
+  if (rec->hwnd == nullptr && hwnd) {
+    rec->hwnd = hwnd; rec->lastUrl = url; rec->wantDockOnCreate = g_want_dock_on_create; }
 }
 
 // ============================== Hook command ==============================
 static bool HookCommandProc(int cmd, int flag)
 {
   if (cmd == g_command_id) {
-    OpenOrActivate(kDefaultURL);
-    return true;
-  }
+    OpenOrActivateInstance("wv_default", kDefaultURL);
+    return true; }
 
   auto it = g_cmd_handlers.find(cmd);
   if (it != g_cmd_handlers.end() && it->second) {
@@ -435,7 +572,7 @@ static bool HookCommandProc(int cmd, int flag)
 // ============================== Handlers ===================================
 static bool Act_OpenDefault(int /*flag*/)
 {
-  OpenOrActivate(kDefaultURL);
+  OpenOrActivateInstance("wv_default", kDefaultURL);
   return true;
 }
 
@@ -528,22 +665,26 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
   {
     LogRaw("=== Plugin unload ===");
     UnregisterCommandId();
+  UnregisterAPI();
 
-    if (g_dlg && IsWindow(g_dlg))
-    {
-      bool f=false; int idx=-1;
-      bool id = DockIsChildOfDock ? (DockIsChildOfDock(g_dlg, &f) >= 0) : false;
-      if (id && DockWindowRemove) DockWindowRemove(g_dlg);
-      DestroyWindow(g_dlg);
-      g_dlg = nullptr;
+    // Destroy all instance windows
+    for (auto &kv : g_instances) {
+      if (kv.second && kv.second->hwnd && IsWindow(kv.second->hwnd)) {
+        bool f=false; int idx=-1;
+        bool inDock = DockIsChildOfDock ? (DockIsChildOfDock(kv.second->hwnd,&f) >= 0) : false;
+        if (inDock && DockWindowRemove) DockWindowRemove(kv.second->hwnd);
+        DestroyWindow(kv.second->hwnd);
+        kv.second->hwnd = nullptr;
+        LogF("[UnloadCleanup] destroyed hwnd for id='%s'", kv.first.c_str());
+      }
     }
+    PurgeDeadInstances();
 #ifdef _WIN32
-    DestroyTitleGdi();
-    g_controller = nullptr; g_webview = nullptr;
+  // Destroy resources for all instances
+  for (auto &kv : g_instances) DestroyTitleBarResources(kv.second.get());
     if (g_hWebView2Loader) { FreeLibrary(g_hWebView2Loader); g_hWebView2Loader = nullptr; }
     if (g_com_initialized) { CoUninitialize(); g_com_initialized = false; }
 #else
-    g_webView = nil;
     g_titleBarView = nil; g_titleLabel = nil;
 #endif
   }
