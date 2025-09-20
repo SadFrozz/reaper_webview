@@ -24,7 +24,7 @@ struct ApiRegistrationInfo {
   const char* retType;       // "void"
   const char* argTypesCSV;   // "const char*,const char*"
   const char* argNamesCSV;   // "url,opts"
-  const char* helpText;      // Многострочная справка
+  const char* helpText;      // Multiline help text (ASCII/UTF-8 safe)
   void (*cFunc)(const char*, const char*); // C-интерфейс (API_*)
   void* (*varargFunc)(void**, int);        // Реализация для ReaScript (APIvararg_*)
   const char* defCString;    // готовая нуль-разделённая строка (генерируется)
@@ -107,11 +107,23 @@ static void* Vararg_WEBVIEW_Navigate(void** arglist, int numparms)
 
 #define HELP_NAV \
 "WEBVIEW_Navigate(url, opts)\n" \
-"  url: string (http/https/file/etc)\n" \
-"  opts: JSON string or '0'. Keys:\n" \
-"    SetTitle: string — переопределить заголовок вкладки/панели\n" \
-"    InstanceId: string — id инстанса (заглушка)\n" \
-"    ShowPanel: 'hide'|'docker'|'always' — режим показа (заглушка)\n"
+"  Navigate/open a webview instance and optionally configure it.\n" \
+"  url: const char*  (http/https/file etc). Use '0' or empty to keep current URL.\n" \
+"  opts: JSON string or '0'. Supported keys (all optional):\n" \
+"    SetTitle   : string  -> override custom tab/window title (does NOT affect panel fallback)\n" \
+"    InstanceId : string  -> 'wv_default' (implicit), 'random', or custom starting with 'wv_'.\n" \
+"                  'random' auto-generates sequential wv_N. Any other not starting with 'wv_' maps to wv_default.\n" \
+"    ShowPanel  : string  -> visibility mode: 'hide' | 'docker' | 'always'.\n" \
+"                  hide   : do not show panel (window stays hidden until navigation/activation)\n" \
+"                  docker : ensure docked (if REAPER docking available)\n" \
+"                  always : force visible (floating or docked depending on previous state)\n" \
+"  Behavior notes:\n" \
+"    - First call creates instance window if needed.\n" \
+"    - Title override persists per-instance until another SetTitle or plugin unload.\n" \
+"    - Panel caption always shows fallback derived from domain/page, not SetTitle.\n" \
+"    - Docker tab uses SetTitle when provided, otherwise fallback.\n" \
+"    - Unknown JSON keys are ignored silently.\n" \
+"    - Pass opts='0' (or NULL) for no options.\n"
 
 static ApiRegistrationInfo g_api_list[] = {
   { "WEBVIEW_Navigate", "void", "const char*,const char*", "url,opts", HELP_NAV, &API_WEBVIEW_Navigate, &Vararg_WEBVIEW_Navigate, nullptr },
