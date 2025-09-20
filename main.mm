@@ -95,7 +95,7 @@ static void EnsureTitleBarCreated(HWND hwnd)
   [rec->titleBarView addSubview:rec->titleLabel]; [host addSubview:rec->titleBarView]; [rec->titleBarView setHidden:YES];
 }
 
-static void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
+void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
   NSView* host=(NSView*)hwnd; if(!host) return; WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); CGFloat top=0;
   if(titleVisible && rec && rec->titleBarView){ [rec->titleBarView setFrame:NSMakeRect(0,0, host.bounds.size.width, g_titleBarH)]; [rec->titleLabel setFrame:NSMakeRect(g_titlePadX,2, host.bounds.size.width-2*g_titlePadX, g_titleBarH-4)]; [rec->titleBarView setHidden:NO]; top=g_titleBarH; }
