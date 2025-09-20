@@ -3,9 +3,50 @@
 // 2025 and later
 // helpers.mm
 
+#ifdef _WIN32
+#define RWV_WITH_WEBVIEW2 1
+#endif
 #include "predef.h"
 #include "helpers.h"
 #include "log.h"
+
+#ifdef _WIN32
+void GetPanelThemeColors(HWND panelHwnd, HDC dc, COLORREF* outBk, COLORREF* outTx)
+{
+  if (!outBk || !outTx) return;
+  COLORREF tx = GetSysColor(COLOR_WINDOWTEXT);
+  COLORREF bk = GetSysColor(COLOR_BTNFACE);
+  if (g_hwndParent && IsWindow(g_hwndParent)) {
+    HBRUSH br = (HBRUSH)SendMessage(g_hwndParent, WM_CTLCOLORSTATIC, (WPARAM)dc, (LPARAM)panelHwnd);
+    if (br) {
+      tx = GetTextColor(dc);
+      COLORREF tbk = GetBkColor(dc);
+      if (tbk != CLR_INVALID) bk = tbk;
+    }
+  }
+  if (GetColorThemeStruct) {
+    // optional heuristic fallback if contrast too low
+    int ltx = (30*((tx>>16)&0xFF)+59*((tx>>8)&0xFF)+11*(tx&0xFF))/100;
+    int lbk = (30*((bk>>16)&0xFF)+59*((bk>>8)&0xFF)+11*(bk&0xFF))/100;
+    if (abs(ltx-lbk) < 25) {
+      int sz=0; void* p=GetColorThemeStruct(&sz);
+      if (p && sz>=64) {
+        int* arr=(int*)p; int n=sz/sizeof(int);
+        for(int i=0;i<n-1 && i<128;i++){ int c1=arr[i]&0xFFFFFF; int c2=arr[i+1]&0xFFFFFF; int r1=(c1>>16)&0xFF,g1=(c1>>8)&0xFF,b1=c1&0xFF; int r2=(c2>>16)&0xFF,g2=(c2>>8)&0xFF,b2=c2&0xFF; int l1=(30*r1+59*g1+11*b1)/100; int l2=(30*r2+59*g2+11*b2)/100; if (abs(l1-l2)>60){ bk=RGB(r1,g1,b1); tx=RGB(r2,g2,b2); break; } }
+      }
+    }
+  }
+  *outBk = bk; *outTx = tx;
+}
+#else
+void GetPanelThemeColorsMac(int* outBg, int* outTx)
+{
+  if (outBg) *outBg = -1; if (outTx) *outTx = -1;
+  if (!GetThemeColor) return;
+  int bg = GetThemeColor("col_main_bg",0); if (bg>=0 && outBg) *outBg = bg & 0xFFFFFF;
+  int tx = GetThemeColor("col_main_text",0); if (tx>=0 && outTx) *outTx = tx & 0xFFFFFF;
+}
+#endif
 
 #ifdef _WIN32
 // --- UTF-8 <-> UTF-16 ---

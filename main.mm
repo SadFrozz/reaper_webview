@@ -9,6 +9,9 @@
 // init section
 
 #define RWV_WITH_WEBVIEW2 1
+// Request GetThemeColor symbol from REAPER API
+#define REAPERAPI_WANT_GetThemeColor
+#define REAPERAPI_WANT_GetColorThemeStruct
 #ifndef REAPERAPI_IMPLEMENT
 #define REAPERAPI_IMPLEMENT
 #endif
@@ -23,95 +26,83 @@
 #include "globals.h"   // extern-глобалы/прототипы
 #include "helpers.h"
 
-// ======================== Title panel (dock) =========================
+// ======================== Title panel (creation + logic stays here) =========================
 #ifdef _WIN32
+// Forward declarations (creation logic in this TU; layout needs external linkage)
+static void DestroyTitleBarResources(WebViewInstanceRecord* rec);
+static void EnsureTitleBarCreated(HWND hwnd);
+void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible); // exported across TUs
+static void SetTitleBarText(HWND hwnd, const std::string& s);
+static LRESULT CALLBACK RWVTitleBarProc(HWND h, UINT m, WPARAM w, LPARAM l);
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
 {
-  if (!rec) return;
-  if (rec->titleFont) { DeleteObject(rec->titleFont); rec->titleFont=nullptr; }
-  if (rec->titleBrush){ DeleteObject(rec->titleBrush); rec->titleBrush=nullptr; }
-  if (rec->titleBar && IsWindow(rec->titleBar)) { DestroyWindow(rec->titleBar); rec->titleBar=nullptr; }
+  if (!rec) return; if (rec->titleFont){ DeleteObject(rec->titleFont); rec->titleFont=nullptr;} if (rec->titleBrush){ DeleteObject(rec->titleBrush); rec->titleBrush=nullptr;} if (rec->titleBar && IsWindow(rec->titleBar)){ DestroyWindow(rec->titleBar); rec->titleBar=nullptr; }
 }
+
+static LRESULT CALLBACK RWVTitleBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+  switch(m){
+    case WM_NCCREATE: return 1;
+    case WM_SETTEXT: InvalidateRect(h,nullptr,FALSE); break;
+    case WM_PAINT:
+    {
+      PAINTSTRUCT ps; HDC dc=BeginPaint(h,&ps); RECT r; GetClientRect(h,&r);
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
+      COLORREF bk, tx; GetPanelThemeColors(h, dc, &bk, &tx);
+      if (rec){ if (rec->titleBkColor!=bk){ rec->titleBkColor=bk; if(rec->titleBrush){ DeleteObject(rec->titleBrush); rec->titleBrush=nullptr; }} rec->titleTextColor=tx; if(!rec->titleBrush) rec->titleBrush=CreateSolidBrush(bk);} 
+      HBRUSH fill = (rec && rec->titleBrush)?rec->titleBrush:(HBRUSH)(COLOR_BTNFACE+1);
+      FillRect(dc,&r,fill); SetBkMode(dc,TRANSPARENT); SetTextColor(dc,tx);
+      WCHAR buf[512]; GetWindowTextW(h,buf,512); RECT tr=r; tr.left+=g_titlePadX; DrawTextW(dc,buf,-1,&tr,DT_SINGLELINE|DT_VCENTER|DT_LEFT|DT_NOPREFIX|DT_END_ELLIPSIS);
+      EndPaint(h,&ps); return 0;
+    }
+  }
+  return DefWindowProcW(h,m,w,l);
+}
+
 static void EnsureTitleBarCreated(HWND hwnd)
 {
-  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if (!rec) return;
-  if (rec->titleBar && !IsWindow(rec->titleBar)) rec->titleBar = nullptr;
-  if (rec->titleBar) return;
-  LOGFONTW lf{}; SystemParametersInfoW(SPI_GETICONTITLELOGFONT, sizeof(lf), &lf, 0);
-  lf.lfHeight = -12; lf.lfWeight = FW_SEMIBOLD;
-  rec->titleFont = CreateFontIndirectW(&lf);
-  rec->titleBkColor   = GetSysColor(COLOR_BTNFACE);
-  rec->titleTextColor = GetSysColor(COLOR_BTNTEXT);
-  rec->titleBrush = CreateSolidBrush(rec->titleBkColor);
-  rec->titleBar = CreateWindowExW(0, L"STATIC", L"", WS_CHILD|SS_LEFT|SS_NOPREFIX,
-                               g_titlePadX, 0, 10, g_titleBarH, hwnd, (HMENU)(INT_PTR)IDC_TITLEBAR,
-                               (HINSTANCE)g_hInst, NULL);
-  if (rec->titleBar && rec->titleFont) SendMessageW(rec->titleBar, WM_SETFONT, (WPARAM)rec->titleFont, TRUE);
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if(!rec) return; if (rec->titleBar && !IsWindow(rec->titleBar)) rec->titleBar=nullptr; if(rec->titleBar) return;
+  static bool s_reg=false; if(!s_reg){ WNDCLASSW wc{}; wc.lpfnWndProc=RWVTitleBarProc; wc.hInstance=(HINSTANCE)g_hInst; wc.lpszClassName=L"RWVTitleBar"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); wc.hbrBackground=NULL; RegisterClassW(&wc); s_reg=true; }
+  LOGFONTW lf{}; SystemParametersInfoW(SPI_GETICONTITLELOGFONT,sizeof(lf),&lf,0); lf.lfHeight=-12; lf.lfWeight=FW_SEMIBOLD; rec->titleFont=CreateFontIndirectW(&lf);
+  rec->titleBar = CreateWindowExW(0,L"RWVTitleBar",L"",WS_CHILD,0,0,10,g_titleBarH,hwnd,(HMENU)(INT_PTR)IDC_TITLEBAR,(HINSTANCE)g_hInst,nullptr);
+  if(rec->titleBar && rec->titleFont) SendMessageW(rec->titleBar,WM_SETFONT,(WPARAM)rec->titleFont,TRUE);
 }
+
 void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
-  RECT rc; GetClientRect(hwnd, &rc);
-  int top = 0;
-  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
-  if (titleVisible && rec && rec->titleBar)
-  {
-    MoveWindow(rec->titleBar, g_titlePadX, 0, (rc.right-rc.left) - 2*g_titlePadX, g_titleBarH, TRUE);
-    ShowWindow(rec->titleBar, SW_SHOWNA);
-    top = g_titleBarH;
-  }
-  else if (rec && rec->titleBar) ShowWindow(rec->titleBar, SW_HIDE);
-
-  RECT brc = rc; brc.top += top;
-  if (rec && rec->controller) rec->controller->put_Bounds(brc);
+  RECT rc; GetClientRect(hwnd,&rc); int top=0; WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd);
+  if(titleVisible && rec && rec->titleBar){ MoveWindow(rec->titleBar,0,0,(rc.right-rc.left),g_titleBarH,TRUE); ShowWindow(rec->titleBar,SW_SHOWNA); top=g_titleBarH; }
+  else if(rec && rec->titleBar) ShowWindow(rec->titleBar,SW_HIDE);
+  RECT brc=rc; brc.top+=top; if(rec && rec->controller) rec->controller->put_Bounds(brc);
 }
-static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if (rec && rec->titleBar) SetWindowTextW(rec->titleBar, Widen(s).c_str()); }
+static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); if(rec && rec->titleBar) SetWindowTextW(rec->titleBar,Widen(s).c_str()); }
 #else
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
-{
-  if (!rec) return;
-  if (rec->titleLabel) { [rec->titleLabel removeFromSuperview]; rec->titleLabel = nil; }
-  if (rec->titleBarView) { [rec->titleBarView removeFromSuperview]; rec->titleBarView = nil; }
-}
+{ if(!rec) return; if(rec->titleLabel){ [rec->titleLabel removeFromSuperview]; rec->titleLabel=nil;} if(rec->titleBarView){ [rec->titleBarView removeFromSuperview]; rec->titleBarView=nil;} }
+
 static void EnsureTitleBarCreated(HWND hwnd)
 {
-  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if (!rec) return;
-  if (rec->titleBarView) return;
-  NSView* host = (NSView*)hwnd; if (!host) return;
-  rec->titleBarView = [[NSView alloc] initWithFrame:NSMakeRect(0,0, host.bounds.size.width, g_titleBarH)];
-  rec->titleLabel   = [[NSTextField alloc] initWithFrame:NSMakeRect(g_titlePadX, 2, host.bounds.size.width-2*g_titlePadX, g_titleBarH-4)];
-  [rec->titleLabel setEditable:NO]; [rec->titleLabel setBordered:NO]; [rec->titleLabel setBezeled:NO];
-  [rec->titleLabel setDrawsBackground:YES];
-  [rec->titleLabel setBackgroundColor:[NSColor controlBackgroundColor]];
-  [rec->titleLabel setTextColor:[NSColor controlTextColor]];
+  WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); if(!rec) return; if(rec->titleBarView) return; NSView* host=(NSView*)hwnd; if(!host) return;
+  rec->titleBarView=[[NSView alloc] initWithFrame:NSMakeRect(0,0, host.bounds.size.width, g_titleBarH)];
+  rec->titleLabel=[[NSTextField alloc] initWithFrame:NSMakeRect(g_titlePadX,2, host.bounds.size.width-2*g_titlePadX, g_titleBarH-4)];
+  [rec->titleLabel setEditable:NO]; [rec->titleLabel setBordered:NO]; [rec->titleLabel setBezeled:NO]; [rec->titleLabel setDrawsBackground:YES];
+  int bg=-1, tx=-1; GetPanelThemeColorsMac(&bg,&tx);
+  auto colorFrom = ^NSColor*(int v){ if(v<0) return (NSColor*)nil; CGFloat r=((v>>16)&0xFF)/255.0,g=((v>>8)&0xFF)/255.0,b=(v&0xFF)/255.0; return [NSColor colorWithCalibratedRed:r green:g blue:b alpha:1.0]; };
+  NSColor* bgC = colorFrom(bg); NSColor* txC = colorFrom(tx);
+  [rec->titleLabel setBackgroundColor:bgC?bgC:[NSColor controlBackgroundColor]];
+  [rec->titleLabel setTextColor:txC?txC:[NSColor controlTextColor]];
   [rec->titleLabel setFont:[NSFont systemFontOfSize:[NSFont systemFontSize]]];
-  [rec->titleBarView addSubview:rec->titleLabel]; [host addSubview:rec->titleBarView];
-  [rec->titleBarView setHidden:YES];
+  [rec->titleBarView addSubview:rec->titleLabel]; [host addSubview:rec->titleBarView]; [rec->titleBarView setHidden:YES];
 }
-void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
+
+static void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
-  NSView* host = (NSView*)hwnd; if (!host) return;
-  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
-  CGFloat top = 0;
-  if (titleVisible && rec && rec->titleBarView)
-  {
-    [rec->titleBarView setFrame:NSMakeRect(0,0, host.bounds.size.width, g_titleBarH)];
-    [rec->titleLabel   setFrame:NSMakeRect(g_titlePadX,2, host.bounds.size.width-2*g_titlePadX, g_titleBarH-4)];
-    [rec->titleBarView setHidden:NO];
-    top = g_titleBarH;
-  } else if (rec && rec->titleBarView) [rec->titleBarView setHidden:YES];
-  if (rec && rec->webView)
-  {
-    NSRect b = NSMakeRect(0, top, host.bounds.size.width, host.bounds.size.height - top);
-    [rec->webView setFrame:b];
-  }
+  NSView* host=(NSView*)hwnd; if(!host) return; WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); CGFloat top=0;
+  if(titleVisible && rec && rec->titleBarView){ [rec->titleBarView setFrame:NSMakeRect(0,0, host.bounds.size.width, g_titleBarH)]; [rec->titleLabel setFrame:NSMakeRect(g_titlePadX,2, host.bounds.size.width-2*g_titlePadX, g_titleBarH-4)]; [rec->titleBarView setHidden:NO]; top=g_titleBarH; }
+  else if(rec && rec->titleBarView) [rec->titleBarView setHidden:YES];
+  if(rec && rec->webView){ NSRect b=NSMakeRect(0, top, host.bounds.size.width, host.bounds.size.height-top); [rec->webView setFrame:b]; }
 }
-static void SetTitleBarText(HWND hwnd, const std::string& s)
-{
-  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
-  if (!rec || !rec->titleLabel) return;
-  NSString* t = [NSString stringWithUTF8String:s.c_str()];
-  [rec->titleLabel setStringValue:t ? t : @""];
-}
+static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); if(!rec||!rec->titleLabel) return; NSString* t=[NSString stringWithUTF8String:s.c_str()]; [rec->titleLabel setStringValue:t?t:@""]; }
 #endif
 
 // показать/скрыть панель + текст
@@ -445,18 +436,7 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       return 1;
     }
 
-#ifdef _WIN32
-    case WM_CTLCOLORSTATIC: {
-      WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
-      if (rec && rec->titleBar && (HWND)lp == rec->titleBar) {
-        HDC hdc = (HDC)wp;
-        SetBkColor(hdc, rec->titleBkColor);
-        SetTextColor(hdc, rec->titleTextColor);
-        if (!rec->titleBrush) rec->titleBrush = CreateSolidBrush(rec->titleBkColor);
-        return (INT_PTR)rec->titleBrush;
-      }
-      break; }
-#endif
+    // WM_CTLCOLORSTATIC no longer needed; custom class repaints itself.
 
     case WM_SIZE:
       SizeWebViewToClient(hwnd);

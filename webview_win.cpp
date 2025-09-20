@@ -8,8 +8,6 @@
 
 #define RWV_WITH_WEBVIEW2 1
 #include "predef.h"
-// WIL/WebView2 только здесь (TU помечен RWV_WITH_WEBVIEW2 перед predef.h)
-#include "deps/wil/com.h"
 
 #include <shlwapi.h>
 #include <direct.h>
@@ -19,6 +17,9 @@
 #include "globals.h"
 #include "helpers.h"
 #include "webview.h"
+
+// forward (panel layout kept in main.mm)
+void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible);
 
 using Microsoft::WRL::Callback;
 

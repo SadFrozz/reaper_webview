@@ -24,11 +24,6 @@
     #include <wrl.h>
     #include "deps/wil/com.h"
     #include "deps/WebView2.h"
-  #else
-    // Лёгкие форварды, чтобы заголовки с extern-ссылками компилировались без WIL
-    struct ICoreWebView2;
-    struct ICoreWebView2Controller;
-    namespace wil { template <class T> class com_ptr; }
   #endif
 #else
   #include "WDL/swell/swell.h"
