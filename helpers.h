@@ -29,3 +29,9 @@ void PlatformMakeTopLevel(HWND hwnd);
 bool is_truthy(const char* s);
 std::string GetJsonString(const char* json, const char* key);
 ShowPanelMode ParseShowPanel(const std::string& v);
+
+// Navigation helpers (implemented per-platform in webview_win.cpp / webview_darwin.mm)
+void InstanceGoBack(WebViewInstanceRecord* rec);
+void InstanceGoForward(WebViewInstanceRecord* rec);
+void InstanceReload(WebViewInstanceRecord* rec);
+void InstanceFindPrompt(WebViewInstanceRecord* rec); // basic JS prompt implementation

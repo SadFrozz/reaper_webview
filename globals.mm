@@ -95,6 +95,7 @@ WebViewInstanceRecord* EnsureInstanceAndMaybeNavigate(const std::string& id, con
 				ptr->wantDockOnCreate = def->wantDockOnCreate;
 				ptr->lastDockIdx      = def->lastDockIdx;
 				ptr->lastDockFloat    = def->lastDockFloat;
+					ptr->basicCtxMenu     = def->basicCtxMenu;
 			} else {
 				ptr->titleOverride = kTitleBase;
 			}

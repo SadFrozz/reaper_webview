@@ -18,6 +18,36 @@
 #include "log.h"
 #include "globals.h"
 #include "helpers.h"
+void InstanceGoBack(WebViewInstanceRecord* rec) {
+  if (!rec || !rec->webview) return;
+  rec->webview->GoBack();
+}
+
+void InstanceGoForward(WebViewInstanceRecord* rec) {
+  if (!rec || !rec->webview) return;
+  rec->webview->GoForward();
+}
+
+void InstanceReload(WebViewInstanceRecord* rec) {
+  if (!rec || !rec->webview) return;
+  rec->webview->Reload();
+}
+
+void InstanceFindPrompt(WebViewInstanceRecord* rec) {
+  if (!rec || !rec->webview) return;
+  // Simple prompt-based find (inject JS). WebView2: ExecuteScript
+  const char* js =
+    "(function(){var q=prompt('Find text:',''); if(!q) return;"
+    "var rx=new RegExp(q.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&'),'ig');"
+    "function mark(n){if(n.nodeType!==3||!/\\S/.test(n.nodeValue)) return;" 
+    "var m,txt=n.nodeValue, span=document.createElement('span'), last=0, frag=document.createDocumentFragment();"
+    "while((m=rx.exec(txt))){frag.appendChild(document.createTextNode(txt.substring(last,m.index)));" 
+    "var hi=document.createElement('mark');hi.style.background='#ff0';hi.style.color='#000';hi.textContent=m[0];frag.appendChild(hi);last=m.index+m[0].length;}" 
+    "frag.appendChild(document.createTextNode(txt.substring(last))); n.parentNode.replaceChild(frag,n);}"
+    "(function walk(el){if(el.tagName==='SCRIPT' || el.tagName==='STYLE') return; for(var c=el.firstChild;c;c=c.nextSibling) walk(c);})(document.body);})();";
+  std::wstring wjs = Widen(js);
+  rec->webview->ExecuteScript(wjs.c_str(), nullptr);
+}
 #include "webview.h"
 
 using Microsoft::WRL::Callback;

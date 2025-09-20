@@ -317,7 +317,20 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
 {
   HMENU m = CreatePopupMenu(); if (!m) return;
   bool f=false; int idx=-1; bool inDock = QueryDockState(hwnd,&f,&idx);
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+  bool basic = rec ? rec->basicCtxMenu : false;
+  if (!basic) {
+    // Navigation section
+    AppendMenuA(m, MF_STRING | (rec? (/* no state flag for enabled check */0):MF_GRAYED), 10110, "Back");
+    AppendMenuA(m, MF_STRING | (rec?0:MF_GRAYED), 10111, "Forward");
+    AppendMenuA(m, MF_STRING | (rec?0:MF_GRAYED), 10112, "Reload");
+    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+  }
   AppendMenuA(m, MF_STRING | (inDock?MF_CHECKED:0), 10001, inDock ? "Undock window" : "Dock window in Docker");
+  if (!basic) {
+    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(m, MF_STRING | (rec?0:MF_GRAYED), 10120, "Find on page...");
+  }
   AppendMenuA(m, MF_SEPARATOR, 0, NULL);
   AppendMenuA(m, MF_STRING, 10099, "Close");
 
@@ -347,6 +360,10 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
     }
     UpdateTitlesExtractAndApply(hwnd);
   }
+  else if (cmd == 10110) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); InstanceGoBack(r); }
+  else if (cmd == 10111) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); InstanceGoForward(r); }
+  else if (cmd == 10112) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); InstanceReload(r); }
+  else if (cmd == 10120) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); InstanceFindPrompt(r); }
   else if (cmd == 10099) SendMessage(hwnd, WM_CLOSE, 0, 0);
 }
 

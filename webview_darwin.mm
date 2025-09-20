@@ -10,6 +10,17 @@
 #include "helpers.h"
 #include "webview.h"
 #include <unordered_map> // для карт наблюдателей
+void InstanceGoBack(WebViewInstanceRecord* rec) {
+  if (!rec || !rec->webView) return; [rec->webView goBack]; }
+void InstanceGoForward(WebViewInstanceRecord* rec) {
+  if (!rec || !rec->webView) return; [rec->webView goForward]; }
+void InstanceReload(WebViewInstanceRecord* rec) {
+  if (!rec || !rec->webView) return; [rec->webView reload]; }
+void InstanceFindPrompt(WebViewInstanceRecord* rec) {
+  if (!rec || !rec->webView) return;
+  NSString* js = @"(function(){var q=prompt('Find text:',''); if(!q) return; var rx=new RegExp(q.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&'),'ig'); function mark(n){if(n.nodeType!==3||!/\\\S/.test(n.nodeValue)) return; var m,txt=n.nodeValue, span=document.createElement('span'), last=0, frag=document.createDocumentFragment(); while((m=rx.exec(txt))){frag.appendChild(document.createTextNode(txt.substring(last,m.index))); var hi=document.createElement('mark');hi.style.background='#ff0';hi.style.color='#000';hi.textContent=m[0];frag.appendChild(hi);last=m.index+m[0].length;} frag.appendChild(document.createTextNode(txt.substring(last))); n.parentNode.replaceChild(frag,n);} (function walk(el){if(el.tagName==='SCRIPT' || el.tagName==='STYLE') return; for(var c=el.firstChild;c;c=c.nextSibling) walk(c);})(document.body);})();";
+  [rec->webView evaluateJavaScript:js completionHandler:nil];
+}
 
 
 // Используется пер-инстансовое хранение WKWebView (WebViewInstanceRecord)

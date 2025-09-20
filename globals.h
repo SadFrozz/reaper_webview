@@ -66,6 +66,7 @@ struct WebViewInstanceRecord {
   std::string titleOverride;      // per-instance title override (defaults kTitleBase)
   ShowPanelMode panelMode = ShowPanelMode::Unset;
   std::string lastUrl;
+  bool basicCtxMenu = false;      // if true: context menu reduced (Dock/Undock + Close only)
   // Docking persistence per instance
   int  wantDockOnCreate = -1;     // -1 unknown, 0 undock, 1 dock
   int  lastDockIdx = -1;
