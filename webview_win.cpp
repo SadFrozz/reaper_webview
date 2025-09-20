@@ -8,8 +8,7 @@
 
 #define RWV_WITH_WEBVIEW2 1
 #include "predef.h"
-
-// Use WIL only in this translation unit to manage COM smart pointers; the global record stores raw pointers.
+// WIL/WebView2 только здесь (TU помечен RWV_WITH_WEBVIEW2 перед predef.h)
 #include "deps/wil/com.h"
 
 #include <shlwapi.h>

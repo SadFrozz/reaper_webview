@@ -3,10 +3,10 @@
 // 2025 and later
 // api.mm
 #include "predef.h"
-#include "api.h"
-#include "globals.h"   // пер-инстансовая модель: g_dlg удалён, используем записи WebViewInstanceRecord
-#include "helpers.h"
-#include "log.h"
+#include "api.h"      // собственный публичный интерфейс
+#include "globals.h"  // объявления структур/extern
+#include "helpers.h"  // утилиты (строки, домен, табы)
+#include "log.h"      // логирование
 
 // ------------------------------------------------------------------
 // Регистрация без повторного набора имени функции

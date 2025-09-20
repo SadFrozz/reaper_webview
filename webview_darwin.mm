@@ -9,9 +9,7 @@
 #include "globals.h"
 #include "helpers.h"
 #include "webview.h"
-#import <Cocoa/Cocoa.h>
-#import <WebKit/WebKit.h>
-#include <unordered_map>
+#include <unordered_map> // для карт наблюдателей
 
 
 // Используется пер-инстансовое хранение WKWebView (WebViewInstanceRecord)
