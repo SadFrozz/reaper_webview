@@ -319,20 +319,25 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
   bool f=false; int idx=-1; bool inDock = QueryDockState(hwnd,&f,&idx);
   WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
   bool basic = rec ? rec->basicCtxMenu : false;
-  if (!basic) {
-    // Navigation section
-    AppendMenuA(m, MF_STRING | (rec? (/* no state flag for enabled check */0):MF_GRAYED), 10110, "Back");
-    AppendMenuA(m, MF_STRING | (rec?0:MF_GRAYED), 10111, "Forward");
+  if (basic) {
+    // Only Dock/Undock + Close
+    AppendMenuA(m, MF_STRING | (inDock?MF_CHECKED:0), 10001, inDock ? "Undock window" : "Dock window in Docker");
+    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(m, MF_STRING, 10099, "Close");
+  } else {
+    bool canBack = InstanceCanGoBack(rec);
+    bool canFwd  = InstanceCanGoForward(rec);
     AppendMenuA(m, MF_STRING | (rec?0:MF_GRAYED), 10112, "Reload");
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
-  }
-  AppendMenuA(m, MF_STRING | (inDock?MF_CHECKED:0), 10001, inDock ? "Undock window" : "Dock window in Docker");
-  if (!basic) {
+    AppendMenuA(m, MF_STRING | ( (rec && canBack)?0:MF_GRAYED), 10110, "Back");
+    AppendMenuA(m, MF_STRING | ( (rec && canFwd)?0:MF_GRAYED), 10111, "Forward");
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
     AppendMenuA(m, MF_STRING | (rec?0:MF_GRAYED), 10120, "Find on page...");
+    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(m, MF_STRING | (inDock?MF_CHECKED:0), 10001, inDock ? "Undock window" : "Dock window in Docker");
+    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(m, MF_STRING, 10099, "Close");
   }
-  AppendMenuA(m, MF_SEPARATOR, 0, NULL);
-  AppendMenuA(m, MF_STRING, 10099, "Close");
 
   HWND owner = GetAncestor(hwnd, GA_ROOT); if (!owner) owner = hwnd;
   SetForegroundWindow(owner);
@@ -372,6 +377,12 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
   switch (msg)
   {
+    case WM_KEYDOWN:
+      if ((int)wp == 'F' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+        WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+        if (rec) { InstanceFindPrompt(rec); return 0; }
+      }
+      break;
     case WM_INITDIALOG:
     {
       char* initial = (char*)lp;
@@ -593,6 +604,16 @@ static bool Act_OpenDefault(int /*flag*/)
   return true;
 }
 
+static bool Act_SearchActive(int /*flag*/)
+{
+  // Use current active instance id if available else default
+  std::string id = g_instanceId.empty()?std::string("wv_default"):g_instanceId;
+  WebViewInstanceRecord* rec = GetInstanceById(id);
+  if (!rec || !rec->hwnd) return false;
+  InstanceFindPrompt(rec);
+  return true;
+}
+
 // ============================ structures =============================
 struct CommandSpec {
   const char* name;      // "FRZZ_WEBVIEW_OPEN"
@@ -602,6 +623,7 @@ struct CommandSpec {
 
 static const CommandSpec kCommandSpecs[] = {
   { "FRZZ_WEBVIEW_OPEN", "WebView: Open (default url)", &Act_OpenDefault },
+  { "FRZZ_WEBVIEW_SEARCH", "WebView: Find in active WebView", &Act_SearchActive },
 };
 
 // ============================== Registration blocks ==============================

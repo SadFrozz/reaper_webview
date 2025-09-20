@@ -37,17 +37,20 @@ void InstanceFindPrompt(WebViewInstanceRecord* rec) {
   if (!rec || !rec->webview) return;
   // Simple prompt-based find (inject JS). WebView2: ExecuteScript
   const char* js =
-    "(function(){var q=prompt('Find text:',''); if(!q) return;"
-    "var rx=new RegExp(q.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&'),'ig');"
-    "function mark(n){if(n.nodeType!==3||!/\\S/.test(n.nodeValue)) return;" 
-    "var m,txt=n.nodeValue, span=document.createElement('span'), last=0, frag=document.createDocumentFragment();"
-    "while((m=rx.exec(txt))){frag.appendChild(document.createTextNode(txt.substring(last,m.index)));" 
-    "var hi=document.createElement('mark');hi.style.background='#ff0';hi.style.color='#000';hi.textContent=m[0];frag.appendChild(hi);last=m.index+m[0].length;}" 
-    "frag.appendChild(document.createTextNode(txt.substring(last))); n.parentNode.replaceChild(frag,n);}"
-    "(function walk(el){if(el.tagName==='SCRIPT' || el.tagName==='STYLE') return; for(var c=el.firstChild;c;c=c.nextSibling) walk(c);})(document.body);})();";
+    "(function(){var q=prompt('Find text:',''); if(q===null) return; q=q.trim();"
+    "var old=document.querySelectorAll('mark.__frzfind'); for(var i=0;i<old.length;i++){var m=old[i];var t=document.createTextNode(m.textContent);m.parentNode.replaceChild(t,m);}"
+    "if(!q){return;} var rx=new RegExp(q.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&'),'gi'); var first=null;"
+    "function mark(n){if(n.nodeType!==3) return; var txt=n.nodeValue; var m, last=0; var out=null; while((m=rx.exec(txt))){ if(!out){out=document.createDocumentFragment();} out.appendChild(document.createTextNode(txt.substring(last,m.index))); var hi=document.createElement('mark'); hi.className='__frzfind'; hi.style.background='#ff0'; hi.style.color='#000'; hi.textContent=m[0]; out.appendChild(hi); if(!first) first=hi; last=m.index+m[0].length;} if(out){ out.appendChild(document.createTextNode(txt.substring(last))); n.parentNode.replaceChild(out,n);} }"
+    "(function walk(el){ if(el.tagName==='SCRIPT'||el.tagName==='STYLE') return; for(var c=el.firstChild;c;){ var next=c.nextSibling; if(c.nodeType===3) mark(c); else walk(c); c=next;} })(document.body);"
+    "if(first){ first.scrollIntoView({block:'center'}); first.style.outline='2px solid #f80'; setTimeout(function(){if(first) first.style.outline='';},1500);} })();";
   std::wstring wjs = Widen(js);
   rec->webview->ExecuteScript(wjs.c_str(), nullptr);
 }
+
+bool InstanceCanGoBack(WebViewInstanceRecord* rec) {
+  if (!rec || !rec->webview) return false; BOOL b=false; rec->webview->get_CanGoBack(&b); return !!b; }
+bool InstanceCanGoForward(WebViewInstanceRecord* rec) {
+  if (!rec || !rec->webview) return false; BOOL b=false; rec->webview->get_CanGoForward(&b); return !!b; }
 #include "webview.h"
 
 using Microsoft::WRL::Callback;
