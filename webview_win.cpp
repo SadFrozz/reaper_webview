@@ -47,6 +47,27 @@ void InstanceFindPrompt(WebViewInstanceRecord* rec) {
   rec->webview->ExecuteScript(wjs.c_str(), nullptr);
 }
 
+// New search engine (panel-based) helper: apply
+void InstanceSearchApply(WebViewInstanceRecord* rec, const std::string& query, int index, bool highlightAll, bool caseSens)
+{
+  if (!rec || !rec->webview) return;
+  std::string safeQ=query; // escape JS string
+  size_t pos=0; while((pos=safeQ.find("\\",pos))!=std::string::npos){ safeQ.replace(pos,1,"\\\\"); pos+=2; }
+  pos=0; while((pos=safeQ.find("\"",pos))!=std::string::npos){ safeQ.replace(pos,1,"\\\""); pos+=2; }
+  char buf[4096]; _snprintf_s(buf,sizeof(buf),_TRUNCATE,
+    "(function(){if(!window.__frzFindApply){return;} var r=window.__frzFindApply(\"%s\",%d,%s,%s); if(r){window.chrome&&window.chrome.webview&&window.chrome.webview.postMessage('FINDMETA|'+r.count+'|'+r.index);} })();",
+    safeQ.c_str(), index, highlightAll?"true":"false", caseSens?"true":"false");
+  std::wstring wjs = Widen(std::string(buf));
+  rec->webview->ExecuteScript(wjs.c_str(), nullptr);
+}
+
+void InstanceSearchClear(WebViewInstanceRecord* rec)
+{
+  if (!rec || !rec->webview) return;
+  const wchar_t* js = L"(function(){ if(window.__frzFindClear) window.__frzFindClear(); })();";
+  rec->webview->ExecuteScript(js, nullptr);
+}
+
 bool InstanceCanGoBack(WebViewInstanceRecord* rec) {
   if (!rec || !rec->webview) return false; BOOL b=false; rec->webview->get_CanGoBack(&b); return !!b; }
 bool InstanceCanGoForward(WebViewInstanceRecord* rec) {
@@ -179,6 +200,30 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
                       var s = 'CTX|' + px + '|' + py;
                       if (window.chrome && window.chrome.webview) window.chrome.webview.postMessage(s);
                     }, true);
+                    // Search engine injection
+                    if(!window.__frzFindApply){
+                      (function(){
+                        function clearMarks(){
+                          var old=document.querySelectorAll('mark.__frzfind');
+                          for(var i=0;i<old.length;i++){var m=old[i];var t=document.createTextNode(m.textContent);m.parentNode.replaceChild(t,m);}
+                        }
+                        window.__frzFindClear = clearMarks;
+                        window.__frzFindApply = function(q, idx, hiAll, caseSens){
+                          clearMarks();
+                          if(!q){ return {count:0,index:-1}; }
+                          var flags = caseSens? 'g':'gi';
+                          try { var rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'), flags); } catch(e){ return {count:0,index:-1}; }
+                          var matches=[];
+                          function mark(node){ if(node.nodeType!==3) return; var txt=node.nodeValue; var m; var last=0; var out=null; while((m=rx.exec(txt))){ if(!out) out=document.createDocumentFragment(); out.appendChild(document.createTextNode(txt.substring(last,m.index))); var hi=document.createElement('mark'); hi.className='__frzfind'; hi.style.background='#fff59d'; hi.style.color='#000'; hi.textContent=m[0]; out.appendChild(hi); matches.push(hi); last=m.index+m[0].length; if(!hiAll) break; }
+                            if(out){ out.appendChild(document.createTextNode(txt.substring(last))); node.parentNode.replaceChild(out,node);} }
+                          (function walk(el){ if(el.tagName==='SCRIPT'||el.tagName==='STYLE') return; for(var c=el.firstChild;c;){ var n=c.nextSibling; if(c.nodeType===3) mark(c); else walk(c); c=n;} })(document.body);
+                          if(!matches.length) return {count:0,index:-1};
+                          if(idx<0) idx=0; if(idx>=matches.length) idx = matches.length-1;
+                          var cur = matches[idx]; cur.scrollIntoView({block:'center'}); cur.style.outline='2px solid #f57c00';
+                          return {count:matches.length, index:idx};
+                        };
+                      })();
+                    }
                   )JS";
                   localWebView->AddScriptToExecuteOnDocumentCreated(
                     kFRZCtxJS,
@@ -187,7 +232,7 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
                     ).Get());
                 }
 
-                // Receive 'CTX|x|y' и показать локальное меню
+                // Receive 'CTX|x|y' (context menu) or 'FINDMETA|count|index'
                 localWebView->add_WebMessageReceived(
                   Callback<ICoreWebView2WebMessageReceivedEventHandler>(
                     [hwnd](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args)->HRESULT {
@@ -203,6 +248,10 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
                             sscanf(s.c_str()+4, "%d|%d", &sx, &sy);
                           #endif
                           PostMessage(hwnd, WM_CONTEXTMENU, (WPARAM)hwnd, MAKELPARAM(sx, sy));
+                        } else if (s.rfind("FINDMETA|",0)==0) {
+                          int cnt=0, idx=0; sscanf_s(s.c_str()+9, "%d|%d", &cnt, &idx);
+                          WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+                          if (rec) { rec->searchMatchCount = cnt; rec->searchMatchIndex = idx; }
                         }
                       }
                       return S_OK;
