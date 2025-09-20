@@ -92,6 +92,7 @@ WebViewInstanceRecord* EnsureInstanceAndMaybeNavigate(const std::string& id, con
 				ptr->titleOverride = def->titleOverride.empty()? kTitleBase : def->titleOverride;
 				ptr->panelMode     = def->panelMode;
 				ptr->lastUrl       = def->lastUrl; // стартовая навигация может унаследовать
+				ptr->basicCtxMenu  = def->basicCtxMenu;
 				ptr->wantDockOnCreate = def->wantDockOnCreate;
 				ptr->lastDockIdx      = def->lastDockIdx;
 				ptr->lastDockFloat    = def->lastDockFloat;

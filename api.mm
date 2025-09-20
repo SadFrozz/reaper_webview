@@ -47,10 +47,14 @@ static void API_WEBVIEW_Navigate(const char* url, const char* opts)
   std::string newTitle;
   std::string newInstance;
   ShowPanelMode newShow = ShowPanelMode::Unset;
+  bool newBasicCtx = false;
   if (is_truthy(opts)) {
     newTitle    = GetJsonString(opts, "SetTitle");
     newInstance = GetJsonString(opts, "InstanceId");
     newShow     = ParseShowPanel(GetJsonString(opts, "ShowPanel"));
+    // BasicCtxMenu: any truthy => enable basic context menu
+    std::string bcm = GetJsonString(opts, "BasicCtxMenu");
+    if (!bcm.empty()) newBasicCtx = is_truthy(bcm.c_str());
   }
 
   // --- Multi-instance resolve ---
@@ -65,6 +69,7 @@ static void API_WEBVIEW_Navigate(const char* url, const char* opts)
   WebViewInstanceRecord* before = GetInstanceById(normalizedId);
   std::string oldTitle = before ? before->titleOverride : std::string();
   auto* rec = EnsureInstanceAndMaybeNavigate(normalizedId, url?url:std::string(), (url&&*url), newTitle, newShow);
+  if (rec && newBasicCtx) rec->basicCtxMenu = true;
   g_instanceId = normalizedId; // активный id
 
   // Глобальные поля больше не используются как источник истинного состояния (оставлены для legacy участков докера)
@@ -117,6 +122,7 @@ static void* Vararg_WEBVIEW_Navigate(void** arglist, int numparms)
 "                  hide   : do not show panel (window stays hidden until navigation/activation)\n" \
 "                  docker : ensure docked (if REAPER docking available)\n" \
 "                  always : force visible (floating or docked depending on previous state)\n" \
+"    BasicCtxMenu : bool   -> when true show only minimal context menu (Dock/Undock + Close).\n" \
 "  Behavior notes:\n" \
 "    - First call creates instance window if needed.\n" \
 "    - Title override persists per-instance until another SetTitle or plugin unload.\n" \

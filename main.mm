@@ -317,6 +317,32 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
 {
   HMENU m = CreatePopupMenu(); if (!m) return;
   bool f=false; int idx=-1; bool inDock = QueryDockState(hwnd,&f,&idx);
+
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+  const bool basicOnly = rec && rec->basicCtxMenu;
+
+  if (!basicOnly) {
+    // Reload / Back / Forward / Find stub
+    AppendMenuA(m, MF_STRING, 10110, "Reload");
+    // Forward / Back availability: attempt to query webview capabilities (platform-specific)
+#ifdef _WIN32
+    bool canBack=false, canFwd=false;
+    if (rec && rec->webview) {
+      wil::com_ptr<ICoreWebView2_2> wv2;
+      if (SUCCEEDED(rec->webview->QueryInterface(IID_PPV_ARGS(&wv2))) && wv2) {
+        BOOL cb=FALSE, cf=FALSE; wv2->get_CanGoBack(&cb); wv2->get_CanGoForward(&cf); canBack = cb; canFwd = cf; }
+    }
+#else
+    bool canBack = (rec && rec->webView && rec->webView.canGoBack);
+    bool canFwd  = (rec && rec->webView && rec->webView.canGoForward);
+#endif
+    AppendMenuA(m, MF_STRING | (canBack?0:MF_DISABLED|MF_GRAYED),   10111, "Back");
+    AppendMenuA(m, MF_STRING | (canFwd?0:MF_DISABLED|MF_GRAYED),    10112, "Forward");
+    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(m, MF_STRING, 10113, "Find on page (stub)");
+    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+  }
+
   AppendMenuA(m, MF_STRING | (inDock?MF_CHECKED:0), 10001, inDock ? "Undock window" : "Dock window in Docker");
   AppendMenuA(m, MF_SEPARATOR, 0, NULL);
   AppendMenuA(m, MF_STRING, 10099, "Close");
@@ -346,6 +372,33 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
       if (DockWindowActivate) DockWindowActivate(hwnd);
     }
     UpdateTitlesExtractAndApply(hwnd);
+  }
+  else if (cmd == 10110) { // Reload
+    WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd);
+#ifdef _WIN32
+    if (r && r->webview) r->webview->Reload();
+#else
+    if (r && r->webView) [r->webView reload];
+#endif
+  }
+  else if (cmd == 10111) { // Back
+    WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd);
+#ifdef _WIN32
+    if (r && r->webview) { wil::com_ptr<ICoreWebView2_2> wv2; if (SUCCEEDED(r->webview->QueryInterface(IID_PPV_ARGS(&wv2))) && wv2) { BOOL cb=FALSE; wv2->get_CanGoBack(&cb); if (cb) wv2->GoBack(); } }
+#else
+    if (r && r->webView && r->webView.canGoBack) [r->webView goBack];
+#endif
+  }
+  else if (cmd == 10112) { // Forward
+    WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd);
+#ifdef _WIN32
+    if (r && r->webview) { wil::com_ptr<ICoreWebView2_2> wv2; if (SUCCEEDED(r->webview->QueryInterface(IID_PPV_ARGS(&wv2))) && wv2) { BOOL cf=FALSE; wv2->get_CanGoForward(&cf); if (cf) wv2->GoForward(); } }
+#else
+    if (r && r->webView && r->webView.canGoForward) [r->webView goForward];
+#endif
+  }
+  else if (cmd == 10113) {
+    LogRaw("[FindStub] Find on page invoked (not implemented)");
   }
   else if (cmd == 10099) SendMessage(hwnd, WM_CLOSE, 0, 0);
 }
