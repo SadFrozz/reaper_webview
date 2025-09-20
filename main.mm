@@ -23,6 +23,12 @@
 #include "globals.h"   // extern-глобалы/прототипы
 #include "helpers.h"
 
+#ifdef _WIN32
+// forward declarations (implemented in webview_win.cpp)
+void InstanceSearchApply(WebViewInstanceRecord* rec, const std::string& query, int index, bool highlightAll, bool caseSens);
+void InstanceSearchClear(WebViewInstanceRecord* rec);
+#endif
+
 // ======================== Title panel (dock) =========================
 #ifdef _WIN32
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
@@ -192,6 +198,58 @@ static void SetTitleBarText(HWND hwnd, const std::string& s)
 }
 #endif
 
+#ifndef _WIN32
+// ================= Search Panel (macOS via SWELL abstraction) =================
+static const int kSearchPanelHeight = 32;
+static void EnsureSearchPanelMac(WebViewInstanceRecord* rec)
+{
+  if (!rec || !rec->hwnd) return;
+  if (rec->searchPanelView) return;
+  NSView* host = (NSView*)rec->hwnd; if (!host) return;
+  rec->searchPanelView = [[NSView alloc] initWithFrame:NSMakeRect(0, host.bounds.size.height - kSearchPanelHeight, host.bounds.size.width, kSearchPanelHeight)];
+  [rec->searchPanelView setWantsLayer:YES];
+  rec->searchPanelView.layer.backgroundColor = [NSColor windowBackgroundColor].CGColor;
+  CGFloat x=10; CGFloat y=6; CGFloat h=20;
+  auto makeField = ^NSTextField*(CGFloat w){
+    NSTextField* f=[[NSTextField alloc] initWithFrame:NSMakeRect(x,y,w,h)];
+    [rec->searchPanelView addSubview:f]; x+=w+6; return f; };
+  auto makeBtn = ^NSButton*(NSString* title, CGFloat w){ NSButton* b=[[NSButton alloc] initWithFrame:NSMakeRect(x,y,w,h)]; [b setTitle:title]; [b setButtonType:NSMomentaryPushInButton]; [rec->searchPanelView addSubview:b]; x+=w+6; return b; };
+  auto makeChk = ^NSButton*(NSString* title){ NSButton* c=[[NSButton alloc] initWithFrame:NSMakeRect(x,y,60,h)]; [c setTitle:title]; [c setButtonType:NSSwitchButton]; [rec->searchPanelView addSubview:c]; x+=60+12; return c; };
+  rec->searchField      = makeField(200);
+  rec->searchPrevButton = makeBtn(@"Prev",48);
+  rec->searchNextButton = makeBtn(@"Next",48);
+  rec->searchCaseCheck  = makeChk(@"Case");
+  rec->searchAllCheck   = makeChk(@"All");
+  // Counter label
+  NSTextField* counter = [[NSTextField alloc] initWithFrame:NSMakeRect(x,y+2,60,h)];
+  [counter setEditable:NO]; [counter setBordered:NO]; [counter setBezeled:NO]; [counter setDrawsBackground:NO];
+  [counter setStringValue:@"0/0"]; [rec->searchPanelView addSubview:counter];
+  x += 60;
+  // Close button pinned to right
+  rec->searchCloseButton = [[NSButton alloc] initWithFrame:NSMakeRect(host.bounds.size.width-34,y,28,h)];
+  [rec->searchCloseButton setTitle:@"X"]; [rec->searchCloseButton setButtonType:NSMomentaryPushInButton];
+  [rec->searchPanelView addSubview:rec->searchCloseButton];
+  rec->searchPanelVisible = true;
+  [host addSubview:rec->searchPanelView];
+}
+
+static void ShowSearchPanelMac(WebViewInstanceRecord* rec, bool show)
+{
+  if (!rec) return; if (!rec->searchPanelView && show) EnsureSearchPanelMac(rec);
+  if (rec->searchPanelView) [rec->searchPanelView setHidden:!show];
+  rec->searchPanelVisible = show;
+  if (rec->hwnd) LayoutTitleBarAndWebView(rec->hwnd, false);
+}
+
+static void UpdateSearchCounterMac(WebViewInstanceRecord* rec)
+{
+  if (!rec || !rec->searchPanelView) return;
+  int cur = (rec->searchMatchIndex>=0)?(rec->searchMatchIndex+1):0; int total = rec->searchMatchCount;
+  NSString* txt=[NSString stringWithFormat:@"%d/%d",cur,total];
+  for(NSView* v in rec->searchPanelView.subviews){ if([v isKindOfClass:[NSTextField class]]){ NSTextField* tf=(NSTextField*)v; if([[tf stringValue] containsString:@"/"]) { [tf setStringValue:txt]; break; } } }
+}
+#endif
+
 // показать/скрыть панель + текст
 static void UpdateTitleBarUI(HWND hwnd, const std::string& domain, const std::string& pageTitle, const std::string& effectiveTitle,
                              bool inDock, bool finalPanelVisible, ShowPanelMode mode)
@@ -207,6 +265,27 @@ static void UpdateTitleBarUI(HWND hwnd, const std::string& domain, const std::st
   SetTitleBarText(hwnd, panelText);
   LayoutTitleBarAndWebView(hwnd, wantVisible);
   LogF("[Panel] inDock=%d mode=%d visible=%d title='%s' (fallback only)", (int)inDock, (int)mode, (int)wantVisible, panelText.c_str());
+}
+
+// ================= Search Panel Cross-platform helpers =================
+static void ShowSearchPanelUnified(WebViewInstanceRecord* rec, bool show)
+{
+  if (!rec) return;
+#ifdef _WIN32
+  ShowSearchPanel(rec, show);
+#else
+  ShowSearchPanelMac(rec, show);
+#endif
+}
+
+static void UpdateSearchCounterUnified(WebViewInstanceRecord* rec)
+{
+  if (!rec) return;
+#ifdef _WIN32
+  UpdateSearchCounter(rec);
+#else
+  UpdateSearchCounterMac(rec);
+#endif
 }
 
 // ============================== Titles (common) ==============================
@@ -455,6 +534,60 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
   switch (msg)
   {
+    case WM_COMMAND:
+    {
+#ifdef _WIN32
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+      if (!rec) break;
+      HWND src = (HWND)lp;
+      if (!src) break;
+      // Identify control by comparing handles
+      if (src == rec->searchEdit && HIWORD(wp) == EN_CHANGE) {
+        wchar_t buf[512]; GetWindowTextW(rec->searchEdit, buf, 512);
+        rec->searchQuery = Narrow(std::wstring(buf));
+        rec->searchMatchIndex = 0;
+        InstanceSearchApply(rec, rec->searchQuery, rec->searchMatchIndex, rec->searchHighlightAll, rec->searchCaseSensitive);
+        UpdateSearchCounterUnified(rec);
+        return 0;
+      }
+      if (src == rec->searchBtnPrev) {
+        if (rec->searchMatchCount>0) {
+          rec->searchMatchIndex = (rec->searchMatchIndex<=0)? (rec->searchMatchCount-1) : (rec->searchMatchIndex-1);
+          InstanceSearchApply(rec, rec->searchQuery, rec->searchMatchIndex, rec->searchHighlightAll, rec->searchCaseSensitive);
+          UpdateSearchCounterUnified(rec);
+        }
+        return 0;
+      }
+      if (src == rec->searchBtnNext) {
+        if (rec->searchMatchCount>0) {
+          rec->searchMatchIndex = (rec->searchMatchIndex+1) % rec->searchMatchCount;
+          InstanceSearchApply(rec, rec->searchQuery, rec->searchMatchIndex, rec->searchHighlightAll, rec->searchCaseSensitive);
+          UpdateSearchCounterUnified(rec);
+        }
+        return 0;
+      }
+      if (src == rec->searchChkCase) {
+        rec->searchCaseSensitive = (SendMessage(rec->searchChkCase, BM_GETCHECK,0,0)==BST_CHECKED);
+        rec->searchMatchIndex = 0;
+        InstanceSearchApply(rec, rec->searchQuery, rec->searchMatchIndex, rec->searchHighlightAll, rec->searchCaseSensitive);
+        UpdateSearchCounterUnified(rec);
+        return 0;
+      }
+      if (src == rec->searchChkAll) {
+        rec->searchHighlightAll = (SendMessage(rec->searchChkAll, BM_GETCHECK,0,0)==BST_CHECKED);
+        InstanceSearchApply(rec, rec->searchQuery, rec->searchMatchIndex<0?0:rec->searchMatchIndex, rec->searchHighlightAll, rec->searchCaseSensitive);
+        UpdateSearchCounterUnified(rec);
+        return 0;
+      }
+      if (src == rec->searchCloseBtn) {
+        InstanceSearchClear(rec);
+        ShowSearchPanelUnified(rec, false);
+        rec->searchQuery.clear(); rec->searchMatchCount=0; rec->searchMatchIndex=-1;
+        return 0;
+      }
+#endif
+      break;
+    }
     case WM_KEYDOWN:
       if ((int)wp == 'F' && (GetKeyState(VK_CONTROL) & 0x8000)) {
         // Swallow Ctrl+F so built-in WebView2 search UI never appears; user assigns their own shortcut to FRZZ_WEBVIEW_SEARCH command.
@@ -538,15 +671,7 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       return 0;
     }
 
-    case WM_COMMAND:
-      switch (LOWORD(wp))
-      {
-        case IDOK:
-        case IDCANCEL:
-          SendMessage(hwnd, WM_CLOSE, 0, 0);
-          return 0;
-      }
-      return 0; // other commands not handled
+    // (Second WM_COMMAND case removed; consolidated earlier for search panel controls)
 
     case WM_CLOSE:
       LogRaw("[WM_CLOSE]");
@@ -691,8 +816,22 @@ static bool Act_SearchActive(int /*flag*/)
     LogRaw("[SearchGuard] No active visible WebView instance to search");
     return false;
   }
-  // Placeholder: panel-based search will be invoked here (open panel if hidden)
-  InstanceFindPrompt(rec); // transitional prompt call
+  // Show panel if hidden
+  if (!rec->searchPanelVisible) {
+    ShowSearchPanelUnified(rec, true);
+  }
+  // Focus edit
+#ifdef _WIN32
+  if (rec->searchEdit && IsWindow(rec->searchEdit)) SetFocus(rec->searchEdit);
+#else
+  if (rec->searchField) [rec->searchField becomeFirstResponder];
+#endif
+  // Initial apply if query already present
+  if (!rec->searchQuery.empty()) {
+#ifdef _WIN32
+    InstanceSearchApply(rec, rec->searchQuery, rec->searchMatchIndex<0?0:rec->searchMatchIndex, rec->searchHighlightAll, rec->searchCaseSensitive);
+#endif
+  }
   return true;
 }
 
