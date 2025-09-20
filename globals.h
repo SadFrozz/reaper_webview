@@ -89,6 +89,30 @@ struct WebViewInstanceRecord {
   // Per-instance cached captions
   std::string lastTabTitle;
   std::string lastWndText;
+  // ==== Search panel state (cross-platform abstraction) ====
+  bool    searchPanelVisible = false; // panel currently shown
+  std::string searchQuery;            // last query
+  int     searchMatchIndex = -1;      // current focus index (0-based)
+  int     searchMatchCount = 0;       // number of matches (cached from last apply)
+  bool    searchHighlightAll = true;  // highlight all occurrences by default
+  bool    searchCaseSensitive = false;// case sensitivity flag
+#ifdef _WIN32
+  HWND    searchPanelHwnd = nullptr;  // container panel
+  HWND    searchEdit = nullptr;
+  HWND    searchBtnPrev = nullptr;
+  HWND    searchBtnNext = nullptr;
+  HWND    searchChkCase = nullptr;
+  HWND    searchChkAll = nullptr;
+  HWND    searchCloseBtn = nullptr;   // the 'X' button
+#else
+  NSView* searchPanelView = nil;      // container view
+  NSTextField* searchField = nil;
+  NSButton* searchPrevButton = nil;
+  NSButton* searchNextButton = nil;
+  NSButton* searchCaseCheck = nil;
+  NSButton* searchAllCheck = nil;
+  NSButton* searchCloseButton = nil;  // the 'X'
+#endif
 };
 
 extern std::unordered_map<std::string, std::unique_ptr<WebViewInstanceRecord>> g_instances; // id -> record

@@ -160,6 +160,14 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
                 if (SUCCEEDED(localWebView->get_Settings(&settings)) && settings)
                   settings->put_AreDefaultContextMenusEnabled(FALSE);
 
+                // Disable built-in browser accelerator keys (Ctrl+F etc.) so plugin manages search UX fully
+                ICoreWebView2Settings3* settings3 = nullptr;
+                if (localWebView && SUCCEEDED(localWebView.get()->get_Settings(&settings)) && settings &&
+                    SUCCEEDED(settings->QueryInterface(IID_PPV_ARGS(&settings3))) && settings3) {
+                  settings3->put_AreBrowserAcceleratorKeysEnabled(FALSE);
+                  settings3->Release();
+                }
+
                 // JS bridge: ПКМ из WebView2 -> локальное меню
                 {
                   static const wchar_t* kFRZCtxJS = LR"JS(

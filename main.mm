@@ -335,7 +335,7 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
     AppendMenuA(m, MF_STRING | (rec?0:MF_GRAYED), 10120, "Find on page...");
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
     AppendMenuA(m, MF_STRING | (inDock?MF_CHECKED:0), 10001, inDock ? "Undock window" : "Dock window in Docker");
-    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+    // Removed extra separator before Close per UX refinement
     AppendMenuA(m, MF_STRING, 10099, "Close");
   }
 
@@ -368,7 +368,7 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
   else if (cmd == 10110) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); InstanceGoBack(r); }
   else if (cmd == 10111) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); InstanceGoForward(r); }
   else if (cmd == 10112) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); InstanceReload(r); }
-  else if (cmd == 10120) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); InstanceFindPrompt(r); }
+  else if (cmd == 10120) { WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); /* Panel-based search will replace prompt; guarded call for now */ if (r) InstanceFindPrompt(r); }
   else if (cmd == 10099) SendMessage(hwnd, WM_CLOSE, 0, 0);
 }
 
@@ -379,8 +379,8 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
   {
     case WM_KEYDOWN:
       if ((int)wp == 'F' && (GetKeyState(VK_CONTROL) & 0x8000)) {
-        WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
-        if (rec) { InstanceFindPrompt(rec); return 0; }
+        // Swallow Ctrl+F so built-in WebView2 search UI never appears; user assigns their own shortcut to FRZZ_WEBVIEW_SEARCH command.
+        return 0; // Do NOT open prompt here (panel command driven)
       }
       break;
     case WM_INITDIALOG:
@@ -606,11 +606,15 @@ static bool Act_OpenDefault(int /*flag*/)
 
 static bool Act_SearchActive(int /*flag*/)
 {
-  // Use current active instance id if available else default
+  // Pick active instance, ensure window is valid & visible
   std::string id = g_instanceId.empty()?std::string("wv_default"):g_instanceId;
   WebViewInstanceRecord* rec = GetInstanceById(id);
-  if (!rec || !rec->hwnd) return false;
-  InstanceFindPrompt(rec);
+  if (!rec || !rec->hwnd || !IsWindow(rec->hwnd) || !IsWindowVisible(rec->hwnd)) {
+    LogRaw("[SearchGuard] No active visible WebView instance to search");
+    return false;
+  }
+  // Placeholder: panel-based search will be invoked here (open panel if hidden)
+  InstanceFindPrompt(rec); // transitional prompt call
   return true;
 }
 
