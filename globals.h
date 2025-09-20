@@ -50,6 +50,8 @@ extern const char* kTitleBase;
   #else
     struct WKWebView; // в чисто C++ контексте достаточно неполного типа
   #endif
+  // Функция очистки наблюдателя заголовка (реализована в webview_darwin.mm)
+  extern "C" void FRZ_RemoveTitleObserverFor(WKWebView* wv);
 #endif
 
 // (deprecated globals for title caching removed; caching now per-instance)

@@ -125,7 +125,6 @@ void PurgeDeadInstances()
 			LogF("[InstancePurge] removing dead record id='%s'", it->first.c_str());
 #ifndef _WIN32
 			// Снятие KVO наблюдателя теперь инкапсулировано
-			extern "C" void FRZ_RemoveTitleObserverFor(class WKWebView*);
 			if (r->webView) FRZ_RemoveTitleObserverFor(r->webView);
 #endif
 			it = g_instances.erase(it);
