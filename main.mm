@@ -138,6 +138,7 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
   NSView* host = (NSView*)hwnd; if(!host) return; WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
   if (!rec) return;
+  static bool s_inLayout=false; if (s_inLayout) return; s_inLayout=true;
   if (!rec->titleBarView) EnsureTitleBarCreated(hwnd);
 
   CGFloat hostW = host.bounds.size.width;
@@ -150,16 +151,9 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
       [rec->titleLabel setFrame:NSMakeRect(g_titlePadX, 2, hostW - 2*g_titlePadX, g_titleBarH - 4)];
       UpdateMacTitleBarColors(rec);
       [rec->titleBarView setHidden:NO];
-      // Если по какой-то причине ниже webview — поднимем (проверяем индекс)
       if (rec->webView && [rec->titleBarView superview] == host) {
-        NSArray<NSView*>* subs = [host subviews];
-        if ([subs containsObject:rec->webView] && [subs containsObject:rec->titleBarView]) {
-          // Если titleBarView идёт раньше webView в массиве (ниже по z), переместим на верх
-          if ([subs indexOfObject:rec->titleBarView] < [subs indexOfObject:rec->webView]) {
-            [rec->titleBarView removeFromSuperviewWithoutNeedingDisplay];
-            [host addSubview:rec->titleBarView positioned:NSWindowAbove relativeTo:rec->webView];
-          }
-        }
+        // Поднимаем наверх (AppKit гарантирует перемещение поверх при повторном addSubview:positioned:)
+        [host addSubview:rec->titleBarView positioned:NSWindowAbove relativeTo:nil];
       }
     } else {
       [rec->titleBarView setHidden:YES];
@@ -171,6 +165,7 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
     NSRect webF = NSMakeRect(0, 0, hostW, hostH - panelH);
     [rec->webView setFrame:webF];
   }
+  s_inLayout=false;
 }
 static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); if(!rec||!rec->titleLabel) return; NSString* t=[NSString stringWithUTF8String:s.c_str()]; [rec->titleLabel setStringValue:t?t:@""]; }
 #endif
@@ -314,8 +309,40 @@ void UpdateTitlesExtractAndApply(HWND hwnd)
 
 static void SizeWebViewToClient(HWND hwnd)
 {
-  // Унифицированно: полный пересчёт логики видимости/текста через главный апдейтер
-  UpdateTitlesExtractAndApply(hwnd);
+#ifdef _WIN32
+  bool isFloat=false; int idx=-1;
+  bool inDock = DockIsChildOfDock ? (DockIsChildOfDock(hwnd, &isFloat) >= 0) : false;
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+  bool wantPanel=false;
+  if (inDock) {
+    std::string t = rec ? rec->titleOverride : kTitleBase;
+    if (t.empty()) t = kTitleBase;
+    bool defaultMode = (t == kTitleBase);
+    ShowPanelMode mode = rec ? rec->panelMode : ShowPanelMode::Unset;
+    switch(mode){
+      case ShowPanelMode::Hide: wantPanel=false; break;
+      case ShowPanelMode::Docker: wantPanel = defaultMode && inDock; break;
+      case ShowPanelMode::Always: wantPanel = defaultMode; break;
+      case ShowPanelMode::Unset: default: wantPanel = defaultMode && inDock; break; }
+  }
+  LayoutTitleBarAndWebView(hwnd, wantPanel);
+#else
+  bool isFloat=false; int idx=-1;
+  bool inDock = DockIsChildOfDock ? (DockIsChildOfDock(hwnd, &isFloat) >= 0) : false;
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
+  bool wantPanel=false;
+  if (rec) {
+    std::string effTitle = rec->titleOverride.empty()? kTitleBase : rec->titleOverride;
+    bool defaultMode = (effTitle == kTitleBase);
+    ShowPanelMode mode = rec->panelMode;
+    switch(mode){
+      case ShowPanelMode::Hide: wantPanel=false; break;
+      case ShowPanelMode::Docker: wantPanel = defaultMode && inDock; break;
+      case ShowPanelMode::Always: wantPanel = defaultMode; break;
+      case ShowPanelMode::Unset: default: wantPanel = defaultMode && inDock; break; }
+  }
+  LayoutTitleBarAndWebView(hwnd, wantPanel);
+#endif
 }
 
 // ============================== WebView init ==============================
