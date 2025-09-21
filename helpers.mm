@@ -42,9 +42,34 @@ void GetPanelThemeColors(HWND panelHwnd, HDC dc, COLORREF* outBk, COLORREF* outT
 void GetPanelThemeColorsMac(int* outBg, int* outTx)
 {
   if (outBg) *outBg = -1; if (outTx) *outTx = -1;
-  if (!GetThemeColor) return;
-  int bg = GetThemeColor("col_main_bg",0); if (bg>=0 && outBg) *outBg = bg & 0xFFFFFF;
-  int tx = GetThemeColor("col_main_text",0); if (tx>=0 && outTx) *outTx = tx & 0xFFFFFF;
+  // Base values analogous to Windows GetSysColor fallback
+  int tx = -1, bg = -1;
+  if (GetThemeColor) {
+    int tbg = GetThemeColor("col_main_bg",0); if (tbg>=0) bg = tbg & 0xFFFFFF;
+    int ttx = GetThemeColor("col_main_text",0); if (ttx>=0) tx = ttx & 0xFFFFFF;
+  }
+  // If still invalid, fallback to some neutral defaults (similar semantic role)
+  if (bg < 0) bg = 0xC0C0C0; // approx BTNFACE
+  if (tx < 0) tx = 0x000000; // window text
+
+  // Contrast check + heuristic fallback identical in spirit to Windows branch
+  int rtx=(tx>>16)&0xFF, gtx=(tx>>8)&0xFF, btx=tx&0xFF;
+  int rbg=(bg>>16)&0xFF, gbg=(bg>>8)&0xFF, bbg=bg&0xFF;
+  int ltx = (30*rtx + 59*gtx + 11*btx)/100;
+  int lbg = (30*rbg + 59*gbg + 11*bbg)/100;
+  if (abs(ltx-lbg) < 25 && GetColorThemeStruct) {
+    int sz=0; void* p = GetColorThemeStruct(&sz);
+    if (p && sz>=64) {
+      int* arr = (int*)p; int n = sz/sizeof(int);
+      for (int i=0;i<n-1 && i<128;i++) {
+        int c1 = arr[i] & 0xFFFFFF; int c2 = arr[i+1] & 0xFFFFFF;
+        int r1=(c1>>16)&0xFF,g1=(c1>>8)&0xFF,b1=c1&0xFF; int r2=(c2>>16)&0xFF,g2=(c2>>8)&0xFF,b2=c2&0xFF;
+        int l1=(30*r1+59*g1+11*b1)/100; int l2=(30*r2+59*g2+11*b2)/100;
+        if (abs(l1-l2)>60) { bg = c1; tx = c2; break; }
+      }
+    }
+  }
+  if (outBg) *outBg = bg; if (outTx) *outTx = tx;
 }
 #endif
 
