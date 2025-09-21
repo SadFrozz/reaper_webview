@@ -115,7 +115,11 @@ static inline NSColor* RWVColorFromInt(int v)
 
 static void MacInitOrRefreshPanelColors(WebViewInstanceRecord* rec)
 {
-  if (!rec) return; int bg=-1, tx=-1; GetPanelThemeColorsMac(&bg,&tx); rec->titleBkColor=bg; rec->titleTextColor=tx;
+  if (!rec) return; int prevBg=rec->titleBkColor, prevTx=rec->titleTextColor; int bg=-1, tx=-1; GetPanelThemeColorsMac(&bg,&tx);
+  rec->titleBkColor=bg; rec->titleTextColor=tx;
+  if (prevBg!=bg || prevTx!=tx) {
+    LogF("[MacPanelColorApply] inst=%s bg=0x%06X tx=0x%06X (prev bg=0x%06X tx=0x%06X)", rec->id.c_str(), bg, tx, prevBg, prevTx);
+  }
   if (rec->titleBarView && [rec->titleBarView isKindOfClass:[FRZTitleBarView class]]) {
     FRZTitleBarView* v=(FRZTitleBarView*)rec->titleBarView; v.rwvBgColor=rec->titleBkColor; v.rwvTxColor=rec->titleTextColor; [v setNeedsDisplay:YES];
   }
@@ -145,6 +149,9 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
   if (!rec->titleBarView) EnsureTitleBarCreated(hwnd);
 
   CGFloat hostW = host.bounds.size.width;
+    if (rec && (rec->titleBkColor!=bg || rec->titleTextColor!=tx)) {
+      LogF("[MacDrawRectDiag] inst=%s viewColors(bg=0x%06X tx=0x%06X) recColors(bg=0x%06X tx=0x%06X)", rec->id.c_str(), bg, tx, rec->titleBkColor, rec->titleTextColor);
+    }
   CGFloat hostH = host.bounds.size.height;
   CGFloat panelH = (titleVisible && rec->titleBarView)? g_titleBarH : 0;
 

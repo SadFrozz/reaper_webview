@@ -43,23 +43,31 @@ void GetPanelThemeColorsMac(int* outBg, int* outTx)
 {
   if (outBg) *outBg = -1; if (outTx) *outTx = -1;
   int bg = -1, tx = -1;
+  int raw_bg = -1, raw_tx = -1;
   if (GetThemeColor) {
-    int tbg = GetThemeColor("col_main_bg",0); if (tbg>=0) bg = tbg & 0xFFFFFF;
-    int ttx = GetThemeColor("col_main_text",0); if (ttx>=0) tx = ttx & 0xFFFFFF;
+    raw_bg = GetThemeColor("col_main_bg",0);
+    raw_tx = GetThemeColor("col_main_text",0);
+    if (raw_bg >= 0) bg = raw_bg & 0xFFFFFF;
+    if (raw_tx >= 0) tx = raw_tx & 0xFFFFFF;
   }
-  if (bg < 0) bg = 0xC0C0C0; // fallback background
-  // If text color absent или хотим унифицировать без контрастной эвристики — инвертируем фон
-  if (tx < 0) {
-    tx = ((~bg) & 0xFFFFFF); // simple invert
-  }
-  // Дополнительно: если инверсия даёт слишком близкую яркость (редко), форсим чисто чёрный/белый
+  // Fallback background if theme did not supply
+  bool usedFallbackBg = false;
+  if (bg < 0) { bg = 0xC0C0C0; usedFallbackBg = true; }
+  // Text color: if absent we invert background
+  bool inverted = false;
+  if (tx < 0) { tx = ((~bg) & 0xFFFFFF); inverted = true; }
+  // Brightness safeguard
   int rbg=(bg>>16)&0xFF, gbg=(bg>>8)&0xFF, bbg=bg&0xFF;
   int rtx=(tx>>16)&0xFF, gtx=(tx>>8)&0xFF, btx=tx&0xFF;
   int lbg=(30*rbg+59*gbg+11*bbg)/100; int ltx=(30*rtx+59*gtx+11*btx)/100;
+  bool contrastAdjust=false;
   if (abs(ltx-lbg) < 20) {
     tx = (lbg > 128) ? 0x000000 : 0xFFFFFF;
+    contrastAdjust = true;
   }
   if (outBg) *outBg = bg; if (outTx) *outTx = tx;
+  LogF("[MacThemeColors] raw_bg=%d raw_tx=%d -> bg=0x%06X tx=0x%06X fbBg=%d inverted=%d contrastAdj=%d lbg=%d ltx=%d diff=%d",
+       raw_bg, raw_tx, bg, tx, (int)usedFallbackBg, (int)inverted, (int)contrastAdjust, lbg, ltx, abs(ltx-lbg));
 }
 #endif
 
