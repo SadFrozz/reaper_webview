@@ -27,6 +27,18 @@
 #include "helpers.h"
 
 // ======================== Title panel (creation + logic stays here) =========================
+
+// Control IDs must be available on both platforms
+#ifndef IDC_FIND_EDIT
+#define IDC_FIND_EDIT     2101
+#define IDC_FIND_PREV     2102
+#define IDC_FIND_NEXT     2103
+#define IDC_FIND_CASE     2104
+#define IDC_FIND_HILITE   2105
+#define IDC_FIND_COUNTER  2106
+#define IDC_FIND_CLOSE    2107
+#endif
+
 #ifdef _WIN32
 // Forward declarations (creation logic in this TU; layout needs external linkage)
 #include <wincodec.h>
@@ -45,16 +57,7 @@ static LRESULT CALLBACK RWVTitleBarProc(HWND h, UINT m, WPARAM w, LPARAM l);
 static void EnsureFindBarCreated(HWND hwnd);
 static void UpdateFindCounter(WebViewInstanceRecord* rec);
 
-// Control IDs (child controls for find bar) MUST be defined before any usage
-#ifndef IDC_FIND_EDIT
-#define IDC_FIND_EDIT     2101
-#define IDC_FIND_PREV     2102
-#define IDC_FIND_NEXT     2103
-#define IDC_FIND_CASE     2104
-#define IDC_FIND_HILITE   2105
-#define IDC_FIND_COUNTER  2106
-#define IDC_FIND_CLOSE    2107
-#endif
+// IDs already defined globally above
 
 static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l);
 static WNDPROC s_origFindEditProc = nullptr;
@@ -104,7 +107,7 @@ static void RWV_FindNavigateInline(WebViewInstanceRecord* rec, bool fwd)
 {
   if (!rec) return;
   LogF("[Find] nav %s (inline) query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
-  // Future: update indices and call UpdateFindCounter(rec) after search results
+  // Future: perform real search and then UpdateFindCounter(rec)
 }
 static LRESULT CALLBACK RWVFindEditProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
@@ -508,7 +511,11 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
   if(rec && rec->controller) rec->controller->put_Bounds(brc);
 }
 static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); if(rec && rec->titleBar) SetWindowTextW(rec->titleBar,Widen(s).c_str()); }
-#else
+#else // ============================= macOS implementation =============================
+// Forward declarations for mac-side find bar helpers before use in LayoutTitleBarAndWebView
+static void EnsureFindBarCreated(HWND hwnd); // mac variant
+static void MacUpdateFindCounter(WebViewInstanceRecord* rec);
+static void RWV_FindNavigateInline(WebViewInstanceRecord* rec, bool fwd); // unify name with Windows
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
 { if(!rec) return; if(rec->titleBarView){ [rec->titleBarView removeFromSuperview]; rec->titleBarView=nil;} }
 
@@ -613,7 +620,7 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
     if (rec->findBarView) {
       [rec->findBarView setFrame:NSMakeRect(0, 0, hostW, g_findBarH)];
       [rec->findBarView setHidden:NO];
-      MacUpdateFindCounter(rec);
+  MacUpdateFindCounter(rec);
     }
   } else if (rec->findBarView) {
     [rec->findBarView setHidden:YES];
@@ -629,9 +636,33 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); if(!rec) return; if(rec->panelTitleString==s) return; rec->panelTitleString=s; if(rec->titleBarView) [rec->titleBarView setNeedsDisplay:YES]; }
 
 // ============================= macOS Find Bar =============================
+// Custom text field to intercept Enter/Shift+Enter without losing focus (mirrors Windows behavior)
+@interface FRZFindTextField : NSTextField
+@property (nonatomic, assign) HWND rwvHostHWND;
+@end
+@implementation FRZFindTextField
+- (void)keyDown:(NSEvent*)event
+{
+  NSString* chars = [event charactersIgnoringModifiers];
+  if (chars.length>0){ unichar c = [chars characterAtIndex:0];
+    if (c=='\r' || c=='\n') {
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(rec){
+        bool shift = ([event modifierFlags] & NSEventModifierFlagShift) != 0;
+        bool fwd = !shift;
+        RWV_FindNavigateInline(rec, fwd);
+        // Keep focus & select all (same as Windows)
+        [self selectText:nil];
+      }
+      return; // swallow
+    }
+  }
+  [super keyDown:event];
+}
+@end
+
 @interface FRZFindBarView : NSView <NSTextFieldDelegate>
 @property (nonatomic, assign) HWND rwvHostHWND;
-@property (nonatomic, strong) NSTextField* txtField;
+@property (nonatomic, strong) FRZFindTextField* txtField;
 @property (nonatomic, strong) NSButton*   btnPrev;
 @property (nonatomic, strong) NSButton*   btnNext;
 @property (nonatomic, strong) NSButton*   chkCase;
@@ -692,20 +723,37 @@ static void EnsureFindBarCreated(HWND hwnd)
   [fb setAutoresizingMask:(NSViewWidthSizable | NSViewMaxYMargin)];
 
   CGFloat x=6; CGFloat y=4; CGFloat h=g_findBarH-8; if (h<16) h=16;
-  fb.txtField = [[NSTextField alloc] initWithFrame:NSMakeRect(x,y,180,h)];
-  [fb.txtField setAutoresizingMask:NSViewMaxXMargin]; fb.txtField.delegate=fb; x+=180+6;
-  fb.btnPrev = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,50,h)]; [fb.btnPrev setTitle:@"Prev"]; [fb.btnPrev setTarget:fb]; [fb.btnPrev setAction:@selector(commonButtonAction:)]; x+=50+4;
-  fb.btnNext = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,50,h)]; [fb.btnNext setTitle:@"Next"]; [fb.btnNext setTarget:fb]; [fb.btnNext setAction:@selector(commonButtonAction:)]; x+=50+8;
-  fb.chkCase = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,80,h)]; [fb.chkCase setButtonType:NSButtonTypeSwitch]; [fb.chkCase setTitle:@"Case"]; [fb.chkCase setTarget:fb]; [fb.chkCase setAction:@selector(commonButtonAction:)]; x+=80+4;
-  fb.chkHighlight = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,110,h)]; [fb.chkHighlight setButtonType:NSButtonTypeSwitch]; [fb.chkHighlight setTitle:@"Highlight"]; [fb.chkHighlight setTarget:fb]; [fb.chkHighlight setAction:@selector(commonButtonAction:)]; x+=110+6;
+  // Align mac layout spacing with Windows: edit(180), +8, prev(24), +8, next(24)+10, case checkbox+label, highlight (with left shift), counter, close right aligned (will adjust later if needed)
+  fb.txtField = [[FRZFindTextField alloc] initWithFrame:NSMakeRect(x,y,180,h)];
+  fb.txtField.rwvHostHWND = hwnd;
+  [fb.txtField setAutoresizingMask:NSViewMaxXMargin]; fb.txtField.delegate=fb; x+=180+8;
+  // 24x24 nav buttons (use square region centered vertically if h > 24)
+  CGFloat btnBox = 24; CGFloat yBtn = y + (h>btnBox ? (h-btnBox)/2 : 0);
+  fb.btnPrev = [[NSButton alloc] initWithFrame:NSMakeRect(x,yBtn,btnBox,btnBox)]; [fb.btnPrev setTitle:@""]; [fb.btnPrev setBezelStyle:NSBezelStyleShadowlessSquare]; [fb.btnPrev setButtonType:NSButtonTypeMomentaryChange]; [fb.btnPrev setTarget:fb]; [fb.btnPrev setAction:@selector(commonButtonAction:)];
+  // Use SF Symbols fallback arrow if available (mac 11+), otherwise text
+  if ([fb.btnPrev respondsToSelector:@selector(setImage:)]) {
+    NSImage* img = [NSImage imageNamed:@"chevron.up"]; if(img) [fb.btnPrev setImage:img]; else [fb.btnPrev setTitle:@"↑"]; }
+  x+=btnBox+8;
+  fb.btnNext = [[NSButton alloc] initWithFrame:NSMakeRect(x,yBtn,btnBox,btnBox)]; [fb.btnNext setTitle:@""]; [fb.btnNext setBezelStyle:NSBezelStyleShadowlessSquare]; [fb.btnNext setButtonType:NSButtonTypeMomentaryChange]; [fb.btnNext setTarget:fb]; [fb.btnNext setAction:@selector(commonButtonAction:)];
+  if ([fb.btnNext respondsToSelector:@selector(setImage:)]) {
+    NSImage* img = [NSImage imageNamed:@"chevron.down"]; if(img) [fb.btnNext setImage:img]; else [fb.btnNext setTitle:@"↓"]; }
+  x+=btnBox+10;
+  fb.chkCase = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,18,h)]; [fb.chkCase setButtonType:NSButtonTypeSwitch]; [fb.chkCase setTitle:@""]; [fb.chkCase setTarget:fb]; [fb.chkCase setAction:@selector(commonButtonAction:)]; x+=18;
+  NSTextField* lblCase = [[NSTextField alloc] initWithFrame:NSMakeRect(x,y,98,h)]; [lblCase setBezeled:NO]; [lblCase setEditable:NO]; [lblCase setDrawsBackground:NO]; [lblCase setStringValue:@"Case Sensitive"]; x+=98+8;
+  int highlightShift = 10; x -= highlightShift; if (x < 0) x = 0;
+  fb.chkHighlight = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,18,h)]; [fb.chkHighlight setButtonType:NSButtonTypeSwitch]; [fb.chkHighlight setTitle:@""]; [fb.chkHighlight setTarget:fb]; [fb.chkHighlight setAction:@selector(commonButtonAction:)]; x+=18;
+  NSTextField* lblHighlight = [[NSTextField alloc] initWithFrame:NSMakeRect(x,y,92,h)]; [lblHighlight setBezeled:NO]; [lblHighlight setEditable:NO]; [lblHighlight setDrawsBackground:NO]; [lblHighlight setStringValue:@"Highlight All"]; x+=92+8;
+  x -= 10; if (x < 0) x = 0;
   fb.lblCounter = [[NSTextField alloc] initWithFrame:NSMakeRect(x,y,60,h)]; [fb.lblCounter setBezeled:NO]; [fb.lblCounter setEditable:NO]; [fb.lblCounter setDrawsBackground:NO]; [fb.lblCounter setAlignment:NSTextAlignmentCenter]; fb.lblCounter.stringValue=@"0/0"; x+=60+6;
-  fb.btnClose = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,24,h)]; [fb.btnClose setTitle:@"X"]; [fb.btnClose setTarget:fb]; [fb.btnClose setAction:@selector(commonButtonAction:)];
+  fb.btnClose = [[NSButton alloc] initWithFrame:NSMakeRect(x,yBtn,24,btnBox)]; [fb.btnClose setTitle:@"X"]; [fb.btnClose setBezelStyle:NSBezelStyleShadowlessSquare]; [fb.btnClose setButtonType:NSButtonTypeMomentaryChange]; [fb.btnClose setTarget:fb]; [fb.btnClose setAction:@selector(commonButtonAction:)];
 
   [fb addSubview:fb.txtField];
   [fb addSubview:fb.btnPrev];
   [fb addSubview:fb.btnNext];
   [fb addSubview:fb.chkCase];
   [fb addSubview:fb.chkHighlight];
+  [fb addSubview:lblCase];
+  [fb addSubview:lblHighlight];
   [fb addSubview:fb.lblCounter];
   [fb addSubview:fb.btnClose];
 
@@ -722,6 +770,10 @@ static void EnsureFindBarCreated(HWND hwnd)
   [fb setHidden:YES];
   LogRaw("[Find] Created macOS find bar controls");
 }
+
+// Mac variant of inline navigate (mirrors Windows logging)
+static void RWV_FindNavigateInline(WebViewInstanceRecord* rec, bool fwd)
+{ if(!rec) return; LogF("[Find] nav %s (inline mac) query='%s'", fwd?"next":"prev", rec->findQuery.c_str()); }
 #endif
 
 // показать/скрыть панель + текст
