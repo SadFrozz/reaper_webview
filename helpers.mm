@@ -41,33 +41,45 @@ void GetPanelThemeColors(HWND panelHwnd, HDC dc, COLORREF* outBk, COLORREF* outT
 #else
 void GetPanelThemeColorsMac(int* outBg, int* outTx)
 {
+  // Mirror Windows approach: 1) get base colors (theme if available, else fallbacks)
+  // 2) compute luminance diff; 3) if low contrast AND theme struct present, scan adjacent pairs
   if (outBg) *outBg = -1; if (outTx) *outTx = -1;
-  int bg = -1, tx = -1;
-  int raw_bg = -1, raw_tx = -1;
+  int bk = -1, tx = -1;
+  int raw_theme_bg = -1, raw_theme_tx = -1;
+
   if (GetThemeColor) {
-    raw_bg = GetThemeColor("col_main_bg",0);
-    raw_tx = GetThemeColor("col_main_text",0);
-    if (raw_bg >= 0) bg = raw_bg & 0xFFFFFF;
-    if (raw_tx >= 0) tx = raw_tx & 0xFFFFFF;
+    raw_theme_bg = GetThemeColor("col_main_bg",0);
+    raw_theme_tx = GetThemeColor("col_main_text",0);
+    if (raw_theme_bg >= 0) bk = raw_theme_bg & 0xFFFFFF;
+    if (raw_theme_tx >= 0) tx = raw_theme_tx & 0xFFFFFF;
   }
-  // Fallback background if theme did not supply
-  bool usedFallbackBg = false;
-  if (bg < 0) { bg = 0xC0C0C0; usedFallbackBg = true; }
-  // Text color: if absent we invert background
-  bool inverted = false;
-  if (tx < 0) { tx = ((~bg) & 0xFFFFFF); inverted = true; }
-  // Brightness safeguard
-  int rbg=(bg>>16)&0xFF, gbg=(bg>>8)&0xFF, bbg=bg&0xFF;
+  bool usedFallbackBk = false;
+  if (bk < 0) { bk = 0xC0C0C0; usedFallbackBk = true; }
+  if (tx < 0) { tx = 0x000000; } // default text if theme text missing
+
+  int rbk=(bk>>16)&0xFF, gbk=(bk>>8)&0xFF, bbk=bk&0xFF;
   int rtx=(tx>>16)&0xFF, gtx=(tx>>8)&0xFF, btx=tx&0xFF;
-  int lbg=(30*rbg+59*gbg+11*bbg)/100; int ltx=(30*rtx+59*gtx+11*btx)/100;
-  bool contrastAdjust=false;
-  if (abs(ltx-lbg) < 20) {
-    tx = (lbg > 128) ? 0x000000 : 0xFFFFFF;
-    contrastAdjust = true;
+  int lbk=(30*rbk+59*gbk+11*bbk)/100; int ltx=(30*rtx+59*gtx+11*btx)/100;
+  int diff = std::abs(ltx-lbk);
+  bool scanned = false;
+  int chosen_c1 = -1, chosen_c2 = -1, chosen_l1 = -1, chosen_l2 = -1;
+
+  if (diff < 25 && GetColorThemeStruct) {
+    int sz = 0; void* p = GetColorThemeStruct(&sz);
+    if (p && sz >= 64) {
+      int* arr = (int*)p; int n = sz / (int)sizeof(int);
+      for (int i=0; i < n-1 && i < 128; ++i) {
+        int c1 = arr[i] & 0xFFFFFF; int c2 = arr[i+1] & 0xFFFFFF;
+        int r1=(c1>>16)&0xFF,g1=(c1>>8)&0xFF,b1=c1&0xFF; int r2=(c2>>16)&0xFF,g2=(c2>>8)&0xFF,b2=c2&0xFF;
+        int l1=(30*r1+59*g1+11*b1)/100; int l2=(30*r2+59*g2+11*b2)/100;
+        if (std::abs(l1-l2) > 60) { bk = c1; tx = c2; rbk=r1; gbk=g1; bbk=b1; rtx=r2; gtx=g2; btx=b2; lbk=l1; ltx=l2; diff=std::abs(l1-l2); scanned = true; chosen_c1=c1; chosen_c2=c2; chosen_l1=l1; chosen_l2=l2; break; }
+      }
+    }
   }
-  if (outBg) *outBg = bg; if (outTx) *outTx = tx;
-  LogF("[MacThemeColors] raw_bg=%d raw_tx=%d -> bg=0x%06X tx=0x%06X fbBg=%d inverted=%d contrastAdj=%d lbg=%d ltx=%d diff=%d",
-       raw_bg, raw_tx, bg, tx, (int)usedFallbackBg, (int)inverted, (int)contrastAdjust, lbg, ltx, abs(ltx-lbg));
+
+  if (outBg) *outBg = bk; if (outTx) *outTx = tx;
+  LogF("[MacThemeColorsWinLike] raw_bg=%d raw_tx=%d fbBk=%d startDiff=%d finalDiff=%d scanned=%d bk=0x%06X tx=0x%06X chosenPair=(0x%06X,0x%06X) lumPair=(%d,%d)",
+       raw_theme_bg, raw_theme_tx, (int)usedFallbackBk, std::abs(((30*(( (raw_theme_bg>=0? (raw_theme_bg>>16)&0xFF:rbk)))+59*(( (raw_theme_bg>=0? (raw_theme_bg>>8)&0xFF:gbk)))+11*(( (raw_theme_bg>=0? raw_theme_bg&0xFF:bbk)))/100) - ((30*(( (raw_theme_tx>=0? (raw_theme_tx>>16)&0xFF:rtx)))+59*(( (raw_theme_tx>=0? (raw_theme_tx>>8)&0xFF:gtx)))+11*(( (raw_theme_tx>=0? raw_theme_tx&0xFF:btx)))/100)), diff, (int)scanned, bk, tx, chosen_c1, chosen_c2, chosen_l1, chosen_l2);
 }
 #endif
 
