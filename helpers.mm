@@ -42,27 +42,44 @@ void GetPanelThemeColors(HWND panelHwnd, HDC dc, COLORREF* outBk, COLORREF* outT
 void GetPanelThemeColorsMac(int* outBg, int* outTx)
 {
   if (outBg) *outBg = -1; if (outTx) *outTx = -1;
-  if (GetThemeColor) {
-    int bg = GetThemeColor("col_main_bg",0); if (bg>=0 && outBg) *outBg = bg & 0xFFFFFF;
-    int tx = GetThemeColor("col_main_text",0); if (tx>=0 && outTx) *outTx = tx & 0xFFFFFF;
-  }
-  // Если контраст слабый или цвета не получены — fallback через GetColorThemeStruct с поиском пары
+
   auto luminance = [](int c){ int r=(c>>16)&0xFF,g=(c>>8)&0xFF,b=c&0xFF; return (30*r+59*g+11*b)/100; };
-  bool needFallback=false;
-  if (outBg && outTx) {
-    if (*outBg<0 || *outTx<0) needFallback=true; else if (abs(luminance(*outBg)-luminance(*outTx))<25) needFallback=true;
+  auto goodContrast = [&](int a,int b){ if(a<0||b<0) return false; return abs(luminance(a)-luminance(b))>40; };
+
+  // Набор возможных ключей для background и текста (эмпирически)
+  const char* bgKeys[] = { "col_main_bg", "col_main_bg2", "col_toolbar_bg", "col_tcp_bg" };
+  const char* txKeys[] = { "col_main_text", "col_main_text2", "col_toolbar_text", "col_tcp_text" };
+
+  int bgCandidate=-1, txCandidate=-1;
+  if (GetThemeColor) {
+    // Перебор комбинаций пока не найдём пригодную пару
+    for (const char* bk : bgKeys) {
+      int b = GetThemeColor(bk,0); if (b<0) continue; b &= 0xFFFFFF;
+      for (const char* tk : txKeys) {
+        int t = GetThemeColor(tk,0); if (t<0) continue; t &= 0xFFFFFF;
+        if (goodContrast(b,t)) { bgCandidate=b; txCandidate=t; break; }
+      }
+      if (bgCandidate>=0 && txCandidate>=0) break;
+    }
+    // Если не нашли контраст — возьмём базовые
+    if (bgCandidate<0) bgCandidate = GetThemeColor("col_main_bg",0) & 0xFFFFFF;
+    if (txCandidate<0) txCandidate = GetThemeColor("col_main_text",0) & 0xFFFFFF;
   }
-  if (needFallback && GetColorThemeStruct) {
+
+  // Fallback scan по структуре темы, если всё ещё слабый контраст или отрицательно
+  if (!goodContrast(bgCandidate, txCandidate) && GetColorThemeStruct) {
     int sz=0; void* p=GetColorThemeStruct(&sz);
     if (p && sz>=64) {
       int* arr=(int*)p; int n=sz/sizeof(int);
-      for (int i=0;i<n-1 && i<256;i++) {
+      for (int i=0;i<n-1 && i<512;i++) {
         int c1=arr[i]&0xFFFFFF; int c2=arr[i+1]&0xFFFFFF;
-        int l1=luminance(c1), l2=luminance(c2);
-        if (abs(l1-l2)>60) { if(outBg) *outBg=c1; if(outTx) *outTx=c2; break; }
+        if (goodContrast(c1,c2)) { bgCandidate=c1; txCandidate=c2; break; }
       }
     }
   }
+
+  if (outBg) *outBg = bgCandidate;
+  if (outTx) *outTx = txCandidate;
 }
 #endif
 
