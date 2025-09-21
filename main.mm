@@ -663,8 +663,8 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
 @interface FRZFindBarView : NSView <NSTextFieldDelegate>
 @property (nonatomic, assign) HWND rwvHostHWND;
 @property (nonatomic, strong) FRZFindTextField* txtField;
-@property (nonatomic, strong) NSButton*   btnPrev;
-@property (nonatomic, strong) NSButton*   btnNext;
+@property (nonatomic, strong) NSView*     btnPrev; // FRZNavButton subclass
+@property (nonatomic, strong) NSView*     btnNext; // FRZNavButton subclass
 @property (nonatomic, strong) NSButton*   chkCase;
 @property (nonatomic, strong) NSButton*   chkHighlight;
 @property (nonatomic, strong) NSTextField* lblCounter;
@@ -706,6 +706,75 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
 }
 @end
 
+// Custom navigation button (24x24) to mirror Windows RWVNavBtn visual behavior
+typedef NS_ENUM(NSInteger, FRZNavDirection){ FRZNavDirectionUp=0, FRZNavDirectionDown=1 };
+
+@interface FRZNavButton : NSView
+@property (nonatomic, assign) FRZNavDirection direction;
+@property (nonatomic, weak)   FRZFindBarView* findBar;
+@property (nonatomic, assign) BOOL hovered;
+@property (nonatomic, assign) BOOL pressed;
+@end
+
+@implementation FRZNavButton
+- (BOOL)isFlipped { return NO; }
+- (instancetype)initWithFrame:(NSRect)frame direction:(FRZNavDirection)dir findBar:(FRZFindBarView*)fb
+{
+  if (self = [super initWithFrame:frame]) {
+    _direction = dir; _findBar = fb; self.wantsLayer = YES;
+    NSTrackingArea* tr = [[NSTrackingArea alloc] initWithRect:self.bounds options:(NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect) owner:self userInfo:nil];
+    [self addTrackingArea:tr];
+    self.accessibilityLabel = (dir==FRZNavDirectionUp?@"Previous":@"Next");
+  }
+  return self;
+}
+- (void)updateLayer { [self setNeedsDisplay:YES]; }
+- (void)mouseEntered:(NSEvent*)e { self.hovered = YES; [self setNeedsDisplay:YES]; }
+- (void)mouseExited:(NSEvent*)e { self.hovered = NO; self.pressed = NO; [self setNeedsDisplay:YES]; }
+- (void)mouseDown:(NSEvent*)e { self.pressed = YES; [self setNeedsDisplay:YES]; }
+- (void)mouseUp:(NSEvent*)e {
+  BOOL wasPressed = self.pressed; self.pressed = NO; [self setNeedsDisplay:YES];
+  if (wasPressed) {
+    if (self.findBar) {
+      // Reuse commonButtonAction path: determine synthetic sender mapping
+      if (self.direction == FRZNavDirectionUp) {
+        [self.findBar commonButtonAction:(NSButton*)self.findBar.btnPrev];
+      } else {
+        [self.findBar commonButtonAction:(NSButton*)self.findBar.btnNext];
+      }
+    }
+  }
+}
+- (void)drawRect:(NSRect)dirty
+{
+  NSRect b = self.bounds;
+  CGFloat r = 4.f;
+  NSColor* base = [NSColor colorWithCalibratedWhite:0.25 alpha:1.0];
+  NSColor* hov  = [NSColor colorWithCalibratedWhite:0.35 alpha:1.0];
+  NSColor* down = [NSColor colorWithCalibratedWhite:0.18 alpha:1.0];
+  NSBezierPath* bg = [NSBezierPath bezierPathWithRoundedRect:b xRadius:r yRadius:r];
+  if (self.pressed) [down setFill]; else if (self.hovered) [hov setFill]; else [base setFill];
+  [bg fill];
+  // Arrow drawing
+  [[NSColor whiteColor] setFill];
+  NSBezierPath* arrow = [NSBezierPath bezierPath];
+  CGFloat w = b.size.width; CGFloat h = b.size.height;
+  if (self.direction == FRZNavDirectionUp) {
+    // Up triangle
+    [arrow moveToPoint:NSMakePoint(w*0.5, h*0.32)];
+    [arrow lineToPoint:NSMakePoint(w*0.25, h*0.68)];
+    [arrow lineToPoint:NSMakePoint(w*0.75, h*0.68)];
+  } else {
+    // Down triangle
+    [arrow moveToPoint:NSMakePoint(w*0.25, h*0.32)];
+    [arrow lineToPoint:NSMakePoint(w*0.75, h*0.32)];
+    [arrow lineToPoint:NSMakePoint(w*0.5, h*0.68)];
+  }
+  [arrow closePath];
+  [arrow fill];
+}
+@end
+
 static void MacUpdateFindCounter(WebViewInstanceRecord* rec)
 {
   if (!rec || !rec->findCounterLabel) return; int cur=rec->findCurrentIndex, tot=rec->findTotalMatches; if(cur<0)cur=0; if(tot<0)tot=0; if(cur>tot)cur=tot;
@@ -729,14 +798,9 @@ static void EnsureFindBarCreated(HWND hwnd)
   [fb.txtField setAutoresizingMask:NSViewMaxXMargin]; fb.txtField.delegate=fb; x+=180+8;
   // 24x24 nav buttons (use square region centered vertically if h > 24)
   CGFloat btnBox = 24; CGFloat yBtn = y + (h>btnBox ? (h-btnBox)/2 : 0);
-  fb.btnPrev = [[NSButton alloc] initWithFrame:NSMakeRect(x,yBtn,btnBox,btnBox)]; [fb.btnPrev setTitle:@""]; [fb.btnPrev setBezelStyle:NSBezelStyleShadowlessSquare]; [fb.btnPrev setButtonType:NSButtonTypeMomentaryChange]; [fb.btnPrev setTarget:fb]; [fb.btnPrev setAction:@selector(commonButtonAction:)];
-  // Use SF Symbols fallback arrow if available (mac 11+), otherwise text
-  if ([fb.btnPrev respondsToSelector:@selector(setImage:)]) {
-    NSImage* img = [NSImage imageNamed:@"chevron.up"]; if(img) [fb.btnPrev setImage:img]; else [fb.btnPrev setTitle:@"↑"]; }
+  fb.btnPrev = [[FRZNavButton alloc] initWithFrame:NSMakeRect(x,yBtn,btnBox,btnBox) direction:FRZNavDirectionUp findBar:fb];
   x+=btnBox+8;
-  fb.btnNext = [[NSButton alloc] initWithFrame:NSMakeRect(x,yBtn,btnBox,btnBox)]; [fb.btnNext setTitle:@""]; [fb.btnNext setBezelStyle:NSBezelStyleShadowlessSquare]; [fb.btnNext setButtonType:NSButtonTypeMomentaryChange]; [fb.btnNext setTarget:fb]; [fb.btnNext setAction:@selector(commonButtonAction:)];
-  if ([fb.btnNext respondsToSelector:@selector(setImage:)]) {
-    NSImage* img = [NSImage imageNamed:@"chevron.down"]; if(img) [fb.btnNext setImage:img]; else [fb.btnNext setTitle:@"↓"]; }
+  fb.btnNext = [[FRZNavButton alloc] initWithFrame:NSMakeRect(x,yBtn,btnBox,btnBox) direction:FRZNavDirectionDown findBar:fb];
   x+=btnBox+10;
   fb.chkCase = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,18,h)]; [fb.chkCase setButtonType:NSButtonTypeSwitch]; [fb.chkCase setTitle:@""]; [fb.chkCase setTarget:fb]; [fb.chkCase setAction:@selector(commonButtonAction:)]; x+=18;
   NSTextField* lblCase = [[NSTextField alloc] initWithFrame:NSMakeRect(x,y,98,h)]; [lblCase setBezeled:NO]; [lblCase setEditable:NO]; [lblCase setDrawsBackground:NO]; [lblCase setStringValue:@"Case Sensitive"]; x+=98+8;
