@@ -93,18 +93,14 @@ static inline NSColor* RWVColorFromInt(int v)
 static void MacInitOrRefreshPanelColors(WebViewInstanceRecord* rec)
 {
   if (!rec) return;
-  if (rec->titleBkColor < 0 || rec->titleTextColor < 0) {
-    int bg=-1, tx=-1; GetPanelThemeColorsMac(&bg,&tx);
-    rec->titleBkColor = bg; rec->titleTextColor = tx;
-  }
+  int bg=-1, tx=-1; GetPanelThemeColorsMac(&bg,&tx);
+  rec->titleBkColor = bg; rec->titleTextColor = tx;
   if (rec->titleLabel) {
-    // Label background прозрачный, цвет текста устанавливаем
     [rec->titleLabel setDrawsBackground:NO];
     NSColor* txC = RWVColorFromInt(rec->titleTextColor) ?: [NSColor controlTextColor];
     [rec->titleLabel setTextColor:txC];
   }
   if (rec->titleBarView) {
-    // Фон контейнера через layer
     if (![rec->titleBarView wantsLayer]) [rec->titleBarView setWantsLayer:YES];
     NSColor* bgC = RWVColorFromInt(rec->titleBkColor) ?: [NSColor controlBackgroundColor];
     rec->titleBarView.layer.backgroundColor = bgC.CGColor;
@@ -160,7 +156,7 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
     if (titleVisible) {
       [rec->titleBarView setFrame:NSMakeRect(0, hostH - g_titleBarH, hostW, g_titleBarH)];
       [rec->titleLabel setFrame:NSMakeRect(g_titlePadX, 2, hostW - 2*g_titlePadX, g_titleBarH - 4)];
-  // Цвета применяются только если ещё не были кэшированы
+  // Всегда обновляем цвета при layout (наследование текущей темы)
   MacInitOrRefreshPanelColors(rec);
       [rec->titleBarView setHidden:NO];
       // Если по какой-то причине ниже webview — поднимем (проверяем индекс)
