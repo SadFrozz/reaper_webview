@@ -42,9 +42,27 @@ void GetPanelThemeColors(HWND panelHwnd, HDC dc, COLORREF* outBk, COLORREF* outT
 void GetPanelThemeColorsMac(int* outBg, int* outTx)
 {
   if (outBg) *outBg = -1; if (outTx) *outTx = -1;
-  if (!GetThemeColor) return;
-  int bg = GetThemeColor("col_main_bg",0); if (bg>=0 && outBg) *outBg = bg & 0xFFFFFF;
-  int tx = GetThemeColor("col_main_text",0); if (tx>=0 && outTx) *outTx = tx & 0xFFFFFF;
+  if (GetThemeColor) {
+    int bg = GetThemeColor("col_main_bg",0); if (bg>=0 && outBg) *outBg = bg & 0xFFFFFF;
+    int tx = GetThemeColor("col_main_text",0); if (tx>=0 && outTx) *outTx = tx & 0xFFFFFF;
+  }
+  // Если контраст слабый или цвета не получены — fallback через GetColorThemeStruct с поиском пары
+  auto luminance = [](int c){ int r=(c>>16)&0xFF,g=(c>>8)&0xFF,b=c&0xFF; return (30*r+59*g+11*b)/100; };
+  bool needFallback=false;
+  if (outBg && outTx) {
+    if (*outBg<0 || *outTx<0) needFallback=true; else if (abs(luminance(*outBg)-luminance(*outTx))<25) needFallback=true;
+  }
+  if (needFallback && GetColorThemeStruct) {
+    int sz=0; void* p=GetColorThemeStruct(&sz);
+    if (p && sz>=64) {
+      int* arr=(int*)p; int n=sz/sizeof(int);
+      for (int i=0;i<n-1 && i<256;i++) {
+        int c1=arr[i]&0xFFFFFF; int c2=arr[i+1]&0xFFFFFF;
+        int l1=luminance(c1), l2=luminance(c2);
+        if (abs(l1-l2)>60) { if(outBg) *outBg=c1; if(outTx) *outTx=c2; break; }
+      }
+    }
+  }
 }
 #endif
 

@@ -146,17 +146,19 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 
   if (rec->titleBarView) {
     if (titleVisible) {
-      // Recompute frame at top each layout (handles resize & docking changes)
       [rec->titleBarView setFrame:NSMakeRect(0, hostH - g_titleBarH, hostW, g_titleBarH)];
       [rec->titleLabel setFrame:NSMakeRect(g_titlePadX, 2, hostW - 2*g_titlePadX, g_titleBarH - 4)];
-      UpdateMacTitleBarColors(rec); // dynamic theme refresh
+      UpdateMacTitleBarColors(rec);
       [rec->titleBarView setHidden:NO];
-      // Maintain z-order above webview
-      if (rec->webView) {
-        // Bring to front if needed by re-adding positioned above
-        if ([rec->titleBarView superview] == host) {
-          [rec->titleBarView removeFromSuperviewWithoutNeedingDisplay];
-          [host addSubview:rec->titleBarView positioned:NSWindowAbove relativeTo:rec->webView];
+      // Если по какой-то причине ниже webview — поднимем (проверяем индекс)
+      if (rec->webView && [rec->titleBarView superview] == host) {
+        NSArray<NSView*>* subs = [host subviews];
+        if ([subs containsObject:rec->webView] && [subs containsObject:rec->titleBarView]) {
+          // Если titleBarView идёт раньше webView в массиве (ниже по z), переместим на верх
+          if ([subs indexOfObject:rec->titleBarView] < [subs indexOfObject:rec->webView]) {
+            [rec->titleBarView removeFromSuperviewWithoutNeedingDisplay];
+            [host addSubview:rec->titleBarView positioned:NSWindowAbove relativeTo:rec->webView];
+          }
         }
       }
     } else {
@@ -312,17 +314,8 @@ void UpdateTitlesExtractAndApply(HWND hwnd)
 
 static void SizeWebViewToClient(HWND hwnd)
 {
-  bool isFloat=false; int idx=-1;
-  bool inDock = DockIsChildOfDock ? (DockIsChildOfDock(hwnd, &isFloat) >= 0) : false;
-  // derive per-instance title
-  bool wantPanel=false;
-  if (inDock) {
-        WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
-    std::string t = rec ? rec->titleOverride : kTitleBase;
-    if (t.empty()) t = kTitleBase;
-    wantPanel = (t == kTitleBase);
-  }
-  LayoutTitleBarAndWebView(hwnd, wantPanel);
+  // Унифицированно: полный пересчёт логики видимости/текста через главный апдейтер
+  UpdateTitlesExtractAndApply(hwnd);
 }
 
 // ============================== WebView init ==============================
