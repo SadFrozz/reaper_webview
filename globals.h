@@ -85,6 +85,9 @@ struct WebViewInstanceRecord {
   // Per-instance title bar (macOS)
   NSView*      titleBarView = nil;
   NSTextField* titleLabel   = nil;
+  // Cached colors (24-bit RGB) for mac panel to avoid recomputing each layout
+  int          titleTextColor = -1;
+  int          titleBkColor   = -1;
 #endif
   // Per-instance cached captions
   std::string lastTabTitle;

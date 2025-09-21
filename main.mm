@@ -90,14 +90,25 @@ static inline NSColor* RWVColorFromInt(int v)
   return [NSColor colorWithCalibratedRed:r green:g blue:b alpha:1.0];
 }
 
-static void UpdateMacTitleBarColors(WebViewInstanceRecord* rec)
+static void MacInitOrRefreshPanelColors(WebViewInstanceRecord* rec)
 {
-  if (!rec || !rec->titleLabel) return;
-  int bg=-1, tx=-1; GetPanelThemeColorsMac(&bg,&tx);
-  NSColor* bgC = RWVColorFromInt(bg) ?: [NSColor controlBackgroundColor];
-  NSColor* txC = RWVColorFromInt(tx) ?: [NSColor controlTextColor];
-  [rec->titleLabel setBackgroundColor:bgC];
-  [rec->titleLabel setTextColor:txC];
+  if (!rec) return;
+  if (rec->titleBkColor < 0 || rec->titleTextColor < 0) {
+    int bg=-1, tx=-1; GetPanelThemeColorsMac(&bg,&tx);
+    rec->titleBkColor = bg; rec->titleTextColor = tx;
+  }
+  if (rec->titleLabel) {
+    // Label background прозрачный, цвет текста устанавливаем
+    [rec->titleLabel setDrawsBackground:NO];
+    NSColor* txC = RWVColorFromInt(rec->titleTextColor) ?: [NSColor controlTextColor];
+    [rec->titleLabel setTextColor:txC];
+  }
+  if (rec->titleBarView) {
+    // Фон контейнера через layer
+    if (![rec->titleBarView wantsLayer]) [rec->titleBarView setWantsLayer:YES];
+    NSColor* bgC = RWVColorFromInt(rec->titleBkColor) ?: [NSColor controlBackgroundColor];
+    rec->titleBarView.layer.backgroundColor = bgC.CGColor;
+  }
 }
 
 static void EnsureTitleBarCreated(HWND hwnd)
@@ -123,7 +134,8 @@ static void EnsureTitleBarCreated(HWND hwnd)
   [rec->titleLabel setDrawsBackground:YES];
   [rec->titleLabel setFont:[NSFont systemFontOfSize:[NSFont systemFontSize]]];
   [rec->titleLabel setAutoresizingMask:(NSViewWidthSizable)];
-  UpdateMacTitleBarColors(rec);
+  // Инициализация и применение цветов один раз при создании
+  MacInitOrRefreshPanelColors(rec);
 
   [rec->titleBarView addSubview:rec->titleLabel];
   // Ensure it sits above the webview
@@ -148,7 +160,8 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
     if (titleVisible) {
       [rec->titleBarView setFrame:NSMakeRect(0, hostH - g_titleBarH, hostW, g_titleBarH)];
       [rec->titleLabel setFrame:NSMakeRect(g_titlePadX, 2, hostW - 2*g_titlePadX, g_titleBarH - 4)];
-      UpdateMacTitleBarColors(rec);
+  // Цвета применяются только если ещё не были кэшированы
+  MacInitOrRefreshPanelColors(rec);
       [rec->titleBarView setHidden:NO];
       // Если по какой-то причине ниже webview — поднимем (проверяем индекс)
       if (rec->webView && [rec->titleBarView superview] == host) {
