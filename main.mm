@@ -709,9 +709,10 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
 // Custom navigation button (24x24) to mirror Windows RWVNavBtn visual behavior
 typedef NS_ENUM(NSInteger, FRZNavDirection){ FRZNavDirectionUp=0, FRZNavDirectionDown=1 };
 
-@interface FRZNavButton : NSView
+@interface FRZNavButton : NSButton
 @property (nonatomic, assign) FRZNavDirection direction;
-@property (nonatomic, weak)   FRZFindBarView* findBar;
+// Can't use weak under manual reference counting reliably in this TU, use assign (parent owns button)
+@property (nonatomic, assign) FRZFindBarView* findBar;
 @property (nonatomic, assign) BOOL hovered;
 @property (nonatomic, assign) BOOL pressed;
 @end
@@ -725,6 +726,8 @@ typedef NS_ENUM(NSInteger, FRZNavDirection){ FRZNavDirectionUp=0, FRZNavDirectio
     NSTrackingArea* tr = [[NSTrackingArea alloc] initWithRect:self.bounds options:(NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways | NSTrackingInVisibleRect) owner:self userInfo:nil];
     [self addTrackingArea:tr];
     self.accessibilityLabel = (dir==FRZNavDirectionUp?@"Previous":@"Next");
+    [self setBordered:NO];
+    [self setTitle:@""]; // avoid default title rendering
   }
   return self;
 }
@@ -738,9 +741,9 @@ typedef NS_ENUM(NSInteger, FRZNavDirection){ FRZNavDirectionUp=0, FRZNavDirectio
     if (self.findBar) {
       // Reuse commonButtonAction path: determine synthetic sender mapping
       if (self.direction == FRZNavDirectionUp) {
-        [self.findBar commonButtonAction:(NSButton*)self.findBar.btnPrev];
+        [self.findBar commonButtonAction:(NSButton*)self]; // treat self as prev
       } else {
-        [self.findBar commonButtonAction:(NSButton*)self.findBar.btnNext];
+        [self.findBar commonButtonAction:(NSButton*)self]; // treat self as next
       }
     }
   }
