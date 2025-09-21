@@ -39,6 +39,10 @@
 #define IDC_FIND_CLOSE    2107
 #endif
 
+// Forward declare shared functions used by both platforms
+static void UpdateFindCounter(WebViewInstanceRecord* rec);
+static void RWV_FindNavigateInline(WebViewInstanceRecord* rec, bool fwd);
+
 #ifdef _WIN32
 // Forward declarations (creation logic in this TU; layout needs external linkage)
 #include <wincodec.h>
@@ -103,12 +107,6 @@ static const UINT WM_RWV_FIND_REFOCUS = WM_APP + 0x452;
 static HHOOK g_rwvMsgHook = nullptr; // message hook to pre-swallow VK_RETURN
 static HWND  g_lastFindEdit = nullptr; // last known find edit hwnd
 // Simple inline navigation (placeholder for real search logic) to avoid button focus side-effects
-static void RWV_FindNavigateInline(WebViewInstanceRecord* rec, bool fwd)
-{
-  if (!rec) return;
-  LogF("[Find] nav %s (inline) query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
-  // Future: perform real search and then UpdateFindCounter(rec)
-}
 static LRESULT CALLBACK RWVFindEditProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
   switch(m){
@@ -452,19 +450,7 @@ static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
   return DefWindowProcW(h,m,w,l);
 }
 
-static void UpdateFindCounter(WebViewInstanceRecord* rec)
-{
-  if (!rec || !rec->findCounterStatic) return;
-  int cur = rec->findCurrentIndex; int tot = rec->findTotalMatches;
-  if (cur < 0) cur = 0; if (tot < 0) tot = 0; if (cur > tot) cur = tot;
-  char buf[64]; snprintf(buf,sizeof(buf), "%d/%d", cur, tot);
-#ifdef _WIN32
-  SetWindowTextA(rec->findCounterStatic, buf);
-#else
-  // rec->findCounterStatic actually an NSTextField* on mac
-  [(NSTextField*)rec->findCounterStatic setStringValue:[NSString stringWithUTF8String:buf]];
-#endif
-}
+// (Windows) UpdateFindCounter definition moved to common section below
 
 void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
@@ -519,7 +505,6 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
 #else // ============================= macOS implementation =============================
 // Forward declarations for mac-side find bar helpers before use in LayoutTitleBarAndWebView
 static void EnsureFindBarCreated(HWND hwnd); // mac variant
-static void RWV_FindNavigateInline(WebViewInstanceRecord* rec, bool fwd); // shared name
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
 { if(!rec) return; if(rec->titleBarView){ [rec->titleBarView removeFromSuperview]; rec->titleBarView=nil;} }
 
@@ -624,7 +609,7 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
     if (rec->findBarView) {
       [rec->findBarView setFrame:NSMakeRect(0, 0, hostW, g_findBarH)];
       [rec->findBarView setHidden:NO];
-    UpdateFindCounter(rec);
+  UpdateFindCounter(rec);
     }
   } else if (rec->findBarView) {
     [rec->findBarView setHidden:YES];
@@ -664,11 +649,12 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
 }
 @end
 
+@class FRZNavButton;
 @interface FRZFindBarView : NSView <NSTextFieldDelegate>
 @property (nonatomic, assign) HWND rwvHostHWND;
 @property (nonatomic, strong) FRZFindTextField* txtField;
-@property (nonatomic, strong) NSView*     btnPrev; // FRZNavButton subclass
-@property (nonatomic, strong) NSView*     btnNext; // FRZNavButton subclass
+@property (nonatomic, strong) FRZNavButton* btnPrev; // FRZNavButton subclass
+@property (nonatomic, strong) FRZNavButton* btnNext; // FRZNavButton subclass
 @property (nonatomic, strong) NSButton*   chkCase;
 @property (nonatomic, strong) NSButton*   chkHighlight;
 @property (nonatomic, strong) NSTextField* lblCounter;
@@ -828,7 +814,7 @@ static void EnsureFindBarCreated(HWND hwnd)
   rec->findBtnNext = fb.btnNext;
   rec->findChkCase = fb.chkCase;
   rec->findChkHighlight = fb.chkHighlight;
-  rec->findCounterStatic = fb.lblCounter; // reuse Windows field name pattern
+  rec->findCounterLabel = fb.lblCounter; // keep native mac field name
   rec->findBtnClose = fb.btnClose;
 
   [host addSubview:fb positioned:NSWindowBelow relativeTo:nil];
@@ -836,10 +822,36 @@ static void EnsureFindBarCreated(HWND hwnd)
   LogRaw("[Find] Created macOS find bar controls");
 }
 
-// Shared inline navigate logging (same format across platforms)
-static void RWV_FindNavigateInline(WebViewInstanceRecord* rec, bool fwd)
-{ if(!rec) return; LogF("[Find] nav %s (inline) query='%s'", fwd?"next":"prev", rec->findQuery.c_str()); }
+// Mac specific RWV_FindNavigateInline will be resolved to common implementation below
 #endif
+
+// ================= Common (cross-platform) find helpers implementations ==================
+static void UpdateFindCounter(WebViewInstanceRecord* rec)
+{
+  if (!rec) return;
+#ifdef _WIN32
+  if (!rec->findCounterStatic) return;
+#else
+  if (!rec->findCounterLabel) return;
+#endif
+  int cur = rec->findCurrentIndex;
+  int tot = rec->findTotalMatches;
+  if (cur < 0) cur = 0; if (tot < 0) tot = 0; if (cur > tot) cur = tot;
+  char buf[64]; snprintf(buf,sizeof(buf), "%d/%d", cur, tot);
+#ifdef _WIN32
+  SetWindowTextA(rec->findCounterStatic, buf);
+#else
+  [(NSTextField*)rec->findCounterLabel setStringValue:[NSString stringWithUTF8String:buf]];
+#endif
+}
+
+static void RWV_FindNavigateInline(WebViewInstanceRecord* rec, bool fwd)
+{
+  if(!rec) return;
+  LogF("[Find] nav %s (inline) query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
+  // Future: perform actual search, adjust rec->findCurrentIndex, rec->findTotalMatches then UpdateFindCounter(rec)
+  UpdateFindCounter(rec);
+}
 
 // показать/скрыть панель + текст
 static void UpdateTitleBarUI(HWND hwnd, const std::string& domain, const std::string& pageTitle, const std::string& effectiveTitle,
