@@ -122,8 +122,8 @@ struct WebViewInstanceRecord {
 #else
   NSView* findBarView = nil;         // container view
   NSTextField* findEdit = nil;       // text input
-  NSView*   findBtnPrev = nil;       // prev (custom FRZNavButton)
-  NSView*   findBtnNext = nil;       // next (custom FRZNavButton)
+  NSButton* findBtnPrev = nil;       // prev
+  NSButton* findBtnNext = nil;       // next
   NSButton* findChkCase = nil;       // case checkbox
   NSButton* findChkHighlight = nil;  // highlight all checkbox
   NSTextField* findCounterLabel = nil; // n/N label
