@@ -84,10 +84,12 @@ struct WebViewInstanceRecord {
   WKWebView* webView = nil;
   // Per-instance title bar (macOS)
   NSView*      titleBarView = nil;
-  NSTextField* titleLabel   = nil;
+  // Manual text drawing (Windows parity) - no NSTextField now
+  // NSTextField removed: text stored in panelTitleString and drawn in drawRect
   // Cached colors (24-bit RGB) for mac panel to avoid recomputing each layout
   int          titleTextColor = -1;
   int          titleBkColor   = -1;
+  std::string  panelTitleString; // current displayed panel text (domain - pageTitle)
 #endif
   // Per-instance cached captions
   std::string lastTabTitle;
