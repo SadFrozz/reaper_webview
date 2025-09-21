@@ -80,6 +80,21 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
 { if(!rec) return; if(rec->titleLabel){ [rec->titleLabel removeFromSuperview]; rec->titleLabel=nil;} if(rec->titleBarView){ [rec->titleBarView removeFromSuperview]; rec->titleBarView=nil;} }
 
+@interface FRZTitleBarView : NSView
+@property (nonatomic, assign) int rwvBgColor;
+@end
+@implementation FRZTitleBarView
+- (BOOL)isFlipped { return NO; }
+- (void)drawRect:(NSRect)dirtyRect
+{
+  [super drawRect:dirtyRect];
+  int c = self.rwvBgColor;
+  NSColor* col = (c>=0)? [NSColor colorWithCalibratedRed:((c>>16)&0xFF)/255.0 green:((c>>8)&0xFF)/255.0 blue:(c&0xFF)/255.0 alpha:1.0] : [NSColor controlBackgroundColor];
+  [col setFill];
+  NSRectFill(dirtyRect);
+}
+@end
+
 // Convert 24-bit int (RGB) -> NSColor
 static inline NSColor* RWVColorFromInt(int v)
 {
@@ -100,10 +115,9 @@ static void MacInitOrRefreshPanelColors(WebViewInstanceRecord* rec)
     NSColor* txC = RWVColorFromInt(rec->titleTextColor) ?: [NSColor controlTextColor];
     [rec->titleLabel setTextColor:txC];
   }
-  if (rec->titleBarView) {
-    if (![rec->titleBarView wantsLayer]) [rec->titleBarView setWantsLayer:YES];
-    NSColor* bgC = RWVColorFromInt(rec->titleBkColor) ?: [NSColor controlBackgroundColor];
-    rec->titleBarView.layer.backgroundColor = bgC.CGColor;
+  if (rec->titleBarView && [rec->titleBarView isKindOfClass:[FRZTitleBarView class]]) {
+    ((FRZTitleBarView*)rec->titleBarView).rwvBgColor = rec->titleBkColor;
+    [rec->titleBarView setNeedsDisplay:YES];
   }
 }
 
@@ -120,14 +134,14 @@ static void EnsureTitleBarCreated(HWND hwnd)
 
   // Frame: place at TOP (Cocoa origin bottom-left) => y = host.height - g_titleBarH
   CGFloat hostH = host.bounds.size.height;
-  rec->titleBarView = [[NSView alloc] initWithFrame:NSMakeRect(0, hostH - g_titleBarH, host.bounds.size.width, g_titleBarH)];
+  rec->titleBarView = [[FRZTitleBarView alloc] initWithFrame:NSMakeRect(0, hostH - g_titleBarH, host.bounds.size.width, g_titleBarH)];
   [rec->titleBarView setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)]; // keep pinned to top, stretch width
 
   rec->titleLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(g_titlePadX, 2, host.bounds.size.width - 2*g_titlePadX, g_titleBarH - 4)];
   [rec->titleLabel setEditable:NO];
   [rec->titleLabel setBordered:NO];
   [rec->titleLabel setBezeled:NO];
-  [rec->titleLabel setDrawsBackground:YES];
+  [rec->titleLabel setDrawsBackground:NO];
   [rec->titleLabel setFont:[NSFont systemFontOfSize:[NSFont systemFontSize]]];
   [rec->titleLabel setAutoresizingMask:(NSViewWidthSizable)];
   // Инициализация и применение цветов один раз при создании
@@ -158,6 +172,9 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
       [rec->titleLabel setFrame:NSMakeRect(g_titlePadX, 2, hostW - 2*g_titlePadX, g_titleBarH - 4)];
   // Всегда обновляем цвета при layout (наследование текущей темы)
   MacInitOrRefreshPanelColors(rec);
+      if ([rec->titleBarView isKindOfClass:[FRZTitleBarView class]]) {
+        ((FRZTitleBarView*)rec->titleBarView).rwvBgColor = rec->titleBkColor;
+      }
       [rec->titleBarView setHidden:NO];
       // Если по какой-то причине ниже webview — поднимем (проверяем индекс)
       if (rec->webView && [rec->titleBarView superview] == host) {
