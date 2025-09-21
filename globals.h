@@ -94,6 +94,41 @@ struct WebViewInstanceRecord {
   // Per-instance cached captions
   std::string lastTabTitle;
   std::string lastWndText;
+  // ================= Find bar state (per-instance) =================
+  bool showFindBar = false;          // visibility flag
+  std::string findQuery;             // current search query (raw text)
+  bool findCaseSensitive = false;    // case sensitivity flag
+  bool findHighlightAll = false;     // highlight all occurrences flag
+  int  findCurrentIndex = 0;         // 1-based current match index (0 if none)
+  int  findTotalMatches = 0;         // total matches (0 if unknown)
+#ifdef _WIN32
+  HWND findBarWnd = nullptr;         // container window for find bar
+  HWND findEdit = nullptr;           // edit control handle
+  HWND findBtnPrev = nullptr;        // previous match button
+  HWND findBtnNext = nullptr;        // next match button
+  HWND findChkCase = nullptr;        // case sensitive checkbox
+  HWND findChkHighlight = nullptr;   // highlight all checkbox
+  HWND findLblCase = nullptr;        // static label for case checkbox (text)
+  HWND findLblHighlight = nullptr;   // static label for highlight all checkbox (text)
+  HWND findCounterStatic = nullptr;  // static label n/N
+  HWND findBtnClose = nullptr;       // close button
+  // Navigation button bitmaps (3-state horizontal strips: normal|hot|down)
+  HBITMAP bmpPrev = nullptr;
+  HBITMAP bmpNext = nullptr;
+  int bmpPrevW = 0, bmpPrevH = 0; // full strip dimensions
+  int bmpNextW = 0, bmpNextH = 0;
+  bool prevHot=false, prevDown=false;
+  bool nextHot=false, nextDown=false;
+#else
+  NSView* findBarView = nil;         // container view
+  NSTextField* findEdit = nil;       // text input
+  NSView*   findBtnPrev = nil;       // prev (custom FRZNavButton)
+  NSView*   findBtnNext = nil;       // next (custom FRZNavButton)
+  NSButton* findChkCase = nil;       // case checkbox
+  NSButton* findChkHighlight = nil;  // highlight all checkbox
+  NSTextField* findCounterLabel = nil; // n/N label
+  NSButton* findBtnClose = nil;      // close button
+#endif
 };
 
 extern std::unordered_map<std::string, std::unique_ptr<WebViewInstanceRecord>> g_instances; // id -> record
@@ -116,9 +151,11 @@ extern int   g_want_dock_on_create; // -1 unknown(first run), 0 undock, 1 dock (
 #ifdef _WIN32
 extern int      g_titleBarH;
 extern int      g_titlePadX;
+extern int      g_findBarH;
 #else
 extern CGFloat      g_titleBarH;
 extern CGFloat      g_titlePadX;
+extern CGFloat      g_findBarH;
 #endif
 
 // команды

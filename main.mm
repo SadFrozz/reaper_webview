@@ -29,11 +29,127 @@
 // ======================== Title panel (creation + logic stays here) =========================
 #ifdef _WIN32
 // Forward declarations (creation logic in this TU; layout needs external linkage)
+#include <wincodec.h>
+#include "resource.h"
+static HBITMAP LoadPngStripToBitmap(const wchar_t* path, int* outW, int* outH){
+  *outW=0; *outH=0; HBITMAP hbmp=nullptr; IWICImagingFactory* fac=nullptr; if (FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&fac)))) return nullptr; IWICBitmapDecoder* dec=nullptr; if (FAILED(fac->CreateDecoderFromFilename(path,nullptr,GENERIC_READ,WICDecodeMetadataCacheOnLoad,&dec))){ fac->Release(); return nullptr; } IWICBitmapFrameDecode* frame=nullptr; dec->GetFrame(0,&frame); IWICFormatConverter* conv=nullptr; fac->CreateFormatConverter(&conv); conv->Initialize(frame, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,nullptr,0.0, WICBitmapPaletteTypeCustom); UINT w=0,h=0; frame->GetSize(&w,&h); *outW=(int)w; *outH=(int)h; BITMAPV5HEADER bi{}; bi.bV5Size=sizeof(bi); bi.bV5Width=w; bi.bV5Height=-(int)h; bi.bV5Planes=1; bi.bV5BitCount=32; bi.bV5Compression=BI_BITFIELDS; bi.bV5RedMask=0x00FF0000; bi.bV5GreenMask=0x0000FF00; bi.bV5BlueMask=0x000000FF; bi.bV5AlphaMask=0xFF000000; void* bits=nullptr; HDC hdc=GetDC(nullptr); hbmp=CreateDIBSection(hdc,(BITMAPINFO*)&bi,DIB_RGB_COLORS,&bits,nullptr,0); ReleaseDC(nullptr,hdc); if (hbmp && bits){ conv->CopyPixels(nullptr,w*4,(UINT)(w*h*4),(BYTE*)bits); }
+  if(conv) conv->Release(); if(frame) frame->Release(); if(dec) dec->Release(); if(fac) fac->Release(); return hbmp; }
+static HBITMAP LoadPngStripFromResource(int resId, int* outW, int* outH){
+  *outW=0; *outH=0; HRSRC hr = FindResource((HINSTANCE)g_hInst, MAKEINTRESOURCE(resId), RT_RCDATA); if(!hr) return nullptr; HGLOBAL hg = LoadResource((HINSTANCE)g_hInst, hr); if(!hg) return nullptr; DWORD sz = SizeofResource((HINSTANCE)g_hInst, hr); void* data = LockResource(hg); if(!data || !sz) return nullptr; IWICImagingFactory* fac=nullptr; if (FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&fac)))) return nullptr; IWICStream* stream=nullptr; if (FAILED(fac->CreateStream(&stream))){ fac->Release(); return nullptr; } if (FAILED(stream->InitializeFromMemory((BYTE*)data, sz))){ stream->Release(); fac->Release(); return nullptr; } IWICBitmapDecoder* dec=nullptr; if (FAILED(fac->CreateDecoderFromStream(stream,nullptr,WICDecodeMetadataCacheOnLoad,&dec))){ stream->Release(); fac->Release(); return nullptr; } IWICBitmapFrameDecode* frame=nullptr; dec->GetFrame(0,&frame); IWICFormatConverter* conv=nullptr; fac->CreateFormatConverter(&conv); conv->Initialize(frame, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,nullptr,0.0, WICBitmapPaletteTypeCustom); UINT w=0,h=0; frame->GetSize(&w,&h); *outW=(int)w; *outH=(int)h; BITMAPV5HEADER bi{}; bi.bV5Size=sizeof(bi); bi.bV5Width=w; bi.bV5Height=-(int)h; bi.bV5Planes=1; bi.bV5BitCount=32; bi.bV5Compression=BI_BITFIELDS; bi.bV5RedMask=0x00FF0000; bi.bV5GreenMask=0x0000FF00; bi.bV5BlueMask=0x000000FF; bi.bV5AlphaMask=0xFF000000; void* bits=nullptr; HDC hdc=GetDC(nullptr); HBITMAP hbmp=CreateDIBSection(hdc,(BITMAPINFO*)&bi,DIB_RGB_COLORS,&bits,nullptr,0); ReleaseDC(nullptr,hdc); if(hbmp && bits){ conv->CopyPixels(nullptr,w*4,(UINT)(w*h*4),(BYTE*)bits); } if(conv) conv->Release(); if(frame) frame->Release(); if(dec) dec->Release(); if(stream) stream->Release(); if(fac) fac->Release(); return hbmp; }
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec);
 static void EnsureTitleBarCreated(HWND hwnd);
 void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible); // exported across TUs
 static void SetTitleBarText(HWND hwnd, const std::string& s);
 static LRESULT CALLBACK RWVTitleBarProc(HWND h, UINT m, WPARAM w, LPARAM l);
+// Find bar (Windows) forward declarations
+static void EnsureFindBarCreated(HWND hwnd);
+static void UpdateFindCounter(WebViewInstanceRecord* rec);
+
+// Control IDs (child controls for find bar) MUST be defined before any usage
+#ifndef IDC_FIND_EDIT
+#define IDC_FIND_EDIT     2101
+#define IDC_FIND_PREV     2102
+#define IDC_FIND_NEXT     2103
+#define IDC_FIND_CASE     2104
+#define IDC_FIND_HILITE   2105
+#define IDC_FIND_COUNTER  2106
+#define IDC_FIND_CLOSE    2107
+#endif
+
+static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l);
+static WNDPROC s_origFindEditProc = nullptr;
+static WNDPROC s_origPrevBtnProc = nullptr;
+static WNDPROC s_origNextBtnProc = nullptr;
+
+// Subclass for navigation buttons to ensure we always get mouse hover/leave even if parent logic misses it
+static LRESULT CALLBACK RWVNavBtnProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+  int cid = (int)GetWindowLongPtr(h, GWLP_ID);
+  bool isPrev = (cid == IDC_FIND_PREV);
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
+  auto callOrig = [&](){ WNDPROC orig = isPrev? s_origPrevBtnProc : s_origNextBtnProc; return CallWindowProc(orig?orig:DefWindowProc, h, m, w, l); };
+  if(!rec) return callOrig();
+  bool &hot = isPrev? rec->prevHot : rec->nextHot;
+  bool &down = isPrev? rec->prevDown : rec->nextDown;
+  switch(m){
+    case WM_MOUSEMOVE:
+    {
+      LogF("[FindNavBtn] WM_MOUSEMOVE cid=%d hot=%d down=%d", cid, (int)hot, (int)down);
+      if(!hot){ hot=true; InvalidateRect(h,nullptr,TRUE);} TRACKMOUSEEVENT t{sizeof(t),TME_LEAVE,h,0}; TrackMouseEvent(&t); break;
+    }
+    case WM_MOUSELEAVE:
+      LogF("[FindNavBtn] WM_MOUSELEAVE cid=%d hot->0", cid);
+      if(hot){ hot=false; InvalidateRect(h,nullptr,TRUE);} break;
+    case WM_LBUTTONDOWN:
+      LogF("[FindNavBtn] WM_LBUTTONDOWN cid=%d", cid);
+      SetCapture(h); if(!down){ down=true; InvalidateRect(h,nullptr,TRUE);} return 0;
+    case WM_LBUTTONUP:
+    {
+      LogF("[FindNavBtn] WM_LBUTTONUP cid=%d", cid);
+      if(GetCapture()==h) ReleaseCapture(); bool wasDown=down; if(down){ down=false; InvalidateRect(h,nullptr,TRUE);} POINT pt{(SHORT)LOWORD(l),(SHORT)HIWORD(l)}; RECT rc; GetClientRect(h,&rc); if(wasDown && PtInRect(&rc,pt)){
+        HWND host = GetParent(GetParent(h)); if(host) SendMessageW(host, WM_COMMAND, MAKEWPARAM(cid, BN_CLICKED), (LPARAM)h);
+      } return 0;
+    }
+  }
+  return callOrig();
+}
+static DWORD g_findLastEnterTick = 0; // timestamp of last Enter press in find edit
+static bool  g_findEnterActive = false; // true while we suppress focus changes
+// Custom message for deferred refocus after handling Enter inside find edit
+static const UINT WM_RWV_FIND_REFOCUS = WM_APP + 0x452;
+static HHOOK g_rwvMsgHook = nullptr; // message hook to pre-swallow VK_RETURN
+static HWND  g_lastFindEdit = nullptr; // last known find edit hwnd
+// Simple inline navigation (placeholder for real search logic) to avoid button focus side-effects
+static void RWV_FindNavigateInline(WebViewInstanceRecord* rec, bool fwd)
+{
+  if (!rec) return;
+  LogF("[Find] nav %s (inline) query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
+  // Future: update indices and call UpdateFindCounter(rec) after search results
+}
+static LRESULT CALLBACK RWVFindEditProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+  switch(m){
+    case WM_GETDLGCODE:
+      return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTMESSAGE;
+    case WM_SETFOCUS:
+      LogRaw("[FindFocus] edit WM_SETFOCUS");
+      g_lastFindEdit = h;
+      break;
+    case WM_KEYDOWN:
+      if (w==VK_RETURN){
+        HWND host = GetParent(GetParent(h));
+        WebViewInstanceRecord* rec = GetInstanceByHwnd(host);
+        bool shift = (GetKeyState(VK_SHIFT)&0x8000)!=0;
+        if (rec){
+          bool fwd = !shift;
+          g_findEnterActive = true; g_findLastEnterTick = GetTickCount();
+          RWV_FindNavigateInline(rec, fwd);
+          SetFocus(h);
+          SendMessageW(h, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+          HWND findBar = GetParent(h);
+          if (findBar && IsWindow(findBar)) PostMessage(findBar, WM_RWV_FIND_REFOCUS, (WPARAM)h, 0);
+          return 0;
+        }
+      }
+      break;
+    case WM_CHAR:
+      if (w=='\r') return 0; // swallow CR so no default button processing
+      break;
+    case WM_KEYUP:
+      if (w==VK_RETURN) g_findEnterActive=false;
+      break;
+    case WM_KILLFOCUS:
+      LogRaw("[FindFocus] edit WM_KILLFOCUS");
+      if (g_findEnterActive && GetTickCount()-g_findLastEnterTick < 250){
+        SetFocus(h);
+        SendMessageW(h, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+        return 0;
+      }
+      break;
+  }
+  return CallWindowProcW(s_origFindEditProc,h,m,w,l);
+}
+
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
 {
   if (!rec) return; if (rec->titleFont){ DeleteObject(rec->titleFont); rec->titleFont=nullptr;} if (rec->titleBrush){ DeleteObject(rec->titleBrush); rec->titleBrush=nullptr;} if (rec->titleBar && IsWindow(rec->titleBar)){ DestroyWindow(rec->titleBar); rec->titleBar=nullptr; }
@@ -50,10 +166,19 @@ static LRESULT CALLBACK RWVTitleBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
       WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
       COLORREF bk, tx; GetPanelThemeColors(h, dc, &bk, &tx);
       if (rec){ if (rec->titleBkColor!=bk){ rec->titleBkColor=bk; if(rec->titleBrush){ DeleteObject(rec->titleBrush); rec->titleBrush=nullptr; }} rec->titleTextColor=tx; if(!rec->titleBrush) rec->titleBrush=CreateSolidBrush(bk);} 
-      HBRUSH fill = (rec && rec->titleBrush)?rec->titleBrush:(HBRUSH)(COLOR_BTNFACE+1);
-      FillRect(dc,&r,fill); SetBkMode(dc,TRANSPARENT); SetTextColor(dc,tx);
+  HBRUSH fill = (rec && rec->titleBrush)?rec->titleBrush:(HBRUSH)(COLOR_BTNFACE+1);
+  FillRect(dc,&r,fill); SetBkMode(dc,TRANSPARENT); SetTextColor(dc,tx);
+  HFONT oldF = nullptr; if (rec && rec->titleFont) oldF = (HFONT)SelectObject(dc, rec->titleFont);
       WCHAR buf[512]; GetWindowTextW(h,buf,512); RECT tr=r; tr.left+=g_titlePadX; DrawTextW(dc,buf,-1,&tr,DT_SINGLELINE|DT_VCENTER|DT_LEFT|DT_NOPREFIX|DT_END_ELLIPSIS);
-      EndPaint(h,&ps); return 0;
+  if (oldF) SelectObject(dc, oldF);
+      EndPaint(h,&ps);
+      // invalidate find bar to sync colors
+      if (rec && rec->findBarWnd) {
+        InvalidateRect(rec->findBarWnd,nullptr,TRUE);
+        HWND kids[9] = { rec->findEdit, rec->findBtnPrev, rec->findBtnNext, rec->findChkCase, rec->findLblCase, rec->findChkHighlight, rec->findLblHighlight, rec->findCounterStatic, rec->findBtnClose };
+        for (int i=0;i<9;++i) if (kids[i]) InvalidateRect(kids[i],nullptr,TRUE);
+      }
+      return 0;
     }
   }
   return DefWindowProcW(h,m,w,l);
@@ -63,17 +188,319 @@ static void EnsureTitleBarCreated(HWND hwnd)
 {
   WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if(!rec) return; if (rec->titleBar && !IsWindow(rec->titleBar)) rec->titleBar=nullptr; if(rec->titleBar) return;
   static bool s_reg=false; if(!s_reg){ WNDCLASSW wc{}; wc.lpfnWndProc=RWVTitleBarProc; wc.hInstance=(HINSTANCE)g_hInst; wc.lpszClassName=L"RWVTitleBar"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); wc.hbrBackground=NULL; RegisterClassW(&wc); s_reg=true; }
-  LOGFONTW lf{}; SystemParametersInfoW(SPI_GETICONTITLELOGFONT,sizeof(lf),&lf,0); lf.lfHeight=-12; lf.lfWeight=FW_SEMIBOLD; rec->titleFont=CreateFontIndirectW(&lf);
+  LOGFONTW lf{}; SystemParametersInfoW(SPI_GETICONTITLELOGFONT,sizeof(lf),&lf,0); // используем системный логфонт без модификаций
+  rec->titleFont=CreateFontIndirectW(&lf);
   rec->titleBar = CreateWindowExW(0,L"RWVTitleBar",L"",WS_CHILD,0,0,10,g_titleBarH,hwnd,(HMENU)(INT_PTR)IDC_TITLEBAR,(HINSTANCE)g_hInst,nullptr);
   if(rec->titleBar && rec->titleFont) SendMessageW(rec->titleBar,WM_SETFONT,(WPARAM)rec->titleFont,TRUE);
 }
 
+// Ensure creation of the find bar and its child controls (Windows only)
+static void EnsureFindBarCreated(HWND hwnd)
+{
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if(!rec) return;
+  if (rec->findBarWnd && !IsWindow(rec->findBarWnd)) rec->findBarWnd = nullptr;
+  if (rec->findBarWnd) return;
+
+  static bool s_reg=false; if(!s_reg){ WNDCLASSW wc{}; wc.lpfnWndProc=RWVFindBarProc; wc.hInstance=(HINSTANCE)g_hInst; wc.lpszClassName=L"RWVFindBar"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); wc.hbrBackground=NULL; RegisterClassW(&wc); s_reg=true; }
+  rec->findBarWnd = CreateWindowExW(0, L"RWVFindBar", L"", WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
+                                   0,0,10,g_findBarH, hwnd, (HMENU)(INT_PTR)3002, (HINSTANCE)g_hInst, nullptr);
+  if (!rec->findBarWnd) return;
+
+  int h=g_findBarH-8; if (h<16) h=16; int y=4;
+  // Создаём в порядке логики (edit слева, навигация, опции, счётчик; close будет позиционироваться справа в layout)
+  rec->findEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_TABSTOP|ES_AUTOHSCROLL, 0,y,180,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_EDIT,(HINSTANCE)g_hInst,nullptr);
+  int btnSize = h; // square clickable area
+  // Register custom nav button class once
+  static bool s_navReg=false; if(!s_navReg){ WNDCLASSW wc{}; wc.lpfnWndProc=[](HWND h, UINT m, WPARAM w, LPARAM l)->LRESULT{
+        int cid = (int)GetWindowLongPtr(h,GWLP_ID); bool isPrev = (cid==IDC_FIND_PREV);
+        WebViewInstanceRecord* recLocal = GetInstanceByHwnd(GetParent(GetParent(h)));
+        if(!recLocal) return DefWindowProcW(h,m,w,l);
+        bool &hot = isPrev? recLocal->prevHot : recLocal->nextHot;
+        bool &down = isPrev? recLocal->prevDown : recLocal->nextDown;
+        switch(m){
+          case WM_MOUSEMOVE:{ if(!hot){ hot=true; InvalidateRect(h,nullptr,FALSE);} TRACKMOUSEEVENT t{sizeof(t),TME_LEAVE,h,0}; TrackMouseEvent(&t); return 0; }
+          case WM_MOUSELEAVE:{ if(hot){ hot=false; InvalidateRect(h,nullptr,FALSE);} return 0; }
+          case WM_LBUTTONDOWN:{ SetCapture(h); if(!down){ down=true; InvalidateRect(h,nullptr,FALSE);} return 0; }
+          case WM_LBUTTONUP:{ if(GetCapture()==h) ReleaseCapture(); bool wasDown=down; if(down){ down=false; InvalidateRect(h,nullptr,FALSE);} POINT pt{(SHORT)LOWORD(l),(SHORT)HIWORD(l)}; RECT rc; GetClientRect(h,&rc); if(wasDown && PtInRect(&rc,pt)){ HWND host = GetParent(GetParent(h)); if(host) SendMessageW(host, WM_COMMAND, MAKEWPARAM(cid, BN_CLICKED), (LPARAM)h);} return 0; }
+          case WM_ERASEBKGND: return 1; // avoid default white fill
+          case WM_PAINT:{ PAINTSTRUCT ps; HDC dc=BeginPaint(h,&ps); RECT rc; GetClientRect(h,&rc); int box=24; RECT r=rc; int wC=rc.right-rc.left; int hC=rc.bottom-rc.top; if(wC>box){ int dx=(wC-box)/2; r.left+=dx; r.right=r.left+box; } if(hC>box){ int dy=(hC-box)/2; r.top+=dy; r.bottom=r.top+box; }
+            // Determine panel color robustly (query if not cached)
+            COLORREF panelCol = recLocal->titleBkColor ? recLocal->titleBkColor : GetSysColor(COLOR_BTNFACE);
+            if(!recLocal->titleBkColor){ COLORREF bkTmp, txTmp; GetPanelThemeColors(GetParent(h), dc, &bkTmp, &txTmp); panelCol=bkTmp; recLocal->titleBkColor=bkTmp; recLocal->titleTextColor=txTmp; }
+            // Double buffer
+            HDC memDC = CreateCompatibleDC(dc); HBITMAP memBmp = CreateCompatibleBitmap(dc, rc.right-rc.left, rc.bottom-rc.top); HGDIOBJ oldBmp = SelectObject(memDC, memBmp);
+            HBRUSH br = CreateSolidBrush(panelCol); FillRect(memDC,&rc,br); DeleteObject(br);
+            HBITMAP bmp = isPrev? recLocal->bmpPrev : recLocal->bmpNext; int bw = isPrev? recLocal->bmpPrevW : recLocal->bmpNextW; int bh = isPrev? recLocal->bmpPrevH : recLocal->bmpNextH;
+            int frames = (bw>0 && bh>0 && (bw%3)==0)?3:1; int frameW=(frames==3)?bw/3:bw; int frameH=bh; int stateIndex=0; if(down) stateIndex=2; else if(hot) stateIndex=1; bool drew=false;
+            if(frames==3 && bmp){ HDC mem=CreateCompatibleDC(memDC); HGDIOBJ old=SelectObject(mem,bmp); int dx=r.left+((r.right-r.left)-frameW)/2; int dy=r.top+((r.bottom-r.top)-frameH)/2; if(down){ dx++; dy++; } BLENDFUNCTION bf{AC_SRC_OVER,0,255,AC_SRC_ALPHA}; AlphaBlend(memDC,dx,dy,frameW,frameH,mem,stateIndex*frameW,0,frameW,frameH,bf); SelectObject(mem,old); DeleteDC(mem); drew=true; }
+            if(!drew){ // vector fallback
+              auto clampC=[](int v){ return v<0?0:(v>255?255:v); }; auto shade=[&](COLORREF c,int d){ int R=clampC(GetRValue(c)+d),G=clampC(GetGValue(c)+d),B=clampC(GetBValue(c)+d); return RGB(R,G,B); };
+              COLORREF base=RGB(180,180,180); if(hot) base=shade(base,+40); if(down) base=shade(base,-50); POINT tri[3]; int cx=(r.left+r.right)/2; int cy=(r.top+r.bottom)/2; int sz=8; if(isPrev){ tri[0]={cx,cy-sz}; tri[1]={cx-sz,cy+sz}; tri[2]={cx+sz,cy+sz}; } else { tri[0]={cx-sz,cy-sz}; tri[1]={cx+sz,cy}; tri[2]={cx-sz,cy+sz}; } HBRUSH bA=CreateSolidBrush(base); HPEN pA=CreatePen(PS_SOLID,1,shade(base,-60)); HGDIOBJ oP=SelectObject(memDC,pA); HGDIOBJ oB=SelectObject(memDC,bA); Polygon(memDC,tri,3); SelectObject(memDC,oB); SelectObject(memDC,oP); DeleteObject(bA); DeleteObject(pA); }
+            if(hot||down){ HPEN penO=CreatePen(PS_SOLID,1,RGB(128,128,128)); HGDIOBJ oP=SelectObject(memDC,penO); HGDIOBJ oB=SelectObject(memDC,GetStockObject(HOLLOW_BRUSH)); RoundRect(memDC,r.left,r.top,r.right-1,r.bottom-1,4,4); SelectObject(memDC,oB); SelectObject(memDC,oP); DeleteObject(penO);} 
+            BitBlt(dc,0,0,rc.right-rc.left,rc.bottom-rc.top,memDC,0,0,SRCCOPY);
+            SelectObject(memDC,oldBmp); DeleteObject(memBmp); DeleteDC(memDC);
+            EndPaint(h,&ps); return 0; }
+        }
+        return DefWindowProcW(h,m,w,l);
+      }; wc.hInstance=(HINSTANCE)g_hInst; wc.lpszClassName=L"RWVNavBtn"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); wc.hbrBackground=NULL; RegisterClassW(&wc); s_navReg=true; }
+  rec->findBtnPrev = CreateWindowExW(0,L"RWVNavBtn",L"",WS_CHILD,0,y,btnSize,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_PREV,(HINSTANCE)g_hInst,nullptr);
+  rec->findBtnNext = CreateWindowExW(0,L"RWVNavBtn",L"",WS_CHILD,0,y,btnSize,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_NEXT,(HINSTANCE)g_hInst,nullptr);
+  // Load PNG strips (3 states horizontally) from embedded resources
+  // Ensure COM for WIC (separate from WebView2 COM which may have initialized STA already)
+  HRESULT coHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED); (void)coHr; // ignore failure (likely already initialized)
+  rec->bmpPrev = LoadPngStripFromResource(IDR_PNG_SEARCH_PREV, &rec->bmpPrevW, &rec->bmpPrevH);
+  if(!rec->bmpPrev) LogRaw("[FindNavImg] FAILED resource PREV"); else LogF("[FindNavImg] OK resource PREV w=%d h=%d", rec->bmpPrevW, rec->bmpPrevH);
+  rec->bmpNext = LoadPngStripFromResource(IDR_PNG_SEARCH_NEXT, &rec->bmpNextW, &rec->bmpNextH);
+  if(!rec->bmpNext) LogRaw("[FindNavImg] FAILED resource NEXT"); else LogF("[FindNavImg] OK resource NEXT w=%d h=%d", rec->bmpNextW, rec->bmpNextH);
+  // Width оставляем квадратной; если спрайт шире (3 кадра) — просто центрируем кадр.
+  // Create checkboxes without text; labels will be separate STATIC controls for consistent themed text color
+  rec->findChkCase = CreateWindowExW(0,L"BUTTON",L"",WS_CHILD|BS_AUTOCHECKBOX,0,y,18,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CASE,(HINSTANCE)g_hInst,nullptr);
+  rec->findLblCase = CreateWindowExW(0,L"STATIC",L"Case Sensitive",WS_CHILD|SS_CENTERIMAGE,0,y,110,h, rec->findBarWnd,nullptr,(HINSTANCE)g_hInst,nullptr);
+  rec->findChkHighlight = CreateWindowExW(0,L"BUTTON",L"",WS_CHILD|BS_AUTOCHECKBOX,0,y,18,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_HILITE,(HINSTANCE)g_hInst,nullptr);
+  rec->findLblHighlight = CreateWindowExW(0,L"STATIC",L"Highlight All",WS_CHILD|SS_CENTERIMAGE,0,y,100,h, rec->findBarWnd,nullptr,(HINSTANCE)g_hInst,nullptr);
+  rec->findCounterStatic = CreateWindowExW(0,L"STATIC",L"0/0",WS_CHILD|SS_CENTERIMAGE,0,y,60,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_COUNTER,(HINSTANCE)g_hInst,nullptr);
+  rec->findBtnClose = CreateWindowExW(0,L"BUTTON",L"X",WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,0,y,24,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CLOSE,(HINSTANCE)g_hInst,nullptr);
+
+  HFONT useFont = rec->titleFont ? rec->titleFont : (HFONT)SendMessage(hwnd, WM_GETFONT,0,0);
+  HWND ctrls[] = { rec->findEdit, rec->findBtnPrev, rec->findBtnNext, rec->findChkCase, rec->findLblCase, rec->findChkHighlight, rec->findLblHighlight, rec->findCounterStatic, rec->findBtnClose };
+  for (HWND c : ctrls) if (c && useFont) SendMessage(c, WM_SETFONT, (WPARAM)useFont, TRUE);
+  // Create overlay statics over checkboxes to capture clicks without moving focus
+  if (rec->findChkCase) {
+    RECT rc; GetWindowRect(rec->findChkCase,&rc); POINT pt{rc.left,rc.top}; ScreenToClient(rec->findBarWnd,&pt); int w=rc.right-rc.left, h2=rc.bottom-rc.top;
+    HWND ov = CreateWindowExW(0,L"STATIC",L"",WS_CHILD|SS_NOTIFY,pt.x,pt.y,w,h2,rec->findBarWnd,(HMENU)(INT_PTR)(IDC_FIND_CASE+1000),(HINSTANCE)g_hInst,nullptr);
+    if(ov) ShowWindow(ov,SW_SHOWNA);
+  }
+  if (rec->findChkHighlight) {
+    RECT rc; GetWindowRect(rec->findChkHighlight,&rc); POINT pt{rc.left,rc.top}; ScreenToClient(rec->findBarWnd,&pt); int w=rc.right-rc.left, h2=rc.bottom-rc.top;
+    HWND ov = CreateWindowExW(0,L"STATIC",L"",WS_CHILD|SS_NOTIFY,pt.x,pt.y,w,h2,rec->findBarWnd,(HMENU)(INT_PTR)(IDC_FIND_HILITE+1000),(HINSTANCE)g_hInst,nullptr);
+    if(ov) ShowWindow(ov,SW_SHOWNA);
+  }
+  // NOTE: Optionally could disable visual themes via SetWindowTheme, but we avoid extra deps.
+  if (rec->findEdit && !s_origFindEditProc) s_origFindEditProc = (WNDPROC)SetWindowLongPtr(rec->findEdit, GWLP_WNDPROC, (LONG_PTR)RWVFindEditProc);
+  if (rec->findBtnPrev && !s_origPrevBtnProc){ s_origPrevBtnProc = (WNDPROC)SetWindowLongPtr(rec->findBtnPrev, GWLP_WNDPROC, (LONG_PTR)RWVNavBtnProc); LogRaw("[FindNavBtn] subclass prev"); }
+  if (rec->findBtnNext && !s_origNextBtnProc){ s_origNextBtnProc = (WNDPROC)SetWindowLongPtr(rec->findBtnNext, GWLP_WNDPROC, (LONG_PTR)RWVNavBtnProc); LogRaw("[FindNavBtn] subclass next"); }
+  if (rec->findBtnPrev && !s_origPrevBtnProc) s_origPrevBtnProc = (WNDPROC)SetWindowLongPtr(rec->findBtnPrev, GWLP_WNDPROC, (LONG_PTR)RWVNavBtnProc);
+  if (rec->findBtnNext && !s_origNextBtnProc) s_origNextBtnProc = (WNDPROC)SetWindowLongPtr(rec->findBtnNext, GWLP_WNDPROC, (LONG_PTR)RWVNavBtnProc);
+
+  ShowWindow(rec->findBarWnd, SW_HIDE); for (HWND c: ctrls) if(c) ShowWindow(c,SW_HIDE);
+  LogRaw("[Find] Created Windows find bar controls (custom class)");
+}
+
+static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+  switch(m){
+    case WM_NCCREATE: return 1;
+    case WM_PAINT:
+    {
+      PAINTSTRUCT ps; HDC dc=BeginPaint(h,&ps); RECT r; GetClientRect(h,&r);
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
+      COLORREF bk = GetSysColor(COLOR_BTNFACE), tx = GetSysColor(COLOR_WINDOWTEXT);
+      if (rec && rec->titleBrush){ // reuse title bar colors if available
+        bk = rec->titleBkColor; tx = rec->titleTextColor;
+      } else {
+        // Pull fresh panel colors (same heuristic) to keep unified theme
+        GetPanelThemeColors(h, dc, &bk, &tx);
+        if (rec) {
+          rec->titleBkColor = bk; rec->titleTextColor = tx;
+          if (!rec->titleBrush) rec->titleBrush = CreateSolidBrush(bk);
+        }
+      }
+      HBRUSH br = CreateSolidBrush(bk);
+      FillRect(dc,&r,br); DeleteObject(br);
+      // force children redraw for color sync
+      if (rec){ HWND kids[7]={rec->findChkCase,rec->findLblCase,rec->findChkHighlight,rec->findLblHighlight,rec->findBtnPrev,rec->findBtnNext,rec->findCounterStatic}; for (HWND c: kids) if (c) InvalidateRect(c,nullptr,TRUE);}      
+      EndPaint(h,&ps); return 0;
+    }
+    case WM_COMMAND:
+    {
+      HWND host = GetParent(h);
+      int cid = LOWORD(w);
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(host);
+      // Overlay statics map to underlying checkboxes
+      if (cid==IDC_FIND_CASE+1000 && rec && rec->findChkCase){ SendMessage(rec->findChkCase,BM_CLICK,0,0); if(rec->findEdit) PostMessage(h, WM_RWV_FIND_REFOCUS,(WPARAM)rec->findEdit,0); return 0; }
+      if (cid==IDC_FIND_HILITE+1000 && rec && rec->findChkHighlight){ SendMessage(rec->findChkHighlight,BM_CLICK,0,0); if(rec->findEdit) PostMessage(h, WM_RWV_FIND_REFOCUS,(WPARAM)rec->findEdit,0); return 0; }
+      if (host) return (LRESULT)SendMessageW(host, m, w, l);
+      break;
+    }
+    case WM_DRAWITEM:
+    {
+    DRAWITEMSTRUCT* dis = (DRAWITEMSTRUCT*)l; if (!dis) break; WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h)); if(!rec) break; int id = (int)w; if (id==IDC_FIND_PREV || id==IDC_FIND_NEXT){
+  // Debug diagnostics for button draw states
+  LogF("[FindNavImg] draw id=%d hot(prev=%d,next=%d) down(prev=%d,next=%d)", id, (int)rec->prevHot, (int)rec->nextHot, (int)rec->prevDown, (int)rec->nextDown);
+  HBITMAP bmp = (id==IDC_FIND_PREV)? rec->bmpPrev : rec->bmpNext; int bw = (id==IDC_FIND_PREV)? rec->bmpPrevW : rec->bmpNextW; int bh = (id==IDC_FIND_PREV)? rec->bmpPrevH : rec->bmpNextH; RECT fullR = dis->rcItem; RECT r = fullR; // working rect (28x28 centered vertically and horizontally inside control size if bigger)
+  int box=24; int wCtrl = fullR.right-fullR.left; int hCtrl = fullR.bottom-fullR.top; if (wCtrl>box){ int dx=(wCtrl-box)/2; r.left+=dx; r.right=r.left+box; } if (hCtrl>box){ int dy=(hCtrl-box)/2; r.top+=dy; r.bottom=r.top+box; }
+  int stateIndex=0; bool hot = (id==IDC_FIND_PREV)? rec->prevHot : rec->nextHot; bool down = (id==IDC_FIND_PREV)? rec->prevDown : rec->nextDown; if (down) stateIndex=2; else if (hot) stateIndex=1;
+  // background = panel color; fill entire control to eliminate white strips
+  WebViewInstanceRecord* rrec = rec; COLORREF panelCol = GetSysColor(COLOR_BTNFACE); if (rrec) panelCol = rrec->titleBkColor? rrec->titleBkColor : panelCol; HBRUSH br = CreateSolidBrush(panelCol); FillRect(dis->hDC,&fullR,br); DeleteObject(br);
+  int frames = (bw>0 && bh>0 && (bw % 3)==0)?3:1; int frameW = (frames==3)? bw/3 : bw; int frameH = bh; LogF("[FindNavImg] bmp=%p bw=%d bh=%d frames=%d stateIndex=%d hot=%d down=%d", bmp, bw, bh, frames, stateIndex, (int)hot, (int)down);
+        bool drewBitmap=false;
+        if (frames==3 && bmp && frameW>0 && frameH>0){
+          int useIndex = stateIndex; HDC mem = CreateCompatibleDC(dis->hDC); HGDIOBJ old = SelectObject(mem,bmp);
+          int dx = r.left + ((r.right-r.left)-frameW)/2; int dy = r.top + ((r.bottom-r.top)-frameH)/2;
+          // subtle press offset for tactile feel
+          if (down) { dx+=1; dy+=1; }
+          BLENDFUNCTION bf{AC_SRC_OVER,0,255,AC_SRC_ALPHA};
+          AlphaBlend(dis->hDC, dx, dy, frameW, frameH, mem, useIndex*frameW, 0, frameW, frameH, bf);
+          SelectObject(mem,old); DeleteDC(mem); drewBitmap=true;
+        }
+        if(!drewBitmap){
+          // Vector arrow with fill and pen showing explicit state coloring
+          auto clampC=[](int v){ if(v<0) return 0; if(v>255) return 255; return v; };
+          auto shade=[&](COLORREF c,int d){ int rC=GetRValue(c),gC=GetGValue(c),bC=GetBValue(c); rC=clampC(rC+d); gC=clampC(gC+d); bC=clampC(bC+d); return RGB(rC,gC,bC); };
+          COLORREF baseArrow = RGB(180,180,180); if (hot) baseArrow = shade(baseArrow,+40); if (down) baseArrow = shade(baseArrow,-50);
+          POINT tri[3]; int cx=(r.left+r.right)/2; int cy=(r.top+r.bottom)/2; int sz=8; if(id==IDC_FIND_PREV){ tri[0]={cx,cy-sz}; tri[1]={cx-sz,cy+sz}; tri[2]={cx+sz,cy+sz}; } else { tri[0]={cx-sz,cy-sz}; tri[1]={cx+sz,cy}; tri[2]={cx-sz,cy+sz}; }
+          HBRUSH brA = CreateSolidBrush(baseArrow); HPEN penA = CreatePen(PS_SOLID,1, shade(baseArrow,-60)); HGDIOBJ oldP=SelectObject(dis->hDC,penA); HGDIOBJ oldB=SelectObject(dis->hDC,brA); Polygon(dis->hDC,tri,3); SelectObject(dis->hDC,oldB); SelectObject(dis->hDC,oldP); DeleteObject(brA); DeleteObject(penA);
+        }
+        // Hover/press feedback background overlay (semi-transparent tint)
+        if (hot || down){
+          COLORREF edge = RGB(128,128,128);
+          int alpha = down ? 60 : 30; // stronger when pressed
+          // Create a DIB section for overlay (avoid messing with global alpha)
+          int ow = r.right-r.left, oh = r.bottom-r.top; BITMAPINFO bi{}; bi.bmiHeader.biSize=sizeof(BITMAPINFOHEADER); bi.bmiHeader.biWidth=ow; bi.bmiHeader.biHeight=-oh; bi.bmiHeader.biPlanes=1; bi.bmiHeader.biBitCount=32; bi.bmiHeader.biCompression=BI_RGB; void* bits=nullptr; HBITMAP hbmp=CreateDIBSection(dis->hDC,&bi,DIB_RGB_COLORS,&bits,nullptr,0);
+          if (hbmp && bits){
+            // fill with panel color copy then darken/lighten
+            BYTE* p=(BYTE*)bits; for(int y=0;y<oh;y++){ for(int x=0;x<ow;x++){ p[0]=GetBValue(panelCol); p[1]=GetGValue(panelCol); p[2]=GetRValue(panelCol); p[3]=0; p+=4; } }
+            // apply overlay tint (darken)
+            int dark = down ? -40 : -15; auto clampC2=[](int v){ return v<0?0:(v>255?255:v); };
+            p=(BYTE*)bits; for(int y=0;y<oh;y++){ for(int x=0;x<ow;x++){ int B=p[0],G=p[1],R=p[2]; R=clampC2(R+dark); G=clampC2(G+dark); B=clampC2(B+dark); p[0]=B; p[1]=G; p[2]=R; p[3]=(BYTE)alpha; p+=4; } }
+            HDC mem=CreateCompatibleDC(dis->hDC); HGDIOBJ old=SelectObject(mem,hbmp); BLENDFUNCTION bf{AC_SRC_OVER,0,(BYTE)255,AC_SRC_ALPHA}; AlphaBlend(dis->hDC,r.left,r.top,ow,oh,mem,0,0,ow,oh,bf); SelectObject(mem,old); DeleteDC(mem);
+          }
+          if(hbmp) DeleteObject(hbmp);
+          // Edge
+          HPEN penO = CreatePen(PS_SOLID,1, edge); HGDIOBJ oldP = SelectObject(dis->hDC, penO); HGDIOBJ oldB=SelectObject(dis->hDC, GetStockObject(HOLLOW_BRUSH)); RoundRect(dis->hDC,r.left,r.top,r.right-1,r.bottom-1,4,4); SelectObject(dis->hDC,oldB); SelectObject(dis->hDC,oldP); DeleteObject(penO);
+        }
+        return TRUE; }
+      break;
+    }
+    case WM_LBUTTONDOWN:
+    {
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
+      POINT pt{ (SHORT)LOWORD(l), (SHORT)HIWORD(l) }; HWND child = ChildWindowFromPointEx(h, pt, CWP_SKIPTRANSPARENT|CWP_SKIPINVISIBLE|CWP_SKIPDISABLED);
+      if (rec){
+  auto hitInBox=[&](HWND btn){ if(!btn) return false; RECT rc; GetClientRect(btn,&rc); int box=24; int w=rc.right-rc.left; int h2=rc.bottom-rc.top; RECT inner=rc; if(w>box){ int dx=(w-box)/2; inner.left+=dx; inner.right=inner.left+box; } if(h2>box){ int dy=(h2-box)/2; inner.top+=dy; inner.bottom=inner.top+box; } POINT local=pt; MapWindowPoints(h,btn,&local,1); return PtInRect(&inner,local)!=0; };
+        if(child==rec->findBtnPrev && hitInBox(rec->findBtnPrev)){ rec->prevDown=true; InvalidateRect(rec->findBtnPrev,nullptr,TRUE); }
+        else if(child==rec->findBtnNext && hitInBox(rec->findBtnNext)){ rec->nextDown=true; InvalidateRect(rec->findBtnNext,nullptr,TRUE); }
+        if (child == rec->findLblCase && rec->findChkCase){ SendMessage(rec->findChkCase, BM_CLICK, 0, 0); if(rec->findEdit) SetFocus(rec->findEdit); return 0; }
+        if (child == rec->findLblHighlight && rec->findChkHighlight){ SendMessage(rec->findChkHighlight, BM_CLICK, 0, 0); if(rec->findEdit) SetFocus(rec->findEdit); return 0; }
+      }
+      break;
+    }
+    case WM_MOUSEMOVE:
+    {
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h)); if(!rec) break; POINT pt{ (SHORT)LOWORD(l), (SHORT)HIWORD(l) }; HWND child = ChildWindowFromPointEx(h, pt, CWP_SKIPTRANSPARENT); bool anyHot=false; auto hoverIn=[&](HWND btn){ if(!btn||child!=btn) return false; RECT rc; GetClientRect(btn,&rc); int box=24; int w=rc.right-rc.left; int h2=rc.bottom-rc.top; RECT inner=rc; if(w>box){ int dx=(w-box)/2; inner.left+=dx; inner.right=inner.left+box; } if(h2>box){ int dy=(h2-box)/2; inner.top+=dy; inner.bottom=inner.top+box; } POINT local=pt; MapWindowPoints(h,btn,&local,1); return PtInRect(&inner,local)!=0; };
+      if (rec->findBtnPrev){ bool hov = hoverIn(rec->findBtnPrev); if(hov && !rec->prevHot){ rec->prevHot=true; InvalidateRect(rec->findBtnPrev,nullptr,TRUE);} else if(!hov && rec->prevHot){ rec->prevHot=false; InvalidateRect(rec->findBtnPrev,nullptr,TRUE);} if(hov) anyHot=true; }
+      if (rec->findBtnNext){ bool hov = hoverIn(rec->findBtnNext); if(hov && !rec->nextHot){ rec->nextHot=true; InvalidateRect(rec->findBtnNext,nullptr,TRUE);} else if(!hov && rec->nextHot){ rec->nextHot=false; InvalidateRect(rec->findBtnNext,nullptr,TRUE);} if(hov) anyHot=true; }
+      if(anyHot){ TRACKMOUSEEVENT t{sizeof(t),TME_LEAVE,h,0}; TrackMouseEvent(&t);} break;
+    }
+    case WM_MOUSELEAVE:
+    {
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h)); if(!rec) break; if(rec->prevHot){ rec->prevHot=false; InvalidateRect(rec->findBtnPrev,nullptr,TRUE);} if(rec->nextHot){ rec->nextHot=false; InvalidateRect(rec->findBtnNext,nullptr,TRUE);} break;
+    }
+    case WM_LBUTTONUP:
+    {
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h)); if(rec){
+        POINT pt{ (SHORT)LOWORD(l), (SHORT)HIWORD(l) }; HWND child = ChildWindowFromPointEx(h, pt, CWP_SKIPTRANSPARENT|CWP_SKIPINVISIBLE|CWP_SKIPDISABLED);
+        bool prevWasDown = rec->prevDown; bool nextWasDown = rec->nextDown;
+        if(rec->prevDown){ rec->prevDown=false; InvalidateRect(rec->findBtnPrev,nullptr,TRUE);} 
+        if(rec->nextDown){ rec->nextDown=false; InvalidateRect(rec->findBtnNext,nullptr,TRUE);} 
+  auto hitInBox=[&](HWND btn){ if(!btn) return false; RECT rc; GetClientRect(btn,&rc); int box=24; int w=rc.right-rc.left; int h2=rc.bottom-rc.top; RECT inner=rc; if(w>box){ int dx=(w-box)/2; inner.left+=dx; inner.right=inner.left+box; } if(h2>box){ int dy=(h2-box)/2; inner.top+=dy; inner.bottom=inner.top+box; } POINT local=pt; MapWindowPoints(h,btn,&local,1); return PtInRect(&inner,local)!=0; };
+        if(prevWasDown && child==rec->findBtnPrev && hitInBox(rec->findBtnPrev)){ // emulate button command
+          HWND host = GetParent(h); if(host) SendMessageW(host, WM_COMMAND, MAKEWPARAM(IDC_FIND_PREV, BN_CLICKED), (LPARAM)rec->findBtnPrev); }
+        if(nextWasDown && child==rec->findBtnNext && hitInBox(rec->findBtnNext)){ HWND host = GetParent(h); if(host) SendMessageW(host, WM_COMMAND, MAKEWPARAM(IDC_FIND_NEXT, BN_CLICKED), (LPARAM)rec->findBtnNext); }
+      }
+      break;
+    }
+    case WM_NEXTDLGCTL:
+      // Block dialog navigation focus changes triggered implicitly after Enter
+      if (g_findEnterActive && GetTickCount()-g_findLastEnterTick < 250) return 0;
+      break;
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORBTN:
+    {
+      HDC dc=(HDC)w; WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
+      COLORREF bkCol = GetSysColor(COLOR_BTNFACE), txCol = GetSysColor(COLOR_WINDOWTEXT);
+      if (rec) {
+        if (!rec->titleBrush) {
+          COLORREF bk, tx; GetPanelThemeColors(GetParent(h), dc, &bk, &tx);
+          rec->titleBkColor=bk; rec->titleTextColor=tx; rec->titleBrush=CreateSolidBrush(bk);
+        }
+        bkCol = rec->titleBkColor; txCol = rec->titleTextColor;
+      }
+      SetBkMode(dc, TRANSPARENT); SetTextColor(dc, txCol);
+      static HBRUSH s_tmp=nullptr; if (!rec || !rec->titleBrush) {
+        if (s_tmp) DeleteObject(s_tmp); s_tmp = CreateSolidBrush(bkCol);
+        return (LRESULT)s_tmp;
+      }
+      return (LRESULT)rec->titleBrush;
+    }
+    case WM_RWV_FIND_REFOCUS:
+    {
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
+      if (rec && rec->findEdit && IsWindow(rec->findEdit)) {
+        LogRaw("[FindFocus] deferred refocus");
+        SetFocus(rec->findEdit);
+        SendMessage(rec->findEdit, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+      }
+      g_findEnterActive = false; // end suppression window
+      return 0;
+    }
+  }
+  return DefWindowProcW(h,m,w,l);
+}
+
+static void UpdateFindCounter(WebViewInstanceRecord* rec)
+{
+  if (!rec || !rec->findCounterStatic) return;
+  int cur = rec->findCurrentIndex; int tot = rec->findTotalMatches;
+  if (cur < 0) cur = 0; if (tot < 0) tot = 0; if (cur > tot) cur = tot;
+    char buf[64]; snprintf(buf,sizeof(buf), "%d/%d", cur, tot);
+  SetWindowTextA(rec->findCounterStatic, buf);
+}
+
 void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
-  RECT rc; GetClientRect(hwnd,&rc); int top=0; WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd);
+  RECT rc; GetClientRect(hwnd,&rc); WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd);
+  int top=0; int bottom=0;
+  // Title bar at top
   if(titleVisible && rec && rec->titleBar){ MoveWindow(rec->titleBar,0,0,(rc.right-rc.left),g_titleBarH,TRUE); ShowWindow(rec->titleBar,SW_SHOWNA); top=g_titleBarH; }
   else if(rec && rec->titleBar) ShowWindow(rec->titleBar,SW_HIDE);
-  RECT brc=rc; brc.top+=top; if(rec && rec->controller) rec->controller->put_Bounds(brc);
+  // Find bar at bottom
+  if (rec && rec->showFindBar) {
+    EnsureFindBarCreated(hwnd);
+    if (rec->findBarWnd) {
+      int w = rc.right-rc.left; int h = g_findBarH; int y = (rc.bottom-rc.top) - h;
+      MoveWindow(rec->findBarWnd, 0, y, w, h, TRUE);
+      ShowWindow(rec->findBarWnd, SW_SHOWNA);
+      // Layout: edit, prev, next, case, highlight, counter (всё слева), close закреплён справа
+  int pad=0; int curX=pad; int innerH=h-8; if(innerH<16) innerH=16; int yC=(h-innerH)/2;
+  int btnBox=24; // logical slot width now equals visual width (no extra spacing)
+  int btnVisual=24; // visual box
+      auto showCtrl=[&](HWND ctrl){ if(ctrl) ShowWindow(ctrl,SW_SHOWNA); };
+  if (rec->findEdit) { MoveWindow(rec->findEdit,curX,yC,180,innerH,TRUE); showCtrl(rec->findEdit); curX+=180+8; }
+  if (rec->findBtnPrev){ MoveWindow(rec->findBtnPrev,curX,(h-btnVisual)/2,btnBox,btnVisual,TRUE); showCtrl(rec->findBtnPrev); curX+=btnBox+8; } // increased gap between prev/next by 4px
+  if (rec->findBtnNext){ MoveWindow(rec->findBtnNext,curX,(h-btnVisual)/2,btnBox,btnVisual,TRUE); showCtrl(rec->findBtnNext); curX+=btnBox+10; }
+  // Case checkbox + label
+  if (rec->findChkCase){ MoveWindow(rec->findChkCase,curX,yC,18,innerH,TRUE); showCtrl(rec->findChkCase); curX+=18; }
+  if (rec->findLblCase){ MoveWindow(rec->findLblCase,curX,yC,98,innerH,TRUE); showCtrl(rec->findLblCase); curX+=98+8; }
+  // Highlight checkbox + label
+  // Reintroduce highlight group left shift (10px), and extra 10px before counter
+  int highlightShift = 10; curX -= highlightShift; if (curX < pad) curX = pad;
+  if (rec->findChkHighlight){ MoveWindow(rec->findChkHighlight,curX,yC,18,innerH,TRUE); showCtrl(rec->findChkHighlight); curX+=18; }
+  if (rec->findLblHighlight){ MoveWindow(rec->findLblHighlight,curX,yC,92,innerH,TRUE); showCtrl(rec->findLblHighlight); curX+=92+8; }
+  curX -= 10; if (curX < pad) curX = pad; // additional 10px shift before counter
+  if (rec->findCounterStatic){ MoveWindow(rec->findCounterStatic,curX,yC,60,innerH,TRUE); showCtrl(rec->findCounterStatic); curX+=60+6; }
+      int closeW=24; int rightX = w - pad - closeW;
+      if (rec->findBtnClose){ MoveWindow(rec->findBtnClose,rightX,yC,closeW,innerH,TRUE); SetWindowPos(rec->findBtnClose,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE); showCtrl(rec->findBtnClose); }
+      bottom = g_findBarH;
+      UpdateFindCounter(rec);
+    }
+  } else if (rec && rec->findBarWnd) {
+    ShowWindow(rec->findBarWnd, SW_HIDE);
+  }
+  // WebView occupies remaining client area
+  RECT brc=rc; brc.top+=top; brc.bottom -= bottom; if (brc.bottom < brc.top) brc.bottom = brc.top;
+  if(rec && rec->controller) rec->controller->put_Bounds(brc);
 }
 static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); if(rec && rec->titleBar) SetWindowTextW(rec->titleBar,Widen(s).c_str()); }
 #else
@@ -154,6 +581,7 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
   CGFloat hostW = host.bounds.size.width;
   CGFloat hostH = host.bounds.size.height;
   CGFloat panelH = (titleVisible && rec->titleBarView)? g_titleBarH : 0;
+  CGFloat findH = (rec->showFindBar ? g_findBarH : 0);
 
   if (rec->titleBarView) {
     if (titleVisible) {
@@ -174,13 +602,224 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
     }
   }
 
+  // Ensure find bar
+  if (rec->showFindBar) {
+    EnsureFindBarCreated(hwnd);
+    if (rec->findBarView) {
+      [rec->findBarView setFrame:NSMakeRect(0, 0, hostW, g_findBarH)];
+      [rec->findBarView setHidden:NO];
+      // Layout mirroring Windows logic
+      int pad=0; CGFloat w=hostW; CGFloat h=g_findBarH; CGFloat innerH=h-8; if(innerH<16) innerH=16; CGFloat yC=(h-innerH)/2;
+      int btnBox=24; int btnVisual=24; CGFloat curX=pad;
+      FRZFindBarView* fb = (FRZFindBarView*)rec->findBarView;
+      if (fb.txtField){ fb.txtField.frame = NSMakeRect(curX,yC,180,innerH); curX+=180+8; }
+      if (fb.navPrev){ fb.navPrev.frame = NSMakeRect(curX,(h-btnVisual)/2,btnBox,btnVisual); curX+=btnBox+8; }
+      if (fb.navNext){ fb.navNext.frame = NSMakeRect(curX,(h-btnVisual)/2,btnBox,btnVisual); curX+=btnBox+10; }
+      if (fb.chkCase){ fb.chkCase.frame = NSMakeRect(curX,yC,60,innerH); curX+=60; }
+      if (fb.chkCase){ curX+=8; } // label space analog (Windows had label control; here checkbox includes text)
+      // Highlight group shift
+      curX -= 10; if (curX < pad) curX = pad;
+      if (fb.chkHighlight){ fb.chkHighlight.frame = NSMakeRect(curX,yC,90,innerH); curX+=90; }
+      curX += 8; // spacing after highlight
+      curX -= 10; if (curX < pad) curX = pad; // before counter
+      if (fb.lblCounter){ fb.lblCounter.frame = NSMakeRect(curX,yC,60,innerH); curX+=60+6; }
+      // Close button pinned right
+      CGFloat closeW=24; CGFloat rightX = w - pad - closeW;
+      if (fb.btnClose){ fb.btnClose.frame = NSMakeRect(rightX,yC,closeW,innerH); }
+      MacUpdateFindCounter(rec);
+    }
+  } else if (rec->findBarView) {
+    [rec->findBarView setHidden:YES];
+  }
+
   if (rec->webView) {
-    // WebView occupies remaining area below the panel
-    NSRect webF = NSMakeRect(0, 0, hostW, hostH - panelH);
+    // WebView occupies remaining area between find bar (bottom) and panel (top)
+    NSRect webF = NSMakeRect(0, findH, hostW, hostH - panelH - findH);
+    if (webF.size.height < 0) webF.size.height = 0;
     [rec->webView setFrame:webF];
   }
 }
 static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRecord* rec=GetInstanceByHwnd(hwnd); if(!rec) return; if(rec->panelTitleString==s) return; rec->panelTitleString=s; if(rec->titleBarView) [rec->titleBarView setNeedsDisplay:YES]; }
+
+// ============================= macOS Find Bar =============================
+typedef NS_ENUM(NSInteger, FRZNavDirection) { FRZNavDirectionPrev=0, FRZNavDirectionNext=1 };
+
+@interface FRZNavButton : NSView
+@property (nonatomic, assign) FRZNavDirection direction;
+@property (nonatomic, weak) id target;
+@property (nonatomic) SEL action;
+@property (nonatomic, assign) BOOL hot;
+@property (nonatomic, assign) BOOL down;
+@end
+
+@implementation FRZNavButton
+{
+  NSTrackingArea* _track;
+}
+- (instancetype)initWithDirection:(FRZNavDirection)d
+{
+  if ((self=[super initWithFrame:NSMakeRect(0,0,24,24)])) {
+    self.direction=d; self.wantsLayer=YES;
+  }
+  return self;
+}
+- (BOOL)isFlipped { return NO; }
+- (void)updateTrackingAreas
+{
+  [super updateTrackingAreas];
+  if (_track) { [self removeTrackingArea:_track]; _track=nil; }
+  _track=[[NSTrackingArea alloc] initWithRect:self.bounds options:(NSTrackingMouseEnteredAndExited|NSTrackingActiveInKeyWindow|NSTrackingMouseMoved|NSTrackingInVisibleRect) owner:self userInfo:nil];
+  [self addTrackingArea:_track];
+}
+- (void)mouseEntered:(NSEvent*)e { self.hot=YES; [self setNeedsDisplay:YES]; }
+- (void)mouseExited:(NSEvent*)e { self.hot=NO; self.down=NO; [self setNeedsDisplay:YES]; }
+- (void)mouseDown:(NSEvent*)e { self.down=YES; [self setNeedsDisplay:YES]; }
+- (void)mouseUp:(NSEvent*)e {
+  BOOL inside = NSPointInRect([self convertPoint:[e locationInWindow] fromView:nil], self.bounds);
+  BOOL wasDown=self.down; self.down=NO; [self setNeedsDisplay:YES];
+  if (inside && wasDown && self.target && self.action && [self.target respondsToSelector:self.action]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+    [self.target performSelector:self.action withObject:self];
+#pragma clang diagnostic pop
+  }
+}
+- (void)drawRect:(NSRect)dirtyRect
+{
+  NSColor* base = [NSColor colorWithCalibratedWhite:0.50 alpha:1.0];
+  if (self.hot) base = [NSColor colorWithCalibratedWhite:0.65 alpha:1.0];
+  if (self.down) base = [NSColor colorWithCalibratedWhite:0.85 alpha:1.0];
+  [[NSColor clearColor] setFill]; NSRectFill(self.bounds);
+  // background panel-like fill to avoid gaps
+  [[NSColor colorWithCalibratedWhite:0.18 alpha:1.0] setFill]; NSBezierPath* bg=[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:3 yRadius:3]; [bg fill];
+  // triangle
+  NSBezierPath* tri=[NSBezierPath bezierPath];
+  if (self.direction==FRZNavDirectionPrev) {
+    // up triangle
+    [tri moveToPoint:NSMakePoint(NSMidX(self.bounds), NSMinY(self.bounds)+6)];
+    [tri lineToPoint:NSMakePoint(NSMinX(self.bounds)+6, NSMaxY(self.bounds)-6)];
+    [tri lineToPoint:NSMakePoint(NSMaxX(self.bounds)-6, NSMaxY(self.bounds)-6)];
+  } else {
+    // down triangle
+    [tri moveToPoint:NSMakePoint(NSMinX(self.bounds)+6, NSMinY(self.bounds)+6)];
+    [tri lineToPoint:NSMakePoint(NSMaxX(self.bounds)-6, NSMinY(self.bounds)+6)];
+    [tri lineToPoint:NSMakePoint(NSMidX(self.bounds), NSMaxY(self.bounds)-6)];
+  }
+  [tri closePath];
+  [base setFill]; [tri fill];
+  // focus/hover outline
+  if (self.hot || self.down) {
+    NSColor* br = self.down ? [NSColor colorWithCalibratedWhite:0.95 alpha:1.0] : [NSColor colorWithCalibratedWhite:0.70 alpha:1.0];
+    [br setStroke]; [bg setLineWidth:1.0]; [bg stroke];
+  }
+}
+@end
+
+@interface FRZFindBarView : NSView <NSTextFieldDelegate>
+@property (nonatomic, assign) HWND rwvHostHWND;
+@property (nonatomic, strong) NSTextField* txtField;
+@property (nonatomic, strong) FRZNavButton* navPrev;
+@property (nonatomic, strong) FRZNavButton* navNext;
+@property (nonatomic, strong) NSButton*   chkCase;
+@property (nonatomic, strong) NSButton*   chkHighlight;
+@property (nonatomic, strong) NSTextField* lblCounter;
+@property (nonatomic, strong) NSButton*   btnClose;
+@end
+
+@implementation FRZFindBarView
+- (BOOL)isFlipped { return NO; }
+- (void)controlTextDidChange:(NSNotification *)note
+{
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(!rec) return;
+  rec->findQuery = self.txtField.stringValue ? [self.txtField.stringValue UTF8String] : "";
+  rec->findCurrentIndex = 0; rec->findTotalMatches = 0;
+  LogF("[Find] query change '%s' (mac)", rec->findQuery.c_str());
+  [self updateCounter];
+}
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)command
+{
+  if (command == @selector(insertNewline:)) {
+    NSEvent* ev = [NSApp currentEvent]; BOOL shift = (ev.modifierFlags & NSEventModifierFlagShift)!=0;
+    [self performNavigationForward:!shift];
+    [textView selectAll:nil];
+    return YES; // consume
+  }
+  return NO;
+}
+- (void)performNavigationForward:(BOOL)fwd
+{
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(!rec) return;
+  LogF("[Find] nav %s (mac) query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
+  // Placeholder: would call real inline search update similar to Windows RWV_FindNavigateInline
+  [self updateCounter];
+}
+- (void)updateCounter
+{
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(!rec) return; int cur=rec->findCurrentIndex, tot=rec->findTotalMatches; if(cur<0)cur=0; if(tot<0)tot=0; if(cur>tot)cur=tot;
+  self.lblCounter.stringValue=[NSString stringWithFormat:"%d/%d",cur,tot];
+}
+- (void)buttonClose
+{
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(!rec) return; rec->showFindBar=false; LogRaw("[Find] close (mac)"); [self setHidden:YES]; LayoutTitleBarAndWebView(self.rwvHostHWND, rec->titleBarView && ![rec->titleBarView isHidden]);
+}
+- (void)toggleCase
+{
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(!rec) return; rec->findCaseSensitive = (self.chkCase.state == NSControlStateValueOn); LogF("[Find] case=%d (mac)", (int)rec->findCaseSensitive); [self updateCounter];
+}
+- (void)toggleHighlight
+{
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(!rec) return; rec->findHighlightAll = (self.chkHighlight.state == NSControlStateValueOn); LogF("[Find] highlight=%d (mac)", (int)rec->findHighlightAll); [self updateCounter];
+}
+- (void)navPrevAction { [self performNavigationForward:NO]; }
+- (void)navNextAction { [self performNavigationForward:YES]; }
+@end
+
+static void MacUpdateFindCounter(WebViewInstanceRecord* rec)
+{
+  if (!rec || !rec->findCounterLabel) return; int cur=rec->findCurrentIndex, tot=rec->findTotalMatches; if(cur<0)cur=0; if(tot<0)tot=0; if(cur>tot)cur=tot;
+  rec->findCounterLabel.stringValue = [NSString stringWithFormat:@"%d/%d",cur,tot];
+}
+
+static void EnsureFindBarCreated(HWND hwnd)
+{
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if(!rec) return; NSView* host=(NSView*)hwnd; if(!host) return;
+  if (rec->findBarView && [rec->findBarView superview] != host) { [rec->findBarView removeFromSuperview]; rec->findBarView=nil; }
+  if (rec->findBarView) return;
+  NSRect frame = NSMakeRect(0,0, host.bounds.size.width, g_findBarH);
+  FRZFindBarView* fb = [[FRZFindBarView alloc] initWithFrame:frame];
+  fb.rwvHostHWND = hwnd;
+  [fb setAutoresizingMask:(NSViewWidthSizable | NSViewMaxYMargin)];
+
+  // Create controls (initial frames arbitrary; real layout done in LayoutTitleBarAndWebView)
+  fb.txtField = [[NSTextField alloc] initWithFrame:NSMakeRect(0,0,10,10)]; fb.txtField.delegate=fb; [fb.txtField setAutoresizingMask:NSViewMaxXMargin];
+  fb.navPrev = [[FRZNavButton alloc] initWithDirection:FRZNavDirectionPrev]; fb.navPrev.target=fb; fb.navPrev.action=@selector(navPrevAction);
+  fb.navNext = [[FRZNavButton alloc] initWithDirection:FRZNavDirectionNext]; fb.navNext.target=fb; fb.navNext.action=@selector(navNextAction);
+  fb.chkCase = [[NSButton alloc] initWithFrame:NSMakeRect(0,0,10,10)]; [fb.chkCase setButtonType:NSButtonTypeSwitch]; [fb.chkCase setTitle:@"Case"]; [fb.chkCase setTarget:fb]; [fb.chkCase setAction:@selector(toggleCase)];
+  fb.chkHighlight = [[NSButton alloc] initWithFrame:NSMakeRect(0,0,10,10)]; [fb.chkHighlight setButtonType:NSButtonTypeSwitch]; [fb.chkHighlight setTitle:@"Highlight"]; [fb.chkHighlight setTarget:fb]; [fb.chkHighlight setAction:@selector(toggleHighlight)];
+  fb.lblCounter = [[NSTextField alloc] initWithFrame:NSMakeRect(0,0,10,10)]; [fb.lblCounter setBezeled:NO]; [fb.lblCounter setEditable:NO]; [fb.lblCounter setDrawsBackground:NO]; [fb.lblCounter setAlignment:NSTextAlignmentCenter]; fb.lblCounter.stringValue=@"0/0";
+  fb.btnClose = [[NSButton alloc] initWithFrame:NSMakeRect(0,0,10,10)]; [fb.btnClose setTitle:@"X"]; [fb.btnClose setTarget:fb]; [fb.btnClose setAction:@selector(buttonClose)];
+
+  [fb addSubview:fb.txtField];
+  [fb addSubview:fb.navPrev];
+  [fb addSubview:fb.navNext];
+  [fb addSubview:fb.chkCase];
+  [fb addSubview:fb.chkHighlight];
+  [fb addSubview:fb.lblCounter];
+  [fb addSubview:fb.btnClose];
+
+  rec->findBarView = fb;
+  rec->findEdit = fb.txtField;
+  rec->findBtnPrev = (NSView*)fb.navPrev;
+  rec->findBtnNext = (NSView*)fb.navNext;
+  rec->findChkCase = fb.chkCase;
+  rec->findChkHighlight = fb.chkHighlight;
+  rec->findCounterLabel = fb.lblCounter;
+  rec->findBtnClose = fb.btnClose;
+
+  [host addSubview:fb positioned:NSWindowBelow relativeTo:nil];
+  [fb setHidden:YES];
+  LogRaw("[Find] Created macOS find bar controls (custom buttons)");
+}
 #endif
 
 // показать/скрыть панель + текст
@@ -476,7 +1115,22 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
 #endif
   }
   else if (cmd == 10113) {
-    LogRaw("[FindStub] Find on page invoked (not implemented)");
+    WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd);
+    if (r) {
+  r->showFindBar = !r->showFindBar;
+  LogF("[Find] toggle show=%d", (int)r->showFindBar);
+#ifdef _WIN32
+  bool titleVisible = (r->titleBar && IsWindow(r->titleBar) && IsWindowVisible(r->titleBar));
+#else
+  bool titleVisible = (r->titleBarView && ![r->titleBarView isHidden]);
+#endif
+  LayoutTitleBarAndWebView(hwnd, titleVisible);
+#ifdef _WIN32
+  if (r->showFindBar && r->findEdit) { SetFocus(r->findEdit); SendMessage(r->findEdit, EM_SETSEL, 0, -1); }
+#else
+  if (r->showFindBar && r->findEdit) { [((NSTextField*)r->findEdit) selectText:nil]; [[r->findEdit window] makeFirstResponder:((NSTextField*)r->findEdit)]; }
+#endif
+    } else { LogRaw("[Find] toggle requested but instance not found"); }
   }
   else if (cmd == 10099) SendMessage(hwnd, WM_CLOSE, 0, 0);
 }
@@ -488,6 +1142,35 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
   {
     case WM_INITDIALOG:
     {
+      if (!g_rwvMsgHook) {
+        g_rwvMsgHook = SetWindowsHookExW(WH_GETMESSAGE, [](int code, WPARAM wP, LPARAM lP)->LRESULT {
+          if (code >= 0) {
+            MSG* m = (MSG*)lP;
+            if (m && m->message==WM_KEYDOWN && m->wParam==VK_RETURN) {
+              HWND foc = GetFocus();
+              if (foc && foc == g_lastFindEdit) {
+                // Determine direction (Shift => prev)
+                bool shift = (GetKeyState(VK_SHIFT)&0x8000)!=0;
+                HWND findBar = GetParent(foc);
+                HWND host = findBar ? GetParent(findBar) : nullptr;
+                WebViewInstanceRecord* rec = GetInstanceByHwnd(host);
+                if (rec) {
+                  bool fwd = !shift;
+                  g_findEnterActive = true; g_findLastEnterTick = GetTickCount();
+                  RWV_FindNavigateInline(rec, fwd);
+                  LogF("[Find] nav %s query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
+                  // maintain focus & caret
+                  SetFocus(foc); SendMessage(foc, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+                }
+                LogRaw("[FindHook] swallow VK_RETURN pre-translate");
+                m->message = WM_NULL; m->wParam = 0; return 1; // eat
+              }
+            }
+          }
+          return CallNextHookEx(g_rwvMsgHook, code, wP, lP);
+        }, nullptr, GetCurrentThreadId());
+        LogRaw("[FindHook] installed WH_GETMESSAGE");
+      }
       char* initial = (char*)lp;
       std::string url = (initial && *initial) ? std::string(initial) : std::string(kDefaultURL);
       if (initial) free(initial);
@@ -555,6 +1238,30 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND:
       switch (LOWORD(wp))
       {
+        case IDC_FIND_CLOSE:
+        {
+          WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r && r->showFindBar){ r->showFindBar=false; LogRaw("[Find] close"); LayoutTitleBarAndWebView(hwnd, r->titleBar && IsWindow(r->titleBar) && IsWindowVisible(r->titleBar)); }
+          return 0;
+        }
+        case IDC_FIND_PREV:
+        case IDC_FIND_NEXT:
+        {
+          WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r){ bool fwd = (LOWORD(wp)==IDC_FIND_NEXT); LogF("[Find] nav %s query='%s'", fwd?"next":"prev", r->findQuery.c_str()); /* real search TBD */ }
+          return 0;
+        }
+        case IDC_FIND_CASE:
+        case IDC_FIND_HILITE:
+        {
+          WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r){ if (LOWORD(wp)==IDC_FIND_CASE){ r->findCaseSensitive = (SendMessage((HWND)lp, BM_GETCHECK,0,0)==BST_CHECKED); LogF("[Find] case=%d", (int)r->findCaseSensitive);} else { r->findHighlightAll = (SendMessage((HWND)lp, BM_GETCHECK,0,0)==BST_CHECKED); LogF("[Find] highlight=%d", (int)r->findHighlightAll);} }
+          return 0;
+        }
+        case IDC_FIND_EDIT:
+        {
+          if (HIWORD(wp)==EN_CHANGE) {
+            WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r && r->findEdit){ char buf[512]; GetWindowTextA(r->findEdit, buf, sizeof(buf)); r->findQuery=buf; r->findCurrentIndex=0; r->findTotalMatches=0; LogF("[Find] query change '%s'", r->findQuery.c_str()); UpdateFindCounter(r); }
+          }
+          return 0;
+        }
         case IDOK:
         case IDCANCEL:
           SendMessage(hwnd, WM_CLOSE, 0, 0);
@@ -570,6 +1277,8 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (kv.second && kv.second->hwnd == hwnd) {
           kv.second->hwnd = nullptr;
 #ifdef _WIN32
+          if (kv.second->bmpPrev){ DeleteObject(kv.second->bmpPrev); kv.second->bmpPrev=nullptr; }
+          if (kv.second->bmpNext){ DeleteObject(kv.second->bmpNext); kv.second->bmpNext=nullptr; }
           if (kv.second->controller) { kv.second->controller->Release(); kv.second->controller = nullptr; }
           if (kv.second->webview)    { kv.second->webview->Release();    kv.second->webview = nullptr; }
 #else
@@ -586,6 +1295,7 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_DESTROY:
       LogRaw("[WM_DESTROY]");
+      if (g_rwvMsgHook){ UnhookWindowsHookEx(g_rwvMsgHook); g_rwvMsgHook=nullptr; LogRaw("[FindHook] removed WH_GETMESSAGE"); }
     case WM_TIMER:
       // (таймеры для повторного обновления заголовка удалены как лишняя нагрузка)
       break;
@@ -593,6 +1303,8 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       for (auto &kv : g_instances) {
         if (kv.second && kv.second->hwnd == hwnd) {
           kv.second->hwnd = nullptr; 
+          if (kv.second->bmpPrev){ DeleteObject(kv.second->bmpPrev); kv.second->bmpPrev=nullptr; }
+          if (kv.second->bmpNext){ DeleteObject(kv.second->bmpNext); kv.second->bmpNext=nullptr; }
           if (kv.second->controller) { kv.second->controller->Release(); kv.second->controller = nullptr; }
           if (kv.second->webview)    { kv.second->webview->Release();    kv.second->webview = nullptr; }
           LogF("[InstanceCleanup] id='%s' cleared on WM_DESTROY", kv.first.c_str());
