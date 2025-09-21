@@ -22,6 +22,7 @@ set(SOURCES
   webview_win.cpp
   webview_darwin.mm
   globals.mm
+    resources.rc
 )
 
 # Создаем библиотеку
@@ -89,6 +90,7 @@ elseif(WIN32)
         version 
         shlwapi
         user32
+        msimg32
         oleaut32
         advapi32)
     
@@ -126,6 +128,7 @@ elseif(WIN32)
         version 
         shlwapi
         user32
+        msimg32
         oleaut32
         advapi32)
     if(WEBVIEW2_LIB)

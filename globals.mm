@@ -34,9 +34,11 @@ int  g_want_dock_on_create  = -1;
 #ifdef _WIN32
 int      g_titleBarH       = 24;  // фикс, без привязки к DPI
 int      g_titlePadX       = 8;
+int      g_findBarH        = 30;  // find bar height (Windows)
 #else
 CGFloat      g_titleBarH    = 24.0;
 CGFloat      g_titlePadX    = 8.0;
+CGFloat      g_findBarH     = 30.0; // find bar height (macOS)
 #endif
 
 std::unordered_map<std::string,int>      g_registered_commands;

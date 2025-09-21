@@ -1,0 +1,4 @@
+#include "resource.h"
+
+IDR_PNG_SEARCH_PREV RCDATA "res/search_prev.png"
+IDR_PNG_SEARCH_NEXT RCDATA "res/search_next.png"
