@@ -90,16 +90,19 @@ static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
 - (void)drawRect:(NSRect)dirtyRect
 {
   [super drawRect:dirtyRect];
-  int bg = self.rwvBgColor; int tx = self.rwvTxColor;
-  NSColor* bgCol = (bg>=0)? [NSColor colorWithCalibratedRed:((bg>>16)&0xFF)/255.0 green:((bg>>8)&0xFF)/255.0 blue:(bg&0xFF)/255.0 alpha:1.0] : [NSColor controlBackgroundColor];
+  int viewBg = self.rwvBgColor; int viewTx = self.rwvTxColor;
+  NSColor* bgCol = (viewBg>=0)? [NSColor colorWithCalibratedRed:((viewBg>>16)&0xFF)/255.0 green:((viewBg>>8)&0xFF)/255.0 blue:(viewBg&0xFF)/255.0 alpha:1.0] : [NSColor controlBackgroundColor];
   [bgCol setFill]; NSRectFill(dirtyRect);
   WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(!rec) return;
   NSString* text = rec->panelTitleString.empty()?@"" : [NSString stringWithUTF8String:rec->panelTitleString.c_str()]; if(!text) return;
-  NSColor* txCol = (tx>=0)? [NSColor colorWithCalibratedRed:((tx>>16)&0xFF)/255.0 green:((tx>>8)&0xFF)/255.0 blue:(tx&0xFF)/255.0 alpha:1.0] : [NSColor textColor];
+  NSColor* txCol = (viewTx>=0)? [NSColor colorWithCalibratedRed:((viewTx>>16)&0xFF)/255.0 green:((viewTx>>8)&0xFF)/255.0 blue:(viewTx&0xFF)/255.0 alpha:1.0] : [NSColor textColor];
   NSMutableParagraphStyle* ps = [[NSMutableParagraphStyle alloc] init]; [ps setLineBreakMode:NSLineBreakByTruncatingTail]; [ps setAlignment:NSTextAlignmentLeft];
   NSDictionary* attrs = @{ NSFontAttributeName: [NSFont systemFontOfSize:[NSFont systemFontSize]], NSForegroundColorAttributeName: txCol, NSParagraphStyleAttributeName: ps };
   CGFloat padX = g_titlePadX; NSRect tr = NSMakeRect(padX, 0, dirtyRect.size.width - padX*2, dirtyRect.size.height);
   [text drawInRect:tr withAttributes:attrs];
+  if (rec && (rec->titleBkColor!=viewBg || rec->titleTextColor!=viewTx)) {
+    LogF("[MacDrawRectDiag] inst=%s viewColors(bg=0x%06X tx=0x%06X) recColors(bg=0x%06X tx=0x%06X)", rec->id.c_str(), viewBg, viewTx, rec->titleBkColor, rec->titleTextColor);
+  }
 }
 @end
 
@@ -149,9 +152,6 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
   if (!rec->titleBarView) EnsureTitleBarCreated(hwnd);
 
   CGFloat hostW = host.bounds.size.width;
-    if (rec && (rec->titleBkColor!=bg || rec->titleTextColor!=tx)) {
-      LogF("[MacDrawRectDiag] inst=%s viewColors(bg=0x%06X tx=0x%06X) recColors(bg=0x%06X tx=0x%06X)", rec->id.c_str(), bg, tx, rec->titleBkColor, rec->titleTextColor);
-    }
   CGFloat hostH = host.bounds.size.height;
   CGFloat panelH = (titleVisible && rec->titleBarView)? g_titleBarH : 0;
 
@@ -227,15 +227,12 @@ void UpdateTitlesExtractAndApply(HWND hwnd)
       NSString* t = rec->webView.title; if (t) pageTitle = [t UTF8String];
     }
   #endif
-
   SaveDockState(hwnd);
   const bool inDock = (g_last_dock_idx >= 0);
 
   const bool defaultMode = (effectiveTitle.empty() || effectiveTitle == kTitleBase);
-
   auto panelVisible = [&](bool inDockLocal, bool defaultTitle){
-  // ShowPanel per-instance: Unset, Hide, Docker, Always
-  switch (effectivePanelMode)
+    switch (effectivePanelMode)
     {
       case ShowPanelMode::Hide:   return false;
       case ShowPanelMode::Docker: return inDockLocal; // только в докере

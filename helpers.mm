@@ -78,8 +78,16 @@ void GetPanelThemeColorsMac(int* outBg, int* outTx)
   }
 
   if (outBg) *outBg = bk; if (outTx) *outTx = tx;
+  // Compute starting luminance diff only if both raw colors exist
+  int start_l_diff = -1;
+  if (raw_theme_bg >= 0 && raw_theme_tx >= 0) {
+    int rbg0=(raw_theme_bg>>16)&0xFF, gbg0=(raw_theme_bg>>8)&0xFF, bbg0=raw_theme_bg&0xFF;
+    int rtx0=(raw_theme_tx>>16)&0xFF, gtx0=(raw_theme_tx>>8)&0xFF, btx0=raw_theme_tx&0xFF;
+    int lbg0=(30*rbg0+59*gbg0+11*bbg0)/100; int ltx0=(30*rtx0+59*gtx0+11*btx0)/100;
+    start_l_diff = std::abs(lbg0-ltx0);
+  }
   LogF("[MacThemeColorsWinLike] raw_bg=%d raw_tx=%d fbBk=%d startDiff=%d finalDiff=%d scanned=%d bk=0x%06X tx=0x%06X chosenPair=(0x%06X,0x%06X) lumPair=(%d,%d)",
-       raw_theme_bg, raw_theme_tx, (int)usedFallbackBk, std::abs(((30*(( (raw_theme_bg>=0? (raw_theme_bg>>16)&0xFF:rbk)))+59*(( (raw_theme_bg>=0? (raw_theme_bg>>8)&0xFF:gbk)))+11*(( (raw_theme_bg>=0? raw_theme_bg&0xFF:bbk)))/100) - ((30*(( (raw_theme_tx>=0? (raw_theme_tx>>16)&0xFF:rtx)))+59*(( (raw_theme_tx>=0? (raw_theme_tx>>8)&0xFF:gtx)))+11*(( (raw_theme_tx>=0? raw_theme_tx&0xFF:btx)))/100)), diff, (int)scanned, bk, tx, chosen_c1, chosen_c2, chosen_l1, chosen_l2);
+       raw_theme_bg, raw_theme_tx, (int)usedFallbackBk, start_l_diff, diff, (int)scanned, bk, tx, chosen_c1, chosen_c2, chosen_l1, chosen_l2);
 }
 #endif
 
