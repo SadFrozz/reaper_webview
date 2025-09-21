@@ -1096,6 +1096,7 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
   {
     case WM_INITDIALOG:
     {
+#ifdef _WIN32
       if (!g_rwvMsgHook) {
         g_rwvMsgHook = SetWindowsHookExW(WH_GETMESSAGE, [](int code, WPARAM wP, LPARAM lP)->LRESULT {
           if (code >= 0) {
@@ -1103,7 +1104,6 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (m && m->message==WM_KEYDOWN && m->wParam==VK_RETURN) {
               HWND foc = GetFocus();
               if (foc && foc == g_lastFindEdit) {
-                // Determine direction (Shift => prev)
                 bool shift = (GetKeyState(VK_SHIFT)&0x8000)!=0;
                 HWND findBar = GetParent(foc);
                 HWND host = findBar ? GetParent(findBar) : nullptr;
@@ -1113,11 +1113,10 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                   g_findEnterActive = true; g_findLastEnterTick = GetTickCount();
                   RWV_FindNavigateInline(rec, fwd);
                   LogF("[Find] nav %s query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
-                  // maintain focus & caret
                   SetFocus(foc); SendMessage(foc, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
                 }
                 LogRaw("[FindHook] swallow VK_RETURN pre-translate");
-                m->message = WM_NULL; m->wParam = 0; return 1; // eat
+                m->message = WM_NULL; m->wParam = 0; return 1;
               }
             }
           }
@@ -1125,6 +1124,7 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }, nullptr, GetCurrentThreadId());
         LogRaw("[FindHook] installed WH_GETMESSAGE");
       }
+#endif
       char* initial = (char*)lp;
       std::string url = (initial && *initial) ? std::string(initial) : std::string(kDefaultURL);
       if (initial) free(initial);
@@ -1194,7 +1194,14 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       {
         case IDC_FIND_CLOSE:
         {
-          WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r && r->showFindBar){ r->showFindBar=false; LogRaw("[Find] close"); LayoutTitleBarAndWebView(hwnd, r->titleBar && IsWindow(r->titleBar) && IsWindowVisible(r->titleBar)); }
+          WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r && r->showFindBar){ r->showFindBar=false; LogRaw("[Find] close");
+#ifdef _WIN32
+            bool titleVisible = (r->titleBar && IsWindow(r->titleBar) && IsWindowVisible(r->titleBar));
+#else
+            bool titleVisible = (r->titleBarView && ![r->titleBarView isHidden]);
+#endif
+            LayoutTitleBarAndWebView(hwnd, titleVisible);
+          }
           return 0;
         }
         case IDC_FIND_PREV:
@@ -1211,9 +1218,13 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         case IDC_FIND_EDIT:
         {
+#ifdef _WIN32
           if (HIWORD(wp)==EN_CHANGE) {
             WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r && r->findEdit){ char buf[512]; GetWindowTextA(r->findEdit, buf, sizeof(buf)); r->findQuery=buf; r->findCurrentIndex=0; r->findTotalMatches=0; LogF("[Find] query change '%s'", r->findQuery.c_str()); UpdateFindCounter(r); }
           }
+#else
+          // mac: handled via delegate (controlTextDidChange)
+#endif
           return 0;
         }
         case IDOK:
@@ -1249,7 +1260,9 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_DESTROY:
       LogRaw("[WM_DESTROY]");
-      if (g_rwvMsgHook){ UnhookWindowsHookEx(g_rwvMsgHook); g_rwvMsgHook=nullptr; LogRaw("[FindHook] removed WH_GETMESSAGE"); }
+  #ifdef _WIN32
+  if (g_rwvMsgHook){ UnhookWindowsHookEx(g_rwvMsgHook); g_rwvMsgHook=nullptr; LogRaw("[FindHook] removed WH_GETMESSAGE"); }
+  #endif
     case WM_TIMER:
       // (таймеры для повторного обновления заголовка удалены как лишняя нагрузка)
       break;
