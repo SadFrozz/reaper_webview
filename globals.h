@@ -126,8 +126,12 @@ struct WebViewInstanceRecord {
   NSButton* findBtnNext = nil;       // next
   NSButton* findChkCase = nil;       // case checkbox
   NSButton* findChkHighlight = nil;  // highlight all checkbox
-  NSTextField* findCounterLabel = nil; // n/N label
+  // Unified naming with Windows: use findCounterStatic (NSTextField on mac)
+  NSTextField* findCounterStatic = nil; // n/N label
   NSButton* findBtnClose = nil;      // close button
+  // Navigation hot/down state (parity with Windows)
+  bool prevHot=false, prevDown=false;
+  bool nextHot=false, nextDown=false;
 #endif
 };
 
