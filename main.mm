@@ -90,6 +90,9 @@
   #ifndef BM_CLICK
     #define BM_CLICK 0x00F5
   #endif
+  #ifndef WM_NEXTDLGCTL
+    #define WM_NEXTDLGCTL 0x0028
+  #endif
   #ifndef VK_SHIFT
     #define VK_SHIFT 0x10
   #endif
@@ -111,8 +114,12 @@
   #ifndef GetKeyState
     #define GetKeyState(k) GetAsyncKeyState(k)
   #endif
-    // NOTE: SWELL implements CreateWindowEx directly. Do NOT remap it to CreateWindow (which
-    // may be undefined in SWELL builds) — prior remap caused mac build failures.
+    // Provide CreateWindowEx fallback via SWELL_MakeControl (extended styles ignored on mac/SWELL).
+    // We map HMENU ids to integer control IDs. This keeps the unified creation code intact.
+    #ifndef CreateWindowEx
+      #define CreateWindowEx(dwExStyle,cls,name,style,x,y,w,h,parent,menu,inst,param) \
+        SWELL_MakeControl((name)?(name):"", (int)(INT_PTR)(menu), (cls), (style), (x), (y), (w), (h), 0)
+    #endif
 #endif
 
 static HBITMAP LoadPngStripFromResource(int resId, int* outW, int* outH){
