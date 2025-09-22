@@ -48,6 +48,7 @@ if(APPLE)
         COMMENT "Embedding PNG resources into C++ (macOS)"
         VERBATIM
     )
+    add_custom_target(embed_assets ALL DEPENDS ${EMBED_H} ${EMBED_CPP})
     # Собираем список PNG чтобы триггерить реген при изменении
     file(GLOB EMBED_PNGS RELATIVE ${CMAKE_SOURCE_DIR} res/*.png)
     foreach(png ${EMBED_PNGS})
@@ -58,14 +59,13 @@ if(APPLE)
     endforeach()
 
     add_library(embedded_res OBJECT ${EMBED_CPP} ${EMBED_H})
-    add_dependencies(embedded_res reaper_webview reaper_webview_debug)
+    add_dependencies(embedded_res embed_assets)
     target_include_directories(embedded_res PUBLIC ${EMBED_OUT_DIR})
     target_sources(reaper_webview PRIVATE $<TARGET_OBJECTS:embedded_res>)
     target_sources(reaper_webview_debug PRIVATE $<TARGET_OBJECTS:embedded_res>)
     target_include_directories(reaper_webview PRIVATE ${EMBED_OUT_DIR})
     target_include_directories(reaper_webview_debug PRIVATE ${EMBED_OUT_DIR})
-    add_dependencies(reaper_webview embedded_res)
-    add_dependencies(reaper_webview_debug embedded_res)
+    # No reverse dependency from embedded_res to the module libs to avoid cycles
     
     set(SWELL_STUB ${CMAKE_SOURCE_DIR}/WDL/swell/swell-modstub.mm)
     target_sources(reaper_webview PRIVATE ${SWELL_STUB})
