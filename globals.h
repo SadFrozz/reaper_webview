@@ -82,16 +82,15 @@ struct WebViewInstanceRecord {
   COLORREF titleBkColor   = GetSysColor(COLOR_BTNFACE);
 #else
   WKWebView* webView = nil;
-  // Unified SWELL child title bar HWND (parity with Windows); legacy NSView kept for reference
-  HWND         titleBar      = nullptr; // created via CreateWindowExW under SWELL
-  NSView*      titleBarView  = nil;     // (unused in unified path)
+  // Per-instance title bar (macOS)
+  NSView*      titleBarView = nil;
   // Manual text drawing (Windows parity) - no NSTextField now
+  // NSTextField removed: text stored in panelTitleString and drawn in drawRect
   // Cached colors (24-bit RGB) for mac panel to avoid recomputing each layout
   int          titleTextColor = -1;
   int          titleBkColor   = -1;
+  std::string  panelTitleString; // current displayed panel text (domain - pageTitle)
 #endif
-  // Unified panel title (domain - pageTitle) used for mac custom drawing and optional Windows caching
-  std::string  panelTitleString;
   // Per-instance cached captions
   std::string lastTabTitle;
   std::string lastWndText;
@@ -102,7 +101,7 @@ struct WebViewInstanceRecord {
   bool findHighlightAll = false;     // highlight all occurrences flag
   int  findCurrentIndex = 0;         // 1-based current match index (0 if none)
   int  findTotalMatches = 0;         // total matches (0 if unknown)
-  // Unified (HWND-based via SWELL) find bar elements for both platforms
+#ifdef _WIN32
   HWND findBarWnd = nullptr;         // container window for find bar
   HWND findEdit = nullptr;           // edit control handle
   HWND findBtnPrev = nullptr;        // previous match button
@@ -113,13 +112,23 @@ struct WebViewInstanceRecord {
   HWND findLblHighlight = nullptr;   // static label for highlight all checkbox (text)
   HWND findCounterStatic = nullptr;  // static label n/N
   HWND findBtnClose = nullptr;       // close button
-  // Navigation button bitmaps (3-state horizontal strips: normal|hot|down). On mac kept null -> vector fallback paints.
+  // Navigation button bitmaps (3-state horizontal strips: normal|hot|down)
   HBITMAP bmpPrev = nullptr;
   HBITMAP bmpNext = nullptr;
   int bmpPrevW = 0, bmpPrevH = 0; // full strip dimensions
   int bmpNextW = 0, bmpNextH = 0;
   bool prevHot=false, prevDown=false;
   bool nextHot=false, nextDown=false;
+#else
+  NSView* findBarView = nil;         // container view
+  NSTextField* findEdit = nil;       // text input
+  NSButton* findBtnPrev = nil;       // prev
+  NSButton* findBtnNext = nil;       // next
+  NSButton* findChkCase = nil;       // case checkbox
+  NSButton* findChkHighlight = nil;  // highlight all checkbox
+  NSTextField* findCounterLabel = nil; // n/N label
+  NSButton* findBtnClose = nil;      // close button
+#endif
 };
 
 extern std::unordered_map<std::string, std::unique_ptr<WebViewInstanceRecord>> g_instances; // id -> record
