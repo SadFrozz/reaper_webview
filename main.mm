@@ -649,15 +649,14 @@ static NSTextField* g_lastFindEdit_mac = nil; // last focused find edit
         // immediate reselect
         [self selectText:nil];
         // deferred refocus to emulate WM_RWV_FIND_REFOCUS (approx 30ms)
-        __weak FRZFindTextField* weakSelf = self;
+        FRZFindTextField* selfRef = self; // manual refcount build: raw pointer capture (lifetime tied to view hierarchy)
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-          FRZFindTextField* strongSelf = weakSelf; if(!strongSelf) return;
-          // only refocus if still active suppression window (<250ms) and field still exists
+          FRZFindTextField* strongSelf = selfRef; if(!strongSelf) return;
           uint32_t now = (uint32_t)([NSDate timeIntervalSinceReferenceDate]*1000.0);
           if (g_findEnterActive_mac && (now - g_findLastEnterTick_mac) < 250) {
             if ([[strongSelf window] firstResponder] != strongSelf) [[strongSelf window] makeFirstResponder:strongSelf];
             [strongSelf selectText:nil];
-            g_findEnterActive_mac = false; // end suppression
+            g_findEnterActive_mac = false;
             LogRaw("[FindFocus] deferred refocus");
           }
         });
@@ -705,8 +704,8 @@ static NSTextField* g_lastFindEdit_mac = nil; // last focused find edit
   rec->showFindBar = false; LogRaw("[Find] close");
     [self setHidden:YES];
     LayoutTitleBarAndWebView(self.rwvHostHWND, rec->titleBarView && ![rec->titleBarView isHidden]);
-  } else if (sender == self.btnPrev || sender == self.btnNext) {
-  bool fwd = (sender == self.btnNext); LogF("[Find] nav %s query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
+  } else if (sender == (id)self.btnPrev || sender == (id)self.btnNext) {
+    bool fwd = (sender == (id)self.btnNext); LogF("[Find] nav %s query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
   } else if (sender == self.chkCase) {
   rec->findCaseSensitive = (self.chkCase.state == NSControlStateValueOn); LogF("[Find] case=%d", (int)rec->findCaseSensitive);
   } else if (sender == self.chkHighlight) {
