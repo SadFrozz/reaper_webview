@@ -70,6 +70,30 @@
   // AlphaBlend: provided by SWELL emulation layer.
 #endif // _WIN32 (mac shim end)
 
+#ifndef _WIN32
+  // Extra message / control / key shims missing in CI log
+  #ifndef WM_MOUSELEAVE
+    #define WM_MOUSELEAVE 0x02A3
+  #endif
+  #ifndef WM_GETDLGCODE
+    #define WM_GETDLGCODE 0x0087
+  #endif
+  #ifndef EM_SETSEL
+    #define EM_SETSEL 0x00B1
+  #endif
+  #ifndef BN_CLICKED
+    #define BN_CLICKED 0
+  #endif
+  #ifndef VK_SHIFT
+    #define VK_SHIFT 0x10
+  #endif
+  // Map wide-char variants to ANSI versions in unified code for SWELL
+  #define SendMessageW SendMessage
+  #define DefWindowProcW DefWindowProc
+  #define CallWindowProcW CallWindowProc
+  #define SetWindowTextW SetWindowText
+#endif
+
 static HBITMAP LoadPngStripFromResource(int resId, int* outW, int* outH){
 #ifdef _WIN32
   // Windows: decode from RT_RCDATA resource via WIC
@@ -182,7 +206,9 @@ static DWORD g_findLastEnterTick = 0; // timestamp of last Enter press in find e
 static bool  g_findEnterActive = false; // true while we suppress focus changes
 // Custom message for deferred refocus after handling Enter inside find edit
 static const UINT WM_RWV_FIND_REFOCUS = WM_APP + 0x452;
-static HHOOK g_rwvMsgHook = nullptr; // message hook to pre-swallow VK_RETURN
+#ifdef _WIN32
+static HHOOK g_rwvMsgHook = nullptr; // message hook to pre-swallow VK_RETURN (Win only)
+#endif
 static HWND  g_lastFindEdit = nullptr; // last known find edit hwnd
 // Simple inline navigation (placeholder for real search logic) to avoid button focus side-effects
 static void RWV_FindNavigateInline(WebViewInstanceRecord* rec, bool fwd)
@@ -232,7 +258,11 @@ static LRESULT CALLBACK RWVFindEditProc(HWND h, UINT m, WPARAM w, LPARAM l)
       }
       break;
   }
+#ifdef _WIN32
   return CallWindowProcW(s_origFindEditProc,h,m,w,l);
+#else
+  return CallWindowProc(s_origFindEditProc? s_origFindEditProc : DefWindowProc, h,m,w,l);
+#endif
 }
 
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
@@ -256,16 +286,26 @@ static LRESULT CALLBACK RWVTitleBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
     {
       PAINTSTRUCT ps; HDC dc=BeginPaint(h,&ps); RECT r; GetClientRect(h,&r);
       WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
+#ifdef _WIN32
       COLORREF bk, tx; GetPanelThemeColors(h, dc, &bk, &tx);
       if (rec){ if (rec->titleBkColor!=bk){ rec->titleBkColor=bk; if(rec->titleBrush){ DeleteObject(rec->titleBrush); rec->titleBrush=nullptr; }} rec->titleTextColor=tx; if(!rec->titleBrush) rec->titleBrush=CreateSolidBrush(bk);} 
-  HBRUSH fill = (rec && rec->titleBrush)?rec->titleBrush:(HBRUSH)(COLOR_BTNFACE+1);
-  FillRect(dc,&r,fill); SetBkMode(dc,TRANSPARENT); SetTextColor(dc,tx);
-  HFONT oldF = nullptr; if (rec && rec->titleFont) oldF = (HFONT)SelectObject(dc, rec->titleFont);
+      HBRUSH fill = (rec && rec->titleBrush)?rec->titleBrush:(HBRUSH)(COLOR_BTNFACE+1);
+      FillRect(dc,&r,fill); SetBkMode(dc,TRANSPARENT); SetTextColor(dc,tx);
+      HFONT oldF = nullptr; if (rec && rec->titleFont) oldF = (HFONT)SelectObject(dc, rec->titleFont);
+#else
+      // mac: reuse cached colors or fetch once
+      COLORREF bk = GetSysColor(COLOR_BTNFACE);
+      COLORREF tx = GetSysColor(COLOR_WINDOWTEXT);
+      if (rec){ if (rec->titleBkColor<0 || rec->titleTextColor<0){ int bgi=-1,txi=-1; GetPanelThemeColorsMac(&bgi,&txi); if(bgi>=0) rec->titleBkColor=bgi; if(txi>=0) rec->titleTextColor=txi; }
+        if (rec->titleBkColor>=0) bk=(COLORREF)rec->titleBkColor; if(rec->titleTextColor>=0) tx=(COLORREF)rec->titleTextColor; }
+      HBRUSH fill = CreateSolidBrush(bk);
+      FillRect(dc,&r,fill); DeleteObject(fill); SetBkMode(dc,TRANSPARENT); SetTextColor(dc,tx);
+      HFONT oldF = nullptr; // no custom font on mac path
+#endif
       WCHAR buf[512]; GetWindowTextW(h,buf,512); RECT tr=r; tr.left+=g_titlePadX; DrawTextW(dc,buf,-1,&tr,DT_SINGLELINE|DT_VCENTER|DT_LEFT|DT_NOPREFIX|DT_END_ELLIPSIS);
-  if (oldF) SelectObject(dc, oldF);
+      if (oldF) SelectObject(dc, oldF);
       EndPaint(h,&ps);
-      // invalidate find bar to sync colors
-      if (rec && rec->findBarWnd) {
+      if (rec && rec->findBarWnd) { // sync children colors
         InvalidateRect(rec->findBarWnd,nullptr,TRUE);
         HWND kids[9] = { rec->findEdit, rec->findBtnPrev, rec->findBtnNext, rec->findChkCase, rec->findLblCase, rec->findChkHighlight, rec->findLblHighlight, rec->findCounterStatic, rec->findBtnClose };
         for (int i=0;i<9;++i) if (kids[i]) InvalidateRect(kids[i],nullptr,TRUE);
@@ -280,8 +320,10 @@ static void EnsureTitleBarCreated(HWND hwnd)
 {
   WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if(!rec) return; if (rec->titleBar && !IsWindow(rec->titleBar)) rec->titleBar=nullptr; if(rec->titleBar) return;
   static bool s_reg=false; if(!s_reg){ WNDCLASSW wc{}; wc.lpfnWndProc=RWVTitleBarProc; wc.hInstance=(HINSTANCE)g_hInst; wc.lpszClassName=L"RWVTitleBar"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); wc.hbrBackground=NULL; RegisterClassW(&wc); s_reg=true; }
-  LOGFONTW lf{}; SystemParametersInfoW(SPI_GETICONTITLELOGFONT,sizeof(lf),&lf,0); // используем системный логфонт без модификаций
+#ifdef _WIN32
+  LOGFONTW lf{}; SystemParametersInfoW(SPI_GETICONTITLELOGFONT,sizeof(lf),&lf,0); // system icon title font
   rec->titleFont=CreateFontIndirectW(&lf);
+#endif
   rec->titleBar = CreateWindowExW(0,L"RWVTitleBar",L"",WS_CHILD,0,0,10,g_titleBarH,hwnd,(HMENU)(INT_PTR)IDC_TITLEBAR,(HINSTANCE)g_hInst,nullptr);
   if(rec->titleBar && rec->titleFont) SendMessageW(rec->titleBar,WM_SETFONT,(WPARAM)rec->titleFont,TRUE);
 }
@@ -383,18 +425,14 @@ static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
       PAINTSTRUCT ps; HDC dc=BeginPaint(h,&ps); RECT r; GetClientRect(h,&r);
       WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
       COLORREF bk = GetSysColor(COLOR_BTNFACE), tx = GetSysColor(COLOR_WINDOWTEXT);
-      if (rec && rec->titleBrush){ // reuse title bar colors if available
-        bk = rec->titleBkColor; tx = rec->titleTextColor;
-      } else {
-        // Pull fresh panel colors (same heuristic) to keep unified theme
-        GetPanelThemeColors(h, dc, &bk, &tx);
-        if (rec) {
-          rec->titleBkColor = bk; rec->titleTextColor = tx;
-          if (!rec->titleBrush) rec->titleBrush = CreateSolidBrush(bk);
-        }
-      }
-      HBRUSH br = CreateSolidBrush(bk);
-      FillRect(dc,&r,br); DeleteObject(br);
+#ifdef _WIN32
+      if (rec && rec->titleBrush){ bk = rec->titleBkColor; tx = rec->titleTextColor; }
+      else { GetPanelThemeColors(h, dc, &bk, &tx); if (rec){ rec->titleBkColor=bk; rec->titleTextColor=tx; if(!rec->titleBrush) rec->titleBrush=CreateSolidBrush(bk);} }
+      HBRUSH br = CreateSolidBrush(bk); FillRect(dc,&r,br); DeleteObject(br);
+#else
+      if (rec){ if(rec->titleBkColor<0 || rec->titleTextColor<0){ int bgi=-1,txi=-1; GetPanelThemeColorsMac(&bgi,&txi); if(bgi>=0) rec->titleBkColor=bgi; if(txi>=0) rec->titleTextColor=txi; } if(rec->titleBkColor>=0) bk=(COLORREF)rec->titleBkColor; if(rec->titleTextColor>=0) tx=(COLORREF)rec->titleTextColor; }
+      HBRUSH br = CreateSolidBrush(bk); FillRect(dc,&r,br); DeleteObject(br);
+#endif
       // force children redraw for color sync
       if (rec){ HWND kids[7]={rec->findChkCase,rec->findLblCase,rec->findChkHighlight,rec->findLblHighlight,rec->findBtnPrev,rec->findBtnNext,rec->findCounterStatic}; for (HWND c: kids) if (c) InvalidateRect(c,nullptr,TRUE);}      
       EndPaint(h,&ps); return 0;
@@ -508,19 +546,16 @@ static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
     {
       HDC dc=(HDC)w; WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
       COLORREF bkCol = GetSysColor(COLOR_BTNFACE), txCol = GetSysColor(COLOR_WINDOWTEXT);
-      if (rec) {
-        if (!rec->titleBrush) {
-          COLORREF bk, tx; GetPanelThemeColors(GetParent(h), dc, &bk, &tx);
-          rec->titleBkColor=bk; rec->titleTextColor=tx; rec->titleBrush=CreateSolidBrush(bk);
-        }
-        bkCol = rec->titleBkColor; txCol = rec->titleTextColor;
-      }
+#ifdef _WIN32
+      if (rec){ if(!rec->titleBrush){ COLORREF bk,tx; GetPanelThemeColors(GetParent(h), dc, &bk,&tx); rec->titleBkColor=bk; rec->titleTextColor=tx; rec->titleBrush=CreateSolidBrush(bk);} bkCol=rec->titleBkColor; txCol=rec->titleTextColor; }
       SetBkMode(dc, TRANSPARENT); SetTextColor(dc, txCol);
-      static HBRUSH s_tmp=nullptr; if (!rec || !rec->titleBrush) {
-        if (s_tmp) DeleteObject(s_tmp); s_tmp = CreateSolidBrush(bkCol);
-        return (LRESULT)s_tmp;
-      }
+      static HBRUSH s_tmp=nullptr; if(!rec || !rec->titleBrush){ if(s_tmp) DeleteObject(s_tmp); s_tmp=CreateSolidBrush(bkCol); return (LRESULT)s_tmp; }
       return (LRESULT)rec->titleBrush;
+#else
+      if (rec){ if(rec->titleBkColor<0 || rec->titleTextColor<0){ int bgi=-1,txi=-1; GetPanelThemeColorsMac(&bgi,&txi); if(bgi>=0) rec->titleBkColor=bgi; if(txi>=0) rec->titleTextColor=txi; } if(rec->titleBkColor>=0) bkCol=(COLORREF)rec->titleBkColor; if(rec->titleTextColor>=0) txCol=(COLORREF)rec->titleTextColor; }
+      SetBkMode(dc, TRANSPARENT); SetTextColor(dc, txCol);
+      static HBRUSH s_tmp=nullptr; if(s_tmp) DeleteObject(s_tmp); s_tmp=CreateSolidBrush(bkCol); return (LRESULT)s_tmp;
+#endif
     }
     case WM_RWV_FIND_REFOCUS:
     {
