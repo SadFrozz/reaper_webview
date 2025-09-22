@@ -90,9 +90,6 @@
   #ifndef BM_CLICK
     #define BM_CLICK 0x00F5
   #endif
-  #ifndef WM_NEXTDLGCTL
-    #define WM_NEXTDLGCTL 0x0028
-  #endif
   #ifndef VK_SHIFT
     #define VK_SHIFT 0x10
   #endif
@@ -114,12 +111,10 @@
   #ifndef GetKeyState
     #define GetKeyState(k) GetAsyncKeyState(k)
   #endif
-    // Provide CreateWindowEx fallback via SWELL_MakeControl (extended styles ignored on mac/SWELL).
-    // We map HMENU ids to integer control IDs. This keeps the unified creation code intact.
-    #ifndef CreateWindowEx
-      #define CreateWindowEx(dwExStyle,cls,name,style,x,y,w,h,parent,menu,inst,param) \
-        SWELL_MakeControl((name)?(name):"", (int)(INT_PTR)(menu), (cls), (style), (x), (y), (w), (h), 0)
-    #endif
+  // CreateWindowEx fallback mapping to CreateWindow (ignores extended styles)
+  #ifndef CreateWindowEx
+    #define CreateWindowEx(dwExStyle,cls,name,style,x,y,w,h,parent,menu,inst,param) CreateWindow(cls,name,style,x,y,w,h,parent,menu,inst,param)
+  #endif
 #endif
 
 static HBITMAP LoadPngStripFromResource(int resId, int* outW, int* outH){
@@ -567,61 +562,40 @@ static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
       break;
     case WM_LBUTTONDOWN:
     {
-  WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
-#ifdef _WIN32
-  POINT pt{ (SHORT)LOWORD(l), (SHORT)HIWORD(l) }; HWND child = ChildWindowFromPointEx(h, pt, CWP_SKIPTRANSPARENT|CWP_SKIPINVISIBLE|CWP_SKIPDISABLED);
-  if (rec){
-    auto hitInBox=[&](HWND btn){ if(!btn) return false; RECT rc; GetClientRect(btn,&rc); int box=24; int w=rc.right-rc.left; int h2=rc.bottom-rc.top; RECT inner=rc; if(w>box){ int dx=(w-box)/2; inner.left+=dx; inner.right=inner.left+box; } if(h2>box){ int dy=(h2-box)/2; inner.top+=dy; inner.bottom=inner.top+box; } POINT local=pt; MapWindowPoints(h,btn,&local,1); return PtInRect(&inner,local)!=0; };
-    if(child==rec->findBtnPrev && hitInBox(rec->findBtnPrev)){ rec->prevDown=true; InvalidateRect(rec->findBtnPrev,nullptr,TRUE); }
-    else if(child==rec->findBtnNext && hitInBox(rec->findBtnNext)){ rec->nextDown=true; InvalidateRect(rec->findBtnNext,nullptr,TRUE); }
-    if (child == rec->findLblCase && rec->findChkCase){ SendMessage(rec->findChkCase, BM_CLICK, 0, 0); if(rec->findEdit) SetFocus(rec->findEdit); return 0; }
-    if (child == rec->findLblHighlight && rec->findChkHighlight){ SendMessage(rec->findChkHighlight, BM_CLICK, 0, 0); if(rec->findEdit) SetFocus(rec->findEdit); return 0; }
-  }
-#else
-  // mac/SWELL: rely on native button behavior; only handle label clicks -> toggle checkbox
-  if (rec){
-    HWND child = (HWND)w; // simplistic fallback (no precise hit test)
-    if (child == rec->findLblCase && rec->findChkCase){ SendMessage(rec->findChkCase, BM_CLICK, 0, 0); if(rec->findEdit) SetFocus(rec->findEdit); return 0; }
-    if (child == rec->findLblHighlight && rec->findChkHighlight){ SendMessage(rec->findChkHighlight, BM_CLICK, 0, 0); if(rec->findEdit) SetFocus(rec->findEdit); return 0; }
-  }
-#endif
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
+      POINT pt{ (SHORT)LOWORD(l), (SHORT)HIWORD(l) }; HWND child = ChildWindowFromPointEx(h, pt, CWP_SKIPTRANSPARENT|CWP_SKIPINVISIBLE|CWP_SKIPDISABLED);
+      if (rec){
+  auto hitInBox=[&](HWND btn){ if(!btn) return false; RECT rc; GetClientRect(btn,&rc); int box=24; int w=rc.right-rc.left; int h2=rc.bottom-rc.top; RECT inner=rc; if(w>box){ int dx=(w-box)/2; inner.left+=dx; inner.right=inner.left+box; } if(h2>box){ int dy=(h2-box)/2; inner.top+=dy; inner.bottom=inner.top+box; } POINT local=pt; MapWindowPoints(h,btn,&local,1); return PtInRect(&inner,local)!=0; };
+        if(child==rec->findBtnPrev && hitInBox(rec->findBtnPrev)){ rec->prevDown=true; InvalidateRect(rec->findBtnPrev,nullptr,TRUE); }
+        else if(child==rec->findBtnNext && hitInBox(rec->findBtnNext)){ rec->nextDown=true; InvalidateRect(rec->findBtnNext,nullptr,TRUE); }
+        if (child == rec->findLblCase && rec->findChkCase){ SendMessage(rec->findChkCase, BM_CLICK, 0, 0); if(rec->findEdit) SetFocus(rec->findEdit); return 0; }
+        if (child == rec->findLblHighlight && rec->findChkHighlight){ SendMessage(rec->findChkHighlight, BM_CLICK, 0, 0); if(rec->findEdit) SetFocus(rec->findEdit); return 0; }
+      }
       break;
     }
     case WM_MOUSEMOVE:
     {
-#ifdef _WIN32
-  WebViewInstanceRecord* recMove = GetInstanceByHwnd(GetParent(h)); if(!recMove) break; POINT pt{ (SHORT)LOWORD(l), (SHORT)HIWORD(l) }; HWND child = ChildWindowFromPointEx(h, pt, CWP_SKIPTRANSPARENT); bool anyHot=false; auto hoverIn=[&](HWND btn){ if(!btn||child!=btn) return false; RECT rc; GetClientRect(btn,&rc); int box=24; int w=rc.right-rc.left; int h2=rc.bottom-rc.top; RECT inner=rc; if(w>box){ int dx=(w-box)/2; inner.left+=dx; inner.right=inner.left+box; } if(h2>box){ int dy=(h2-box)/2; inner.top+=dy; inner.bottom=inner.top+box; } POINT local=pt; MapWindowPoints(h,btn,&local,1); return PtInRect(&inner,local)!=0; };
-  if (recMove->findBtnPrev){ bool hov = hoverIn(recMove->findBtnPrev); if(hov && !recMove->prevHot){ recMove->prevHot=true; InvalidateRect(recMove->findBtnPrev,nullptr,TRUE);} else if(!hov && recMove->prevHot){ recMove->prevHot=false; InvalidateRect(recMove->findBtnPrev,nullptr,TRUE);} if(hov) anyHot=true; }
-  if (recMove->findBtnNext){ bool hov = hoverIn(recMove->findBtnNext); if(hov && !recMove->nextHot){ recMove->nextHot=true; InvalidateRect(recMove->findBtnNext,nullptr,TRUE);} else if(!hov && recMove->nextHot){ recMove->nextHot=false; InvalidateRect(recMove->findBtnNext,nullptr,TRUE);} if(hov) anyHot=true; }
-  if(anyHot){ TRACKMOUSEEVENT t{sizeof(t),TME_LEAVE,h,0}; TrackMouseEvent(&t);} break;
-#else
-  // mac: default system hover visuals; no custom hot tracking
-  break;
-#endif
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h)); if(!rec) break; POINT pt{ (SHORT)LOWORD(l), (SHORT)HIWORD(l) }; HWND child = ChildWindowFromPointEx(h, pt, CWP_SKIPTRANSPARENT); bool anyHot=false; auto hoverIn=[&](HWND btn){ if(!btn||child!=btn) return false; RECT rc; GetClientRect(btn,&rc); int box=24; int w=rc.right-rc.left; int h2=rc.bottom-rc.top; RECT inner=rc; if(w>box){ int dx=(w-box)/2; inner.left+=dx; inner.right=inner.left+box; } if(h2>box){ int dy=(h2-box)/2; inner.top+=dy; inner.bottom=inner.top+box; } POINT local=pt; MapWindowPoints(h,btn,&local,1); return PtInRect(&inner,local)!=0; };
+      if (rec->findBtnPrev){ bool hov = hoverIn(rec->findBtnPrev); if(hov && !rec->prevHot){ rec->prevHot=true; InvalidateRect(rec->findBtnPrev,nullptr,TRUE);} else if(!hov && rec->prevHot){ rec->prevHot=false; InvalidateRect(rec->findBtnPrev,nullptr,TRUE);} if(hov) anyHot=true; }
+      if (rec->findBtnNext){ bool hov = hoverIn(rec->findBtnNext); if(hov && !rec->nextHot){ rec->nextHot=true; InvalidateRect(rec->findBtnNext,nullptr,TRUE);} else if(!hov && rec->nextHot){ rec->nextHot=false; InvalidateRect(rec->findBtnNext,nullptr,TRUE);} if(hov) anyHot=true; }
+      if(anyHot){ TRACKMOUSEEVENT t{sizeof(t),TME_LEAVE,h,0}; TrackMouseEvent(&t);} break;
     }
     case WM_MOUSELEAVE:
     {
-#ifdef _WIN32
-  WebViewInstanceRecord* recLeave = GetInstanceByHwnd(GetParent(h)); if(!recLeave) break; if(recLeave->prevHot){ recLeave->prevHot=false; InvalidateRect(recLeave->findBtnPrev,nullptr,TRUE);} if(recLeave->nextHot){ recLeave->nextHot=false; InvalidateRect(recLeave->findBtnNext,nullptr,TRUE);} break;
-#else
-  break; // no-op on mac
-#endif
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h)); if(!rec) break; if(rec->prevHot){ rec->prevHot=false; InvalidateRect(rec->findBtnPrev,nullptr,TRUE);} if(rec->nextHot){ rec->nextHot=false; InvalidateRect(rec->findBtnNext,nullptr,TRUE);} break;
     }
     case WM_LBUTTONUP:
     {
-#ifdef _WIN32
-  WebViewInstanceRecord* recUp = GetInstanceByHwnd(GetParent(h)); if(recUp){
-    POINT pt{ (SHORT)LOWORD(l), (SHORT)HIWORD(l) }; HWND child = ChildWindowFromPointEx(h, pt, CWP_SKIPTRANSPARENT|CWP_SKIPINVISIBLE|CWP_SKIPDISABLED);
-    bool prevWasDown = recUp->prevDown; bool nextWasDown = recUp->nextDown;
-    if(recUp->prevDown){ recUp->prevDown=false; InvalidateRect(recUp->findBtnPrev,nullptr,TRUE);} 
-    if(recUp->nextDown){ recUp->nextDown=false; InvalidateRect(recUp->findBtnNext,nullptr,TRUE);} 
-    auto hitInBox=[&](HWND btn){ if(!btn) return false; RECT rc; GetClientRect(btn,&rc); int box=24; int w=rc.right-rc.left; int h2=rc.bottom-rc.top; RECT inner=rc; if(w>box){ int dx=(w-box)/2; inner.left+=dx; inner.right=inner.left+box; } if(h2>box){ int dy=(h2-box)/2; inner.top+=dy; inner.bottom=inner.top+box; } POINT local=pt; MapWindowPoints(h,btn,&local,1); return PtInRect(&inner,local)!=0; };
-    if(prevWasDown && child==recUp->findBtnPrev && hitInBox(recUp->findBtnPrev)){ HWND host = GetParent(h); if(host) SendMessageW(host, WM_COMMAND, MAKEWPARAM(IDC_FIND_PREV, BN_CLICKED), (LPARAM)recUp->findBtnPrev); }
-    if(nextWasDown && child==recUp->findBtnNext && hitInBox(recUp->findBtnNext)){ HWND host = GetParent(h); if(host) SendMessageW(host, WM_COMMAND, MAKEWPARAM(IDC_FIND_NEXT, BN_CLICKED), (LPARAM)recUp->findBtnNext); }
-  }
-#else
-  // mac: rely on native button click messages
-#endif
+      WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h)); if(rec){
+        POINT pt{ (SHORT)LOWORD(l), (SHORT)HIWORD(l) }; HWND child = ChildWindowFromPointEx(h, pt, CWP_SKIPTRANSPARENT|CWP_SKIPINVISIBLE|CWP_SKIPDISABLED);
+        bool prevWasDown = rec->prevDown; bool nextWasDown = rec->nextDown;
+        if(rec->prevDown){ rec->prevDown=false; InvalidateRect(rec->findBtnPrev,nullptr,TRUE);} 
+        if(rec->nextDown){ rec->nextDown=false; InvalidateRect(rec->findBtnNext,nullptr,TRUE);} 
+  auto hitInBox=[&](HWND btn){ if(!btn) return false; RECT rc; GetClientRect(btn,&rc); int box=24; int w=rc.right-rc.left; int h2=rc.bottom-rc.top; RECT inner=rc; if(w>box){ int dx=(w-box)/2; inner.left+=dx; inner.right=inner.left+box; } if(h2>box){ int dy=(h2-box)/2; inner.top+=dy; inner.bottom=inner.top+box; } POINT local=pt; MapWindowPoints(h,btn,&local,1); return PtInRect(&inner,local)!=0; };
+        if(prevWasDown && child==rec->findBtnPrev && hitInBox(rec->findBtnPrev)){ // emulate button command
+          HWND host = GetParent(h); if(host) SendMessageW(host, WM_COMMAND, MAKEWPARAM(IDC_FIND_PREV, BN_CLICKED), (LPARAM)rec->findBtnPrev); }
+        if(nextWasDown && child==rec->findBtnNext && hitInBox(rec->findBtnNext)){ HWND host = GetParent(h); if(host) SendMessageW(host, WM_COMMAND, MAKEWPARAM(IDC_FIND_NEXT, BN_CLICKED), (LPARAM)rec->findBtnNext); }
+      }
       break;
     }
     case WM_NEXTDLGCTL:
