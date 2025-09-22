@@ -31,14 +31,13 @@
 
 #ifdef _WIN32
   #include <wincodec.h>
-#endif
-
- #ifndef _WIN32
- // macOS: используем Cocoa + определяем путь к текущему модулю, чтобы искать PNG рядом (../res/*.png)
+#else
+ // macOS: Cocoa & CoreGraphics for PNG decoding from embedded arrays
  #import <Cocoa/Cocoa.h>
+ #include <CoreGraphics/CoreGraphics.h>
+ #include <ImageIO/ImageIO.h>
  #include <dlfcn.h>
  // --- mac shim for certain Win32 symbols used in unified code ---
- #ifndef _WIN32
   #ifndef BI_BITFIELDS
     #define BI_BITFIELDS 3
   #endif
@@ -68,33 +67,58 @@
   #ifndef GWLP_ID
     #define GWLP_ID GWL_ID
   #endif
-  // AlphaBlend stub: SWELL provides AlphaBlend in msimg32 emulation via swell-draw.h, ensure header included via predef.
- #endif // _WIN32
- #endif
+  // AlphaBlend: provided by SWELL emulation layer.
+#endif // _WIN32 (mac shim end)
 
+static HBITMAP LoadPngStripFromResource(int resId, int* outW, int* outH){
 #ifdef _WIN32
-static HBITMAP LoadPngStripFromResource(int resId, int* outW, int* outH){
-  *outW=0; *outH=0; HRSRC hr = FindResource((HINSTANCE)g_hInst, MAKEINTRESOURCE(resId), RT_RCDATA); if(!hr) return nullptr; HGLOBAL hg = LoadResource((HINSTANCE)g_hInst, hr); if(!hg) return nullptr; DWORD sz = SizeofResource((HINSTANCE)g_hInst, hr); void* data = LockResource(hg); if(!data || !sz) return nullptr; IWICImagingFactory* fac=nullptr; if (FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&fac)))) return nullptr; IWICStream* stream=nullptr; if (FAILED(fac->CreateStream(&stream))){ fac->Release(); return nullptr; } if (FAILED(stream->InitializeFromMemory((BYTE*)data, sz))){ stream->Release(); fac->Release(); return nullptr; } if(!sz){ stream->Release(); fac->Release(); return nullptr; } IWICBitmapDecoder* dec=nullptr; if (FAILED(fac->CreateDecoderFromStream(stream,nullptr,WICDecodeMetadataCacheOnLoad,&dec))){ stream->Release(); fac->Release(); return nullptr; } IWICBitmapFrameDecode* frame=nullptr; dec->GetFrame(0,&frame); IWICFormatConverter* conv=nullptr; fac->CreateFormatConverter(&conv); conv->Initialize(frame, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,nullptr,0.0, WICBitmapPaletteTypeCustom); UINT w=0,h=0; frame->GetSize(&w,&h); *outW=(int)w; *outH=(int)h; BITMAPV5HEADER bi{}; bi.bV5Size=sizeof(bi); bi.bV5Width=w; bi.bV5Height=-(int)h; bi.bV5Planes=1; bi.bV5BitCount=32; bi.bV5Compression=BI_BITFIELDS; bi.bV5RedMask=0x00FF0000; bi.bV5GreenMask=0x0000FF00; bi.bV5BlueMask=0x000000FF; bi.bV5AlphaMask=0xFF000000; void* bits=nullptr; HDC hdc=GetDC(nullptr); HBITMAP hbmp=CreateDIBSection(hdc,(BITMAPINFO*)&bi,DIB_RGB_COLORS,&bits,nullptr,0); ReleaseDC(nullptr,hdc); if(hbmp && bits){ conv->CopyPixels(nullptr,w*4,(UINT)(w*h*4),(BYTE*)bits); } if(conv) conv->Release(); if(frame) frame->Release(); if(dec) dec->Release(); if(stream) stream->Release(); if(fac) fac->Release(); return hbmp; }
-#else
-#include "embedded_resources.h"
-// macOS: load PNG from embedded byte arrays generated at build time.
-static HBITMAP LoadPngStripFromResource(int resId, int* outW, int* outH){
+  // Windows: decode from RT_RCDATA resource via WIC
+  *outW=0; *outH=0; HRSRC hr = FindResource((HINSTANCE)g_hInst, MAKEINTRESOURCE(resId), RT_RCDATA); if(!hr) return nullptr; HGLOBAL hg = LoadResource((HINSTANCE)g_hInst, hr); if(!hg) return nullptr; DWORD sz = SizeofResource((HINSTANCE)g_hInst, hr); void* data = LockResource(hg); if(!data || !sz) return nullptr; IWICImagingFactory* fac=nullptr; if (FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&fac)))) return nullptr; IWICStream* stream=nullptr; if (FAILED(fac->CreateStream(&stream))){ fac->Release(); return nullptr; } if (FAILED(stream->InitializeFromMemory((BYTE*)data, sz))){ stream->Release(); fac->Release(); return nullptr; } if(!sz){ stream->Release(); fac->Release(); return nullptr; } IWICBitmapDecoder* dec=nullptr; if (FAILED(fac->CreateDecoderFromStream(stream,nullptr,WICDecodeMetadataCacheOnLoad,&dec))){ stream->Release(); fac->Release(); return nullptr; } IWICBitmapFrameDecode* frame=nullptr; dec->GetFrame(0,&frame); IWICFormatConverter* conv=nullptr; fac->CreateFormatConverter(&conv); conv->Initialize(frame, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone,nullptr,0.0, WICBitmapPaletteTypeCustom); UINT w=0,h=0; frame->GetSize(&w,&h); *outW=(int)w; *outH=(int)h; BITMAPV5HEADER bi{}; bi.bV5Size=sizeof(bi); bi.bV5Width=w; bi.bV5Height=-(int)h; bi.bV5Planes=1; bi.bV5BitCount=32; bi.bV5Compression=BI_BITFIELDS; bi.bV5RedMask=0x00FF0000; bi.bV5GreenMask=0x0000FF00; bi.bV5BlueMask=0x000000FF; bi.bV5AlphaMask=0xFF000000; void* bits=nullptr; HDC hdc=GetDC(nullptr); HBITMAP hbmp=CreateDIBSection(hdc,(BITMAPINFO*)&bi,DIB_RGB_COLORS,&bits,nullptr,0); ReleaseDC(nullptr,hdc); if(hbmp && bits){ conv->CopyPixels(nullptr,w*4,(UINT)(w*h*4),(BYTE*)bits); } if(conv) conv->Release(); if(frame) frame->Release(); if(dec) dec->Release(); if(stream) stream->Release(); if(fac) fac->Release(); return hbmp; 
+ #else
+  // macOS: decode from embedded resource arrays (generated by compile_resources.py)
   *outW=0; *outH=0;
-  const char* logicalName = (resId==IDR_PNG_SEARCH_PREV)? "search_prev_png" : "search_next_png"; // enum pattern: имя_расширение
-  // Find matching embedded resource id by linear scan (small set) or name helper.
-  const EmbeddedResource* found = GetEmbeddedResourceByName(logicalName);
-  if(!found || !found->data || !found->size){ LogF("[FindNavImg][mac] embedded PNG not found '%s'", logicalName); return nullptr; }
-  NSData* data = [NSData dataWithBytes:found->data length:found->size];
-  NSImage* img = [[NSImage alloc] initWithData:data];
-  if(!img){ LogF("[FindNavImg][mac] NSImage decode failed '%s'", logicalName); return nullptr; }
-  CGImageRef cg = [img CGImageForProposedRect:NULL context:NULL hints:NULL]; if(!cg){ return nullptr; }
-  size_t w = CGImageGetWidth(cg), h = CGImageGetHeight(cg); if(!w || !h) return nullptr; *outW=(int)w; *outH=(int)h;
-  BITMAPV5HEADER bi{}; bi.bV5Size=sizeof(bi); bi.bV5Width=(LONG)w; bi.bV5Height=-(LONG)h; bi.bV5Planes=1; bi.bV5BitCount=32; bi.bV5Compression=BI_BITFIELDS; bi.bV5RedMask=0x00FF0000; bi.bV5GreenMask=0x0000FF00; bi.bV5BlueMask=0x000000FF; bi.bV5AlphaMask=0xFF000000; void* bits=nullptr; HDC hdc=GetDC(nullptr); HBITMAP hbmp=CreateDIBSection(hdc,(BITMAPINFO*)&bi,DIB_RGB_COLORS,&bits,nullptr,0); ReleaseDC(nullptr,hdc); if(!hbmp||!bits) return nullptr;
-  CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB(); CGContextRef ctx = CGBitmapContextCreate(bits,w,h,8,w*4,cs,kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Little);
-  if(ctx){ CGContextDrawImage(ctx, CGRectMake(0,0,w,h), cg); CGContextRelease(ctx);} if(cs) CGColorSpaceRelease(cs);
-  return hbmp;
-}
-#endif
+  const char* name=nullptr;
+  switch(resId){
+    case IDR_PNG_SEARCH_PREV: name="search_prev.png"; break;
+    case IDR_PNG_SEARCH_NEXT: name="search_next.png"; break;
+    default: return nullptr;
+  }
+  #ifdef __has_include
+  #if __has_include("embedded_resources.h")
+    #include "embedded_resources.h"
+  #endif
+  #endif
+  #ifdef EmbeddedResId_Count
+    const EmbeddedResource* er = GetEmbeddedResourceByName(name);
+    if(!er || ! er->data || er->size==0) return nullptr;
+    CFDataRef cfdata = CFDataCreate(kCFAllocatorDefault, (const UInt8*)er->data, (CFIndex)er->size);
+    if(!cfdata) return nullptr;
+    CGImageSourceRef src = CGImageSourceCreateWithData(cfdata, nullptr);
+    if(!src){ CFRelease(cfdata); return nullptr; }
+    CGImageRef img = CGImageSourceCreateImageAtIndex(src, 0, nullptr);
+    CFRelease(src);
+    if(!img){ CFRelease(cfdata); return nullptr; }
+    size_t w = CGImageGetWidth(img), h = CGImageGetHeight(img);
+    if(!w || !h){ CGImageRelease(img); CFRelease(cfdata); return nullptr; }
+    *outW=(int)w; *outH=(int)h;
+    // Create 32-bit premultiplied BGRA buffer matching Windows expectation
+    BITMAPINFO bi{}; bi.bmiHeader.biSize=sizeof(BITMAPINFOHEADER); bi.bmiHeader.biWidth=(LONG)w; bi.bmiHeader.biHeight=-(LONG)h; bi.bmiHeader.biPlanes=1; bi.bmiHeader.biBitCount=32; bi.bmiHeader.biCompression=BI_RGB; void* bits=nullptr;
+    HDC hdc = GetDC(nullptr); HBITMAP hbmp = CreateDIBSection(hdc,&bi,DIB_RGB_COLORS,&bits,nullptr,0); ReleaseDC(nullptr,hdc);
+    if(!hbmp || !bits){ if(hbmp) DeleteObject(hbmp); CGImageRelease(img); CFRelease(cfdata); return nullptr; }
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(bits, w, h, 8, w*4, cs, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
+    CGColorSpaceRelease(cs);
+    if(!ctx){ DeleteObject(hbmp); CGImageRelease(img); CFRelease(cfdata); return nullptr; }
+    CGRect rect = CGRectMake(0,0,(CGFloat)w,(CGFloat)h);
+    CGContextDrawImage(ctx, rect, img);
+    CGContextRelease(ctx);
+    CGImageRelease(img); CFRelease(cfdata);
+    return hbmp;
+  #else
+    return nullptr; // embedded headers not present
+  #endif
+ #endif
+  }
 
 // (Убрано: отдельная Mac Objective-C реализация панелей; теперь единая Windows-стиль логика через SWELL.)
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec);
@@ -213,7 +237,14 @@ static LRESULT CALLBACK RWVFindEditProc(HWND h, UINT m, WPARAM w, LPARAM l)
 
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
 {
-  if (!rec) return; if (rec->titleFont){ DeleteObject(rec->titleFont); rec->titleFont=nullptr;} if (rec->titleBrush){ DeleteObject(rec->titleBrush); rec->titleBrush=nullptr;} if (rec->titleBar && IsWindow(rec->titleBar)){ DestroyWindow(rec->titleBar); rec->titleBar=nullptr; }
+  if (!rec) return;
+#ifdef _WIN32
+  if (rec->titleFont){ DeleteObject(rec->titleFont); rec->titleFont=nullptr; }
+  if (rec->titleBrush){ DeleteObject(rec->titleBrush); rec->titleBrush=nullptr; }
+  if (rec->titleBar && IsWindow(rec->titleBar)){ DestroyWindow(rec->titleBar); rec->titleBar=nullptr; }
+#else
+  // macOS: title bar handled differently (no GDI resources to destroy)
+#endif
 }
 
 static LRESULT CALLBACK RWVTitleBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -335,8 +366,10 @@ static void EnsureFindBarCreated(HWND hwnd)
     HWND ov = CreateWindowExW(0,L"STATIC",L"",WS_CHILD|SS_NOTIFY,pt.x,pt.y,w,h2,rec->findBarWnd,(HMENU)(INT_PTR)(IDC_FIND_HILITE+1000),(HINSTANCE)g_hInst,nullptr); if(ov) ShowWindow(ov,SW_SHOWNA);
   }
   if (rec->findEdit && !s_origFindEditProc) s_origFindEditProc = (WNDPROC)SetWindowLongPtr(rec->findEdit, GWLP_WNDPROC, (LONG_PTR)RWVFindEditProc);
+#ifdef _WIN32
   if (rec->findBtnPrev && !s_origPrevBtnProc) s_origPrevBtnProc = (WNDPROC)SetWindowLongPtr(rec->findBtnPrev, GWLP_WNDPROC, (LONG_PTR)RWVNavBtnProc);
   if (rec->findBtnNext && !s_origNextBtnProc) s_origNextBtnProc = (WNDPROC)SetWindowLongPtr(rec->findBtnNext, GWLP_WNDPROC, (LONG_PTR)RWVNavBtnProc);
+#endif
   ShowWindow(rec->findBarWnd, SW_HIDE); for (HWND c: ctrls) if(c) ShowWindow(c,SW_HIDE);
   LogRaw("[Find] Created unified find bar controls");
 }
@@ -638,8 +671,8 @@ void UpdateTitlesExtractAndApply(HWND hwnd)
     {
       std::string wndCaption = domain.empty() ? "…" : domain;
       if (!pageTitle.empty()) wndCaption += " - " + pageTitle;
-  SetWndText(hwnd, wndCaption);
-  UpdateTitleBarUI(hwnd, domain, pageTitle, effectiveTitle, false, panelVisible(false, true), effectivePanelMode);
+      SetWndText(hwnd, wndCaption);
+      UpdateTitleBarUI(hwnd, domain, pageTitle, effectiveTitle, false, panelVisible(false, true), effectivePanelMode);
       LogF("[TitleUpdate] undock caption='%s'", wndCaption.c_str());
     }
   }

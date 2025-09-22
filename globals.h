@@ -82,8 +82,9 @@ struct WebViewInstanceRecord {
   COLORREF titleBkColor   = GetSysColor(COLOR_BTNFACE);
 #else
   WKWebView* webView = nil;
-  // Per-instance title bar (macOS)
-  NSView*      titleBarView = nil;
+  // Unified SWELL child title bar HWND (parity with Windows); legacy NSView kept for reference
+  HWND         titleBar      = nullptr; // created via CreateWindowExW under SWELL
+  NSView*      titleBarView  = nil;     // (unused in unified path)
   // Manual text drawing (Windows parity) - no NSTextField now
   // Cached colors (24-bit RGB) for mac panel to avoid recomputing each layout
   int          titleTextColor = -1;
