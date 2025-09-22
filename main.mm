@@ -87,6 +87,9 @@
   #ifndef BN_CLICKED
     #define BN_CLICKED 0
   #endif
+  #ifndef BM_CLICK
+    #define BM_CLICK 0x00F5
+  #endif
   #ifndef VK_SHIFT
     #define VK_SHIFT 0x10
   #endif
@@ -350,7 +353,7 @@ static void EnsureTitleBarCreated(HWND hwnd)
   rec->titleBar = CreateWindowExW(0,L"RWVTitleBar",L"",WS_CHILD,0,0,10,g_titleBarH,hwnd,(HMENU)(INT_PTR)IDC_TITLEBAR,(HINSTANCE)g_hInst,nullptr);
   if(rec->titleBar && rec->titleFont) SendMessageW(rec->titleBar,WM_SETFONT,(WPARAM)rec->titleFont,TRUE);
 #else
-  rec->titleBar = CreateWindow("static","",WS_CHILD,0,0,10,(int)g_titleBarH,hwnd,(HMENU)(INT_PTR)IDC_TITLEBAR,(HINSTANCE)g_hInst,nullptr);
+  rec->titleBar = CreateWindowEx(0,"static","",WS_CHILD,0,0,10,(int)g_titleBarH,hwnd,(HMENU)(INT_PTR)IDC_TITLEBAR,(HINSTANCE)g_hInst,nullptr);
   if(rec->titleBar){ SetWindowLongPtr(rec->titleBar,GWLP_WNDPROC,(LONG_PTR)RWVTitleBarSubclassProc); }
 #endif
 }
@@ -367,7 +370,7 @@ static void EnsureFindBarCreated(HWND hwnd)
   rec->findBarWnd = CreateWindowExW(0, L"RWVFindBar", L"", WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
                                    0,0,10,g_findBarH, hwnd, (HMENU)(INT_PTR)3002, (HINSTANCE)g_hInst, nullptr);
 #else
-  rec->findBarWnd = CreateWindow("static", "", WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
+  rec->findBarWnd = CreateWindowEx(0, "static", "", WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
                                    0,0,10,(int)g_findBarH, hwnd, (HMENU)(INT_PTR)3002, (HINSTANCE)g_hInst, nullptr);
   if (rec->findBarWnd) SetWindowLongPtr(rec->findBarWnd,GWLP_WNDPROC,(LONG_PTR)RWVFindBarSubclassProc);
 #endif
@@ -378,7 +381,7 @@ static void EnsureFindBarCreated(HWND hwnd)
 #ifdef _WIN32
     CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_TABSTOP|ES_AUTOHSCROLL, 0,y,180,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_EDIT,(HINSTANCE)g_hInst,nullptr);
 #else
-    CreateWindow("EDIT", "", WS_CHILD|WS_TABSTOP|ES_AUTOHSCROLL, 0,y,180,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_EDIT,(HINSTANCE)g_hInst,nullptr);
+  CreateWindowEx(0, "EDIT", "", WS_CHILD|WS_TABSTOP|ES_AUTOHSCROLL, 0,y,180,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_EDIT,(HINSTANCE)g_hInst,nullptr);
 #endif
   int btnSize = h;
   static bool s_navReg=false; if(!s_navReg){
@@ -416,8 +419,8 @@ static void EnsureFindBarCreated(HWND hwnd)
   rec->findBtnPrev = CreateWindowExW(0,L"RWVNavBtn",L"",WS_CHILD,0,y,btnSize,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_PREV,(HINSTANCE)g_hInst,nullptr);
   rec->findBtnNext = CreateWindowExW(0,L"RWVNavBtn",L"",WS_CHILD,0,y,btnSize,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_NEXT,(HINSTANCE)g_hInst,nullptr);
 #else
-  rec->findBtnPrev = CreateWindow("BUTTON", "<", WS_CHILD|WS_TABSTOP, 0,y,btnSize,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_PREV,(HINSTANCE)g_hInst,nullptr);
-  rec->findBtnNext = CreateWindow("BUTTON", ">", WS_CHILD|WS_TABSTOP, 0,y,btnSize,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_NEXT,(HINSTANCE)g_hInst,nullptr);
+  rec->findBtnPrev = CreateWindowEx(0, "BUTTON", "<", WS_CHILD|WS_TABSTOP, 0,y,btnSize,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_PREV,(HINSTANCE)g_hInst,nullptr);
+  rec->findBtnNext = CreateWindowEx(0, "BUTTON", ">", WS_CHILD|WS_TABSTOP, 0,y,btnSize,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_NEXT,(HINSTANCE)g_hInst,nullptr);
 #endif
 
 #ifdef _WIN32
@@ -437,25 +440,31 @@ static void EnsureFindBarCreated(HWND hwnd)
   rec->findCounterStatic = CreateWindowExW(0,L"STATIC",L"0/0",WS_CHILD|SS_CENTERIMAGE,0,y,60,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_COUNTER,(HINSTANCE)g_hInst,nullptr);
   rec->findBtnClose = CreateWindowExW(0,L"BUTTON",L"X",WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,0,y,24,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CLOSE,(HINSTANCE)g_hInst,nullptr);
 #else
-  rec->findChkCase = CreateWindow("BUTTON","",WS_CHILD|BS_AUTOCHECKBOX,0,y,18,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CASE,(HINSTANCE)g_hInst,nullptr);
-  rec->findLblCase = CreateWindow("STATIC","Case Sensitive",WS_CHILD|SS_CENTERIMAGE,0,y,110,h, rec->findBarWnd,nullptr,(HINSTANCE)g_hInst,nullptr);
-  rec->findChkHighlight = CreateWindow("BUTTON","",WS_CHILD|BS_AUTOCHECKBOX,0,y,18,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_HILITE,(HINSTANCE)g_hInst,nullptr);
-  rec->findLblHighlight = CreateWindow("STATIC","Highlight All",WS_CHILD|SS_CENTERIMAGE,0,y,100,h, rec->findBarWnd,nullptr,(HINSTANCE)g_hInst,nullptr);
-  rec->findCounterStatic = CreateWindow("STATIC","0/0",WS_CHILD|SS_CENTERIMAGE,0,y,60,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_COUNTER,(HINSTANCE)g_hInst,nullptr);
-  rec->findBtnClose = CreateWindow("BUTTON","X",WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,0,y,24,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CLOSE,(HINSTANCE)g_hInst,nullptr);
+  rec->findChkCase = CreateWindowEx(0,"BUTTON","",WS_CHILD|BS_AUTOCHECKBOX,0,y,18,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CASE,(HINSTANCE)g_hInst,nullptr);
+  rec->findLblCase = CreateWindowEx(0,"STATIC","Case Sensitive",WS_CHILD|SS_CENTERIMAGE,0,y,110,h, rec->findBarWnd,nullptr,(HINSTANCE)g_hInst,nullptr);
+  rec->findChkHighlight = CreateWindowEx(0,"BUTTON","",WS_CHILD|BS_AUTOCHECKBOX,0,y,18,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_HILITE,(HINSTANCE)g_hInst,nullptr);
+  rec->findLblHighlight = CreateWindowEx(0,"STATIC","Highlight All",WS_CHILD|SS_CENTERIMAGE,0,y,100,h, rec->findBarWnd,nullptr,(HINSTANCE)g_hInst,nullptr);
+  rec->findCounterStatic = CreateWindowEx(0,"STATIC","0/0",WS_CHILD|SS_CENTERIMAGE,0,y,60,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_COUNTER,(HINSTANCE)g_hInst,nullptr);
+  rec->findBtnClose = CreateWindowEx(0,"BUTTON","X",WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,0,y,24,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CLOSE,(HINSTANCE)g_hInst,nullptr);
 #endif
 
   HFONT useFont = nullptr;
+#ifdef _WIN32
   useFont = rec->titleFont ? rec->titleFont : (HFONT)SendMessage(hwnd, WM_GETFONT,0,0);
+#endif
   HWND ctrls[] = { rec->findEdit, rec->findBtnPrev, rec->findBtnNext, rec->findChkCase, rec->findLblCase, rec->findChkHighlight, rec->findLblHighlight, rec->findCounterStatic, rec->findBtnClose };
   for (HWND c : ctrls) if (c && useFont) SendMessage(c, WM_SETFONT, (WPARAM)useFont, TRUE);
   if (rec->findChkCase) {
+#ifdef _WIN32
     RECT rc; GetWindowRect(rec->findChkCase,&rc); POINT pt{rc.left,rc.top}; ScreenToClient(rec->findBarWnd,&pt); int w=rc.right-rc.left, h2=rc.bottom-rc.top;
     HWND ov = CreateWindowExW(0,L"STATIC",L"",WS_CHILD|SS_NOTIFY,pt.x,pt.y,w,h2,rec->findBarWnd,(HMENU)(INT_PTR)(IDC_FIND_CASE+1000),(HINSTANCE)g_hInst,nullptr); if(ov) ShowWindow(ov,SW_SHOWNA);
+#endif
   }
   if (rec->findChkHighlight) {
+#ifdef _WIN32
     RECT rc; GetWindowRect(rec->findChkHighlight,&rc); POINT pt{rc.left,rc.top}; ScreenToClient(rec->findBarWnd,&pt); int w=rc.right-rc.left, h2=rc.bottom-rc.top;
     HWND ov = CreateWindowExW(0,L"STATIC",L"",WS_CHILD|SS_NOTIFY,pt.x,pt.y,w,h2,rec->findBarWnd,(HMENU)(INT_PTR)(IDC_FIND_HILITE+1000),(HINSTANCE)g_hInst,nullptr); if(ov) ShowWindow(ov,SW_SHOWNA);
+#endif
   }
   if (rec->findEdit && !s_origFindEditProc) s_origFindEditProc = (WNDPROC)SetWindowLongPtr(rec->findEdit, GWLP_WNDPROC, (LONG_PTR)RWVFindEditProc);
 #ifdef _WIN32
@@ -498,8 +507,9 @@ static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
       if (host) return (LRESULT)SendMessageW(host, m, w, l);
       break;
     }
-    case WM_DRAWITEM:
-    {
+  case WM_DRAWITEM:
+  {
+#ifdef _WIN32
     DRAWITEMSTRUCT* dis = (DRAWITEMSTRUCT*)l; if (!dis) break; WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h)); if(!rec) break; int id = (int)w; if (id==IDC_FIND_PREV || id==IDC_FIND_NEXT){
   // Debug diagnostics for button draw states
   LogF("[FindNavImg] draw id=%d hot(prev=%d,next=%d) down(prev=%d,next=%d)", id, (int)rec->prevHot, (int)rec->nextHot, (int)rec->prevDown, (int)rec->nextDown);
@@ -548,6 +558,8 @@ static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
         return TRUE; }
       break;
     }
+#endif // _WIN32 owner-draw
+      break;
     case WM_LBUTTONDOWN:
     {
       WebViewInstanceRecord* rec = GetInstanceByHwnd(GetParent(h));
