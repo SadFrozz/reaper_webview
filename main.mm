@@ -37,6 +37,39 @@
  // macOS: используем Cocoa + определяем путь к текущему модулю, чтобы искать PNG рядом (../res/*.png)
  #import <Cocoa/Cocoa.h>
  #include <dlfcn.h>
+ // --- mac shim for certain Win32 symbols used in unified code ---
+ #ifndef _WIN32
+  #ifndef BI_BITFIELDS
+    #define BI_BITFIELDS 3
+  #endif
+  #ifndef DIB_RGB_COLORS
+    #define DIB_RGB_COLORS 0
+  #endif
+  // Dialog codes (best-effort approximation; SWELL treats them generically)
+  #ifndef DLGC_WANTALLKEYS
+    #define DLGC_WANTALLKEYS 0x0004
+  #endif
+  #ifndef DLGC_WANTCHARS
+    #define DLGC_WANTCHARS 0x0080
+  #endif
+  #ifndef DLGC_WANTMESSAGE
+    #define DLGC_WANTMESSAGE 0x0004 /* reuse */
+  #endif
+  #ifndef WM_APP
+    #define WM_APP 0x8000
+  #endif
+  // TrackMouseEvent emulation: SWELL gives basic mouse leave via WM_MOUSEMOVE/out-of-rect, but we define stubs.
+  typedef struct tagTRACKMOUSEEVENT { unsigned int cbSize; unsigned int dwFlags; void* hwndTrack; unsigned int dwHoverTime; } TRACKMOUSEEVENT; 
+  #ifndef TME_LEAVE
+    #define TME_LEAVE 0x00000002
+  #endif
+  inline bool TrackMouseEvent(TRACKMOUSEEVENT* /*t*/){ return true; }
+  // Provide GWLP_ID for GetWindowLongPtr indexing via GWL_ID fallback
+  #ifndef GWLP_ID
+    #define GWLP_ID GWL_ID
+  #endif
+  // AlphaBlend stub: SWELL provides AlphaBlend in msimg32 emulation via swell-draw.h, ensure header included via predef.
+ #endif // _WIN32
  #endif
 
 #ifdef _WIN32
