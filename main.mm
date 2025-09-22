@@ -75,6 +75,9 @@
   #ifndef WM_MOUSELEAVE
     #define WM_MOUSELEAVE 0x02A3
   #endif
+  #ifndef WM_NCCREATE
+    #define WM_NCCREATE 0x0081
+  #endif
   #ifndef WM_GETDLGCODE
     #define WM_GETDLGCODE 0x0087
   #endif
@@ -87,11 +90,27 @@
   #ifndef VK_SHIFT
     #define VK_SHIFT 0x10
   #endif
+  #ifndef COLOR_WINDOWTEXT
+    #define COLOR_WINDOWTEXT 8
+  #endif
+  #ifndef HOLLOW_BRUSH
+    #define HOLLOW_BRUSH NULL_BRUSH
+  #endif
+  // Wide API fallbacks -> ANSI SWELL versions
+  #define GetWindowTextW GetWindowText
+  #define DrawTextW DrawText
+  #define RegisterClassW RegisterClass
+  #define CreateWindowExW CreateWindowEx
+  #define CallWindowProcW CallWindowProc
   // Map wide-char variants to ANSI versions in unified code for SWELL
   #define SendMessageW SendMessage
   #define DefWindowProcW DefWindowProc
-  #define CallWindowProcW CallWindowProc
   #define SetWindowTextW SetWindowText
+  // GetKeyState shim (fallback to GetAsyncKeyState if present)
+  #ifndef GetKeyState
+    #define GetKeyState(k) GetAsyncKeyState(k)
+  #endif
+  typedef WNDCLASS WNDCLASSW; // alias for unified naming
 #endif
 
 static HBITMAP LoadPngStripFromResource(int resId, int* outW, int* outH){
@@ -319,13 +338,14 @@ static LRESULT CALLBACK RWVTitleBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
 static void EnsureTitleBarCreated(HWND hwnd)
 {
   WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if(!rec) return; if (rec->titleBar && !IsWindow(rec->titleBar)) rec->titleBar=nullptr; if(rec->titleBar) return;
-  static bool s_reg=false; if(!s_reg){ WNDCLASSW wc{}; wc.lpfnWndProc=RWVTitleBarProc; wc.hInstance=(HINSTANCE)g_hInst; wc.lpszClassName=L"RWVTitleBar"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); wc.hbrBackground=NULL; RegisterClassW(&wc); s_reg=true; }
+  static bool s_reg=false; if(!s_reg){ WNDCLASSW wc{}; memset(&wc,0,sizeof(wc)); wc.lpfnWndProc=RWVTitleBarProc; wc.hInstance=(HINSTANCE)g_hInst; wc.lpszClassName=L"RWVTitleBar"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); wc.hbrBackground=NULL; RegisterClassW(&wc); s_reg=true; }
 #ifdef _WIN32
-  LOGFONTW lf{}; SystemParametersInfoW(SPI_GETICONTITLELOGFONT,sizeof(lf),&lf,0); // system icon title font
-  rec->titleFont=CreateFontIndirectW(&lf);
-#endif
+  LOGFONTW lf{}; SystemParametersInfoW(SPI_GETICONTITLELOGFONT,sizeof(lf),&lf,0); rec->titleFont=CreateFontIndirectW(&lf);
   rec->titleBar = CreateWindowExW(0,L"RWVTitleBar",L"",WS_CHILD,0,0,10,g_titleBarH,hwnd,(HMENU)(INT_PTR)IDC_TITLEBAR,(HINSTANCE)g_hInst,nullptr);
   if(rec->titleBar && rec->titleFont) SendMessageW(rec->titleBar,WM_SETFONT,(WPARAM)rec->titleFont,TRUE);
+#else
+  rec->titleBar = CreateWindowEx(0,"RWVTitleBar","",WS_CHILD,0,0,10,(int)g_titleBarH,hwnd,(HMENU)(INT_PTR)IDC_TITLEBAR,(HINSTANCE)g_hInst,nullptr);
+#endif
 }
 
 // Ensure creation of the find bar and its child controls (Windows only)
@@ -335,21 +355,27 @@ static void EnsureFindBarCreated(HWND hwnd)
   if (rec->findBarWnd && !IsWindow(rec->findBarWnd)) rec->findBarWnd = nullptr;
   if (rec->findBarWnd) return;
 
-  static bool s_reg=false; if(!s_reg){ WNDCLASSW wc{}; wc.lpfnWndProc=RWVFindBarProc; wc.hInstance=(HINSTANCE)g_hInst; wc.lpszClassName=L"RWVFindBar"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); wc.hbrBackground=NULL; RegisterClassW(&wc); s_reg=true; }
+  static bool s_reg=false; if(!s_reg){ WNDCLASSW wc{}; memset(&wc,0,sizeof(wc)); wc.lpfnWndProc=RWVFindBarProc; wc.hInstance=(HINSTANCE)g_hInst; wc.lpszClassName=L"RWVFindBar"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); wc.hbrBackground=NULL; RegisterClassW(&wc); s_reg=true; }
+#ifdef _WIN32
   rec->findBarWnd = CreateWindowExW(0, L"RWVFindBar", L"", WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
                                    0,0,10,g_findBarH, hwnd, (HMENU)(INT_PTR)3002, (HINSTANCE)g_hInst, nullptr);
+#else
+  rec->findBarWnd = CreateWindowEx(0, "RWVFindBar", "", WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
+                                   0,0,10,(int)g_findBarH, hwnd, (HMENU)(INT_PTR)3002, (HINSTANCE)g_hInst, nullptr);
+#endif
   if (!rec->findBarWnd) return;
 
   int h=g_findBarH-8; if (h<16) h=16; int y=4;
-  rec->findEdit = CreateWindowExW(
+  rec->findEdit =
 #ifdef _WIN32
-    WS_EX_CLIENTEDGE,
+    CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_TABSTOP|ES_AUTOHSCROLL, 0,y,180,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_EDIT,(HINSTANCE)g_hInst,nullptr);
 #else
-    0,
+    CreateWindowEx(0, "EDIT", "", WS_CHILD|WS_TABSTOP|ES_AUTOHSCROLL, 0,y,180,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_EDIT,(HINSTANCE)g_hInst,nullptr);
 #endif
-    L"EDIT", L"", WS_CHILD|WS_TABSTOP|ES_AUTOHSCROLL, 0,y,180,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_EDIT,(HINSTANCE)g_hInst,nullptr);
   int btnSize = h;
-  static bool s_navReg=false; if(!s_navReg){ WNDCLASSW wc{}; wc.lpfnWndProc=[](HWND hWnd, UINT m, WPARAM w, LPARAM l)->LRESULT{
+  static bool s_navReg=false; if(!s_navReg){
+#ifdef _WIN32
+      WNDCLASSW wc{}; wc.lpfnWndProc=[](HWND hWnd, UINT m, WPARAM w, LPARAM l)->LRESULT{
         int cid = (int)GetWindowLongPtr(hWnd,GWLP_ID); bool isPrev = (cid==IDC_FIND_PREV);
         WebViewInstanceRecord* recLocal = GetInstanceByHwnd(GetParent(GetParent(hWnd)));
         if(!recLocal) return DefWindowProcW(hWnd,m,w,l);
@@ -375,9 +401,17 @@ static void EnsureFindBarCreated(HWND hwnd)
             if(hot||down){ HPEN penO=CreatePen(PS_SOLID,1,RGB(128,128,128)); HGDIOBJ oP=SelectObject(memDC,penO); HGDIOBJ oB=SelectObject(memDC,GetStockObject(HOLLOW_BRUSH)); RoundRect(memDC,r.left,r.top,r.right-1,r.bottom-1,4,4); SelectObject(memDC,oB); SelectObject(memDC,oP); DeleteObject(penO);} BitBlt(dc,0,0,rc.right-rc.left,rc.bottom-rc.top,memDC,0,0,SRCCOPY); SelectObject(memDC,oldBmp); DeleteObject(memBmp); DeleteDC(memDC); EndPaint(hWnd,&ps); return 0; }
         }
         return DefWindowProcW(hWnd,m,w,l);
-      }; wc.hInstance=(HINSTANCE)g_hInst; wc.lpszClassName=L"RWVNavBtn"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); wc.hbrBackground=NULL; RegisterClassW(&wc); s_navReg=true; }
+      }; wc.hInstance=(HINSTANCE)g_hInst; wc.lpszClassName=L"RWVNavBtn"; wc.hCursor=LoadCursor(nullptr,IDC_ARROW); wc.hbrBackground=NULL; RegisterClassW(&wc); s_navReg=true;
+#endif
+  }
+#ifdef _WIN32
   rec->findBtnPrev = CreateWindowExW(0,L"RWVNavBtn",L"",WS_CHILD,0,y,btnSize,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_PREV,(HINSTANCE)g_hInst,nullptr);
   rec->findBtnNext = CreateWindowExW(0,L"RWVNavBtn",L"",WS_CHILD,0,y,btnSize,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_NEXT,(HINSTANCE)g_hInst,nullptr);
+#else
+  // mac fallback: simple text buttons
+  rec->findBtnPrev = CreateWindowEx(0, "BUTTON", "<", WS_CHILD|WS_TABSTOP, 0,y,btnSize,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_PREV,(HINSTANCE)g_hInst,nullptr);
+  rec->findBtnNext = CreateWindowEx(0, "BUTTON", ">", WS_CHILD|WS_TABSTOP, 0,y,btnSize,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_NEXT,(HINSTANCE)g_hInst,nullptr);
+#endif
 
 #ifdef _WIN32
   HRESULT coHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED); (void)coHr;
@@ -388,12 +422,21 @@ static void EnsureFindBarCreated(HWND hwnd)
   rec->bmpNext = LoadPngStripFromResource(IDR_PNG_SEARCH_NEXT, &rec->bmpNextW, &rec->bmpNextH);
   if(!rec->bmpNext) LogRaw("[FindNavImg] FAILED NEXT strip"); else LogF("[FindNavImg] OK NEXT w=%d h=%d", rec->bmpNextW, rec->bmpNextH);
 
+#ifdef _WIN32
   rec->findChkCase = CreateWindowExW(0,L"BUTTON",L"",WS_CHILD|BS_AUTOCHECKBOX,0,y,18,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CASE,(HINSTANCE)g_hInst,nullptr);
   rec->findLblCase = CreateWindowExW(0,L"STATIC",L"Case Sensitive",WS_CHILD|SS_CENTERIMAGE,0,y,110,h, rec->findBarWnd,nullptr,(HINSTANCE)g_hInst,nullptr);
   rec->findChkHighlight = CreateWindowExW(0,L"BUTTON",L"",WS_CHILD|BS_AUTOCHECKBOX,0,y,18,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_HILITE,(HINSTANCE)g_hInst,nullptr);
   rec->findLblHighlight = CreateWindowExW(0,L"STATIC",L"Highlight All",WS_CHILD|SS_CENTERIMAGE,0,y,100,h, rec->findBarWnd,nullptr,(HINSTANCE)g_hInst,nullptr);
   rec->findCounterStatic = CreateWindowExW(0,L"STATIC",L"0/0",WS_CHILD|SS_CENTERIMAGE,0,y,60,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_COUNTER,(HINSTANCE)g_hInst,nullptr);
   rec->findBtnClose = CreateWindowExW(0,L"BUTTON",L"X",WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,0,y,24,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CLOSE,(HINSTANCE)g_hInst,nullptr);
+#else
+  rec->findChkCase = CreateWindowEx(0,"BUTTON","",WS_CHILD|BS_AUTOCHECKBOX,0,y,18,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CASE,(HINSTANCE)g_hInst,nullptr);
+  rec->findLblCase = CreateWindowEx(0,"STATIC","Case Sensitive",WS_CHILD|SS_CENTERIMAGE,0,y,110,h, rec->findBarWnd,nullptr,(HINSTANCE)g_hInst,nullptr);
+  rec->findChkHighlight = CreateWindowEx(0,"BUTTON","",WS_CHILD|BS_AUTOCHECKBOX,0,y,18,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_HILITE,(HINSTANCE)g_hInst,nullptr);
+  rec->findLblHighlight = CreateWindowEx(0,"STATIC","Highlight All",WS_CHILD|SS_CENTERIMAGE,0,y,100,h, rec->findBarWnd,nullptr,(HINSTANCE)g_hInst,nullptr);
+  rec->findCounterStatic = CreateWindowEx(0,"STATIC","0/0",WS_CHILD|SS_CENTERIMAGE,0,y,60,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_COUNTER,(HINSTANCE)g_hInst,nullptr);
+  rec->findBtnClose = CreateWindowEx(0,"BUTTON","X",WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,0,y,24,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CLOSE,(HINSTANCE)g_hInst,nullptr);
+#endif
 
   HFONT useFont = nullptr;
   useFont = rec->titleFont ? rec->titleFont : (HFONT)SendMessage(hwnd, WM_GETFONT,0,0);
