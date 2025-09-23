@@ -53,7 +53,7 @@ static void SetTitleBarText(HWND hwnd, const std::string& s);
 static LRESULT CALLBACK RWVTitleBarProc(HWND h, UINT m, WPARAM w, LPARAM l);
 // Find bar (Windows) forward declarations
 static void EnsureFindBarCreated(HWND hwnd);
-static void UpdateFindCounter(WebViewInstanceRecord* rec);
+void UpdateFindCounter(WebViewInstanceRecord* rec);
 
 // Control IDs now defined globally above for both platforms
 
@@ -428,7 +428,7 @@ static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
   return DefWindowProcW(h,m,w,l);
 }
 
-static void UpdateFindCounter(WebViewInstanceRecord* rec)
+void UpdateFindCounter(WebViewInstanceRecord* rec)
 {
   if (!rec || !rec->findCounterStatic) return;
   int cur = rec->findCurrentIndex; int tot = rec->findTotalMatches;
@@ -1186,6 +1186,9 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_FIND_CLOSE:
         {
           WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r && r->showFindBar){ r->showFindBar=false; LogRaw("[Find] close");
+#ifdef _WIN32
+            WinFindClose(r);
+#endif
         #ifdef _WIN32
             bool titleVisible = (r->titleBar && IsWindow(r->titleBar) && IsWindowVisible(r->titleBar));
         #else
@@ -1198,13 +1201,21 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_FIND_PREV:
         case IDC_FIND_NEXT:
         {
-          WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r){ bool fwd = (LOWORD(wp)==IDC_FIND_NEXT); LogF("[Find] nav %s query='%s'", fwd?"next":"prev", r->findQuery.c_str()); /* real search TBD */ }
+          WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r){ bool fwd = (LOWORD(wp)==IDC_FIND_NEXT); LogF("[Find] nav %s query='%s'", fwd?"next":"prev", r->findQuery.c_str());
+#ifdef _WIN32
+            WinFindNavigate(r, fwd);
+#endif
+          }
           return 0;
         }
         case IDC_FIND_CASE:
         case IDC_FIND_HILITE:
         {
-          WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r){ if (LOWORD(wp)==IDC_FIND_CASE){ r->findCaseSensitive = (SendMessage((HWND)lp, BM_GETCHECK,0,0)==BST_CHECKED); LogF("[Find] case=%d", (int)r->findCaseSensitive);} else { r->findHighlightAll = (SendMessage((HWND)lp, BM_GETCHECK,0,0)==BST_CHECKED); LogF("[Find] highlight=%d", (int)r->findHighlightAll);} }
+          WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r){ if (LOWORD(wp)==IDC_FIND_CASE){ r->findCaseSensitive = (SendMessage((HWND)lp, BM_GETCHECK,0,0)==BST_CHECKED); LogF("[Find] case=%d", (int)r->findCaseSensitive);} else { r->findHighlightAll = (SendMessage((HWND)lp, BM_GETCHECK,0,0)==BST_CHECKED); LogF("[Find] highlight=%d", (int)r->findHighlightAll);} 
+#ifdef _WIN32
+            WinFindStartOrUpdate(r);
+#endif
+          }
           return 0;
         }
         case IDC_FIND_EDIT:
@@ -1215,6 +1226,7 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             #ifdef _WIN32
               char buf[512]; GetWindowTextA(r->findEdit, buf, sizeof(buf)); r->findQuery=buf;
               r->findCurrentIndex=0; r->findTotalMatches=0; LogF("[Find] query change '%s'", r->findQuery.c_str()); UpdateFindCounter(r);
+              WinFindStartOrUpdate(r);
             #else
               // NSTextField* stored in r->findEdit; safely bridge and read stringValue
               NSString* s = [(NSTextField*)r->findEdit stringValue];

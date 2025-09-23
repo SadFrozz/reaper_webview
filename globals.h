@@ -74,6 +74,17 @@ struct WebViewInstanceRecord {
 #ifdef _WIN32
   ICoreWebView2Controller* controller = nullptr; // stored raw; lifetime managed in webview_win.cpp
   ICoreWebView2*           webview    = nullptr;
+  struct ICoreWebView2Environment* environment = nullptr; // keep environment to fabricate find options
+    // Forward declare minimal token struct to avoid heavy includes here (matches layout in WebView2 headers)
+    struct EventRegistrationToken { __int64 value; };
+    // Native Find API (WebView2). Pointers acquired lazily; may be null if runtime doesn't support.
+    struct ICoreWebView2Find*         nativeFind = nullptr;       // ICoreWebView2Find instance
+    struct ICoreWebView2FindOptions*  nativeFindOpts = nullptr;   // Options reused between starts
+    bool nativeFindActive = false;                                // true once Start succeeded
+  bool nativeFindAutoActivated = false;                         // one-shot auto FindNext done
+    // Event tokens (valid only while nativeFindActive)
+  EventRegistrationToken nativeFindActiveToken{};               // ActiveMatchIndexChanged token
+  EventRegistrationToken nativeFindCountToken{};                // MatchCountChanged token
   // Per-instance title bar (Windows)
   HWND     titleBar       = nullptr;
   HFONT    titleFont      = nullptr;
