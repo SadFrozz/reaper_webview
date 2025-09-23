@@ -27,6 +27,16 @@
 #include "helpers.h"
 
 // ======================== Title panel (creation + logic stays here) =========================
+#ifndef IDC_FIND_EDIT
+#define IDC_FIND_EDIT     2101
+#define IDC_FIND_PREV     2102
+#define IDC_FIND_NEXT     2103
+#define IDC_FIND_CASE     2104
+#define IDC_FIND_HILITE   2105
+#define IDC_FIND_COUNTER  2106
+#define IDC_FIND_CLOSE    2107
+#endif
+
 #ifdef _WIN32
 // Forward declarations (creation logic in this TU; layout needs external linkage)
 #include <wincodec.h>
@@ -45,16 +55,7 @@ static LRESULT CALLBACK RWVTitleBarProc(HWND h, UINT m, WPARAM w, LPARAM l);
 static void EnsureFindBarCreated(HWND hwnd);
 static void UpdateFindCounter(WebViewInstanceRecord* rec);
 
-// Control IDs (child controls for find bar) MUST be defined before any usage
-#ifndef IDC_FIND_EDIT
-#define IDC_FIND_EDIT     2101
-#define IDC_FIND_PREV     2102
-#define IDC_FIND_NEXT     2103
-#define IDC_FIND_CASE     2104
-#define IDC_FIND_HILITE   2105
-#define IDC_FIND_COUNTER  2106
-#define IDC_FIND_CLOSE    2107
-#endif
+// Control IDs now defined globally above for both platforms
 
 static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l);
 static WNDPROC s_origFindEditProc = nullptr;
@@ -109,46 +110,24 @@ static void RWV_FindNavigateInline(WebViewInstanceRecord* rec, bool fwd)
 static LRESULT CALLBACK RWVFindEditProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
   switch(m){
-    case WM_GETDLGCODE:
-      return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTMESSAGE;
-    case WM_SETFOCUS:
-      LogRaw("[FindFocus] edit WM_SETFOCUS");
-      g_lastFindEdit = h;
-      break;
+    case WM_GETDLGCODE: return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTMESSAGE;
+    case WM_SETFOCUS: LogRaw("[FindFocus] edit WM_SETFOCUS"); g_lastFindEdit = h; break;
     case WM_KEYDOWN:
       if (w==VK_RETURN){
-        HWND host = GetParent(GetParent(h));
-        WebViewInstanceRecord* rec = GetInstanceByHwnd(host);
-        bool shift = (GetKeyState(VK_SHIFT)&0x8000)!=0;
-        if (rec){
-          bool fwd = !shift;
-          g_findEnterActive = true; g_findLastEnterTick = GetTickCount();
-          RWV_FindNavigateInline(rec, fwd);
-          SetFocus(h);
-          SendMessageW(h, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-          HWND findBar = GetParent(h);
-          if (findBar && IsWindow(findBar)) PostMessage(findBar, WM_RWV_FIND_REFOCUS, (WPARAM)h, 0);
-          return 0;
-        }
+        HWND host = GetParent(GetParent(h)); WebViewInstanceRecord* rec = GetInstanceByHwnd(host); bool shift = (GetKeyState(VK_SHIFT)&0x8000)!=0;
+        if (rec){ bool fwd = !shift; g_findEnterActive = true; g_findLastEnterTick = GetTickCount(); RWV_FindNavigateInline(rec, fwd); SetFocus(h); SendMessageW(h, EM_SETSEL, (WPARAM)-1, (LPARAM)-1); HWND findBar = GetParent(h); if (findBar && IsWindow(findBar)) PostMessage(findBar, WM_RWV_FIND_REFOCUS, (WPARAM)h, 0); return 0; }
       }
       break;
-    case WM_CHAR:
-      if (w=='\r') return 0; // swallow CR so no default button processing
-      break;
-    case WM_KEYUP:
-      if (w==VK_RETURN) g_findEnterActive=false;
-      break;
+    case WM_CHAR: if (w=='\r') return 0; break;
+    case WM_KEYUP: if (w==VK_RETURN) g_findEnterActive=false; break;
     case WM_KILLFOCUS:
       LogRaw("[FindFocus] edit WM_KILLFOCUS");
-      if (g_findEnterActive && GetTickCount()-g_findLastEnterTick < 250){
-        SetFocus(h);
-        SendMessageW(h, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-        return 0;
-      }
+      if (g_findEnterActive && GetTickCount()-g_findLastEnterTick < 250){ SetFocus(h); SendMessageW(h, EM_SETSEL, (WPARAM)-1, (LPARAM)-1); return 0; }
       break;
   }
   return CallWindowProcW(s_origFindEditProc,h,m,w,l);
 }
+
 
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
 {
@@ -577,6 +556,13 @@ static void EnsureTitleBarCreated(HWND hwnd)
   [rec->titleBarView setHidden:YES];
 }
 
+#ifndef _WIN32
+// Forward declarations for mac find bar helpers used before their definitions
+static void EnsureFindBarCreated(HWND hwnd);
+static void MacUpdateFindCounter(WebViewInstanceRecord* rec);
+static void MacLayoutFindBar(WebViewInstanceRecord* rec);
+#endif
+
 void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
 {
   NSView* host = (NSView*)hwnd; if(!host) return; WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
@@ -614,9 +600,12 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
       [rec->findBarView setFrame:NSMakeRect(0, 0, hostW, g_findBarH)];
       [rec->findBarView setHidden:NO];
       MacUpdateFindCounter(rec);
+      MacLayoutFindBar(rec);
+      LogF("[Find][mac] show hostW=%g", (double)hostW);
     }
   } else if (rec->findBarView) {
     [rec->findBarView setHidden:YES];
+    LogRaw("[Find][mac] hide");
   }
 
   if (rec->webView) {
@@ -640,8 +629,19 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
 @property (nonatomic, strong) NSButton*   btnClose;
 @end
 
+// We will intercept Enter via delegate method instead of subclassing.
+
 @implementation FRZFindBarView
 - (BOOL)isFlipped { return NO; }
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector
+{
+  if (commandSelector == @selector(insertNewline:) || commandSelector == @selector(insertLineBreak:)) {
+    bool shift = (([NSEvent modifierFlags] & NSEventModifierFlagShift) != 0);
+    WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(rec){ bool fwd = !shift; LogF("[Find][mac] nav %s via Enter query='%s'", fwd?"next":"prev", rec->findQuery.c_str()); MacUpdateFindCounter(rec);}    
+    return YES; // swallow
+  }
+  return NO;
+}
 - (void)controlTextDidChange:(NSNotification *)note
 {
   WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(!rec) return;
@@ -681,6 +681,7 @@ static void MacUpdateFindCounter(WebViewInstanceRecord* rec)
   rec->findCounterLabel.stringValue = [NSString stringWithFormat:@"%d/%d",cur,tot];
 }
 
+static int g_macFindCounterShift = 2; // optical downward shift (positive -> visually down)
 static void EnsureFindBarCreated(HWND hwnd)
 {
   WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if(!rec) return; NSView* host=(NSView*)hwnd; if(!host) return;
@@ -690,16 +691,31 @@ static void EnsureFindBarCreated(HWND hwnd)
   FRZFindBarView* fb = [[FRZFindBarView alloc] initWithFrame:frame];
   fb.rwvHostHWND = hwnd;
   [fb setAutoresizingMask:(NSViewWidthSizable | NSViewMaxYMargin)];
-
-  CGFloat x=6; CGFloat y=4; CGFloat h=g_findBarH-8; if (h<16) h=16;
-  fb.txtField = [[NSTextField alloc] initWithFrame:NSMakeRect(x,y,180,h)];
-  [fb.txtField setAutoresizingMask:NSViewMaxXMargin]; fb.txtField.delegate=fb; x+=180+6;
-  fb.btnPrev = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,50,h)]; [fb.btnPrev setTitle:@"Prev"]; [fb.btnPrev setTarget:fb]; [fb.btnPrev setAction:@selector(commonButtonAction:)]; x+=50+4;
-  fb.btnNext = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,50,h)]; [fb.btnNext setTitle:@"Next"]; [fb.btnNext setTarget:fb]; [fb.btnNext setAction:@selector(commonButtonAction:)]; x+=50+8;
-  fb.chkCase = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,80,h)]; [fb.chkCase setButtonType:NSButtonTypeSwitch]; [fb.chkCase setTitle:@"Case"]; [fb.chkCase setTarget:fb]; [fb.chkCase setAction:@selector(commonButtonAction:)]; x+=80+4;
-  fb.chkHighlight = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,110,h)]; [fb.chkHighlight setButtonType:NSButtonTypeSwitch]; [fb.chkHighlight setTitle:@"Highlight"]; [fb.chkHighlight setTarget:fb]; [fb.chkHighlight setAction:@selector(commonButtonAction:)]; x+=110+6;
-  fb.lblCounter = [[NSTextField alloc] initWithFrame:NSMakeRect(x,y,60,h)]; [fb.lblCounter setBezeled:NO]; [fb.lblCounter setEditable:NO]; [fb.lblCounter setDrawsBackground:NO]; [fb.lblCounter setAlignment:NSTextAlignmentCenter]; fb.lblCounter.stringValue=@"0/0"; x+=60+6;
-  fb.btnClose = [[NSButton alloc] initWithFrame:NSMakeRect(x,y,24,h)]; [fb.btnClose setTitle:@"X"]; [fb.btnClose setTarget:fb]; [fb.btnClose setAction:@selector(commonButtonAction:)];
+  // Replicate Windows ordering & spacing semantics
+  CGFloat pad=0; CGFloat curX=pad; CGFloat barH=g_findBarH; CGFloat innerH=barH-8; if(innerH<16) innerH=16; CGFloat centerY = barH * 0.5f;
+  // Edit (fixed width 180)
+  fb.txtField = [[NSTextField alloc] initWithFrame:NSMakeRect(curX, centerY - innerH/2, 180, innerH)];
+  [fb.txtField setAutoresizingMask:NSViewMaxXMargin]; fb.txtField.delegate=fb; curX += 180 + 8;
+  // Prev / Next (24x24 square buttons). Using arrows as temporary visual until sprite parity.
+  CGFloat navSize=24; fb.btnPrev = [[NSButton alloc] initWithFrame:NSMakeRect(curX, centerY - navSize/2, navSize, navSize)]; [fb.btnPrev setTitle:@"▲"]; [fb.btnPrev setBezelStyle:NSBezelStyleTexturedRounded]; [fb.btnPrev setTarget:fb]; [fb.btnPrev setAction:@selector(commonButtonAction:)]; curX += navSize + 8;
+  fb.btnNext = [[NSButton alloc] initWithFrame:NSMakeRect(curX, centerY - navSize/2, navSize, navSize)]; [fb.btnNext setTitle:@"▼"]; [fb.btnNext setBezelStyle:NSBezelStyleTexturedRounded]; [fb.btnNext setTarget:fb]; [fb.btnNext setAction:@selector(commonButtonAction:)]; curX += navSize + 10;
+  // Case Sensitive checkbox
+  fb.chkCase = [[NSButton alloc] initWithFrame:NSMakeRect(curX, centerY - innerH/2, 120, innerH)]; [fb.chkCase setButtonType:NSButtonTypeSwitch]; [fb.chkCase setTitle:@"Case Sensitive"]; [fb.chkCase setTarget:fb]; [fb.chkCase setAction:@selector(commonButtonAction:)]; curX += 120 + 8;
+  // Highlight All (shift left 10 like Windows before placing)
+  curX -= 10; if(curX<pad) curX=pad;
+  fb.chkHighlight = [[NSButton alloc] initWithFrame:NSMakeRect(curX, centerY - innerH/2, 120, innerH)]; [fb.chkHighlight setButtonType:NSButtonTypeSwitch]; [fb.chkHighlight setTitle:@"Highlight All"]; [fb.chkHighlight setTarget:fb]; [fb.chkHighlight setAction:@selector(commonButtonAction:)]; curX += 120 + 8;
+  // Additional left shift 10 before counter
+  curX -= 10; if(curX<pad) curX=pad;
+  // Counter label: unified creation; apply global optical shift (positive = down)
+  NSFont* fnt = [NSFont systemFontOfSize:[NSFont systemFontSize]];
+  CGFloat baseY = centerY - innerH/2; // strict center baseline
+  CGFloat finalY = baseY - g_macFindCounterShift;
+  fb.lblCounter = [[NSTextField alloc] initWithFrame:NSMakeRect(curX, finalY, 60, innerH)];
+  LogF("[Find][mac] counter create baseY=%g finalY=%g shift=%d", (double)baseY, (double)finalY, g_macFindCounterShift);
+  [fb.lblCounter setBezeled:NO]; [fb.lblCounter setEditable:NO]; [fb.lblCounter setDrawsBackground:NO]; [fb.lblCounter setAlignment:NSTextAlignmentCenter]; [fb.lblCounter setFont:fnt]; fb.lblCounter.stringValue=@"0/0"; curX += 60 + 6;
+  // Close (temp position; will be right-aligned in layout pass)
+  fb.btnClose = [[NSButton alloc] initWithFrame:NSMakeRect(curX, centerY - innerH/2, 24, innerH)]; [fb.btnClose setBezelStyle:NSBezelStyleRegularSquare]; [fb.btnClose setTitle:@"X"]; [fb.btnClose setTarget:fb]; [fb.btnClose setAction:@selector(commonButtonAction:)];
+  LogF("[Find][mac] create curX=%g", (double)curX);
 
   [fb addSubview:fb.txtField];
   [fb addSubview:fb.btnPrev];
@@ -720,7 +736,34 @@ static void EnsureFindBarCreated(HWND hwnd)
 
   [host addSubview:fb positioned:NSWindowBelow relativeTo:nil];
   [fb setHidden:YES];
-  LogRaw("[Find] Created macOS find bar controls");
+  LogRaw("[Find][mac] created (initial hidden)");
+}
+
+// Perform layout of mac find bar controls each time bar/frame changes (mirror Windows logic)
+static void MacLayoutFindBar(WebViewInstanceRecord* rec)
+{
+  if(!rec || !rec->findBarView) return; NSView* fb = rec->findBarView; CGFloat w = fb.frame.size.width; CGFloat h = g_findBarH;
+  CGFloat pad=0; CGFloat curX=pad; CGFloat barH=h; CGFloat innerH=barH-8; if(innerH<16) innerH=16; CGFloat centerY = barH*0.5f;
+  // All controls share identical vertical centering; counter uses global optical shift
+  CGFloat baseY = centerY-innerH/2; // strict center for all controls
+  // Edit
+  if(rec->findEdit){ [(NSView*)rec->findEdit setFrame:NSMakeRect(curX, centerY-innerH/2,180,innerH)]; curX+=180+8; }
+  // Prev
+  CGFloat navSize=24; if(rec->findBtnPrev){ [(NSView*)rec->findBtnPrev setFrame:NSMakeRect(curX, centerY-navSize/2,navSize,navSize)]; curX+=navSize+8; }
+  // Next
+  if(rec->findBtnNext){ [(NSView*)rec->findBtnNext setFrame:NSMakeRect(curX, centerY-navSize/2,navSize,navSize)]; curX+=navSize+10; }
+  // Case
+  if(rec->findChkCase){ [(NSView*)rec->findChkCase setFrame:NSMakeRect(curX, centerY-innerH/2,120,innerH)]; curX+=120+8; }
+  // Highlight group shift
+  curX-=10; if(curX<pad) curX=pad;
+  if(rec->findChkHighlight){ [(NSView*)rec->findChkHighlight setFrame:NSMakeRect(curX, centerY-innerH/2,120,innerH)]; curX+=120+8; }
+  // Counter shift
+  curX-=10; if(curX<pad) curX=pad;
+  if(rec->findCounterLabel){ CGFloat finalY = baseY - g_macFindCounterShift; NSRect fr = NSMakeRect(curX, finalY,60,innerH); [rec->findCounterLabel setFrame:fr]; curX+=60+6; LogF("[Find][mac] counter layout baseY=%g finalY=%g shift=%d", (double)baseY, (double)finalY, g_macFindCounterShift); }
+  // Close right aligned
+  CGFloat closeW=24; CGFloat rightX = w - pad - closeW;
+  if(rec->findBtnClose){ [(NSView*)rec->findBtnClose setFrame:NSMakeRect(rightX, centerY-innerH/2,closeW,innerH)]; }
+  LogF("[Find][mac] layout w=%g curX_end=%g rightX=%g", (double)w, (double)curX, (double)rightX);
 }
 #endif
 
@@ -1044,6 +1087,7 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
   {
     case WM_INITDIALOG:
     {
+    #ifdef _WIN32
       if (!g_rwvMsgHook) {
         g_rwvMsgHook = SetWindowsHookExW(WH_GETMESSAGE, [](int code, WPARAM wP, LPARAM lP)->LRESULT {
           if (code >= 0) {
@@ -1051,7 +1095,6 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (m && m->message==WM_KEYDOWN && m->wParam==VK_RETURN) {
               HWND foc = GetFocus();
               if (foc && foc == g_lastFindEdit) {
-                // Determine direction (Shift => prev)
                 bool shift = (GetKeyState(VK_SHIFT)&0x8000)!=0;
                 HWND findBar = GetParent(foc);
                 HWND host = findBar ? GetParent(findBar) : nullptr;
@@ -1061,7 +1104,6 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                   g_findEnterActive = true; g_findLastEnterTick = GetTickCount();
                   RWV_FindNavigateInline(rec, fwd);
                   LogF("[Find] nav %s query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
-                  // maintain focus & caret
                   SetFocus(foc); SendMessage(foc, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
                 }
                 LogRaw("[FindHook] swallow VK_RETURN pre-translate");
@@ -1073,6 +1115,7 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }, nullptr, GetCurrentThreadId());
         LogRaw("[FindHook] installed WH_GETMESSAGE");
       }
+    #endif
       char* initial = (char*)lp;
       std::string url = (initial && *initial) ? std::string(initial) : std::string(kDefaultURL);
       if (initial) free(initial);
@@ -1142,7 +1185,14 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       {
         case IDC_FIND_CLOSE:
         {
-          WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r && r->showFindBar){ r->showFindBar=false; LogRaw("[Find] close"); LayoutTitleBarAndWebView(hwnd, r->titleBar && IsWindow(r->titleBar) && IsWindowVisible(r->titleBar)); }
+          WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r && r->showFindBar){ r->showFindBar=false; LogRaw("[Find] close");
+        #ifdef _WIN32
+            bool titleVisible = (r->titleBar && IsWindow(r->titleBar) && IsWindowVisible(r->titleBar));
+        #else
+            bool titleVisible = (r->titleBarView && ![r->titleBarView isHidden]);
+        #endif
+            LayoutTitleBarAndWebView(hwnd, titleVisible);
+          }
           return 0;
         }
         case IDC_FIND_PREV:
@@ -1160,7 +1210,18 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_FIND_EDIT:
         {
           if (HIWORD(wp)==EN_CHANGE) {
-            WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd); if (r && r->findEdit){ char buf[512]; GetWindowTextA(r->findEdit, buf, sizeof(buf)); r->findQuery=buf; r->findCurrentIndex=0; r->findTotalMatches=0; LogF("[Find] query change '%s'", r->findQuery.c_str()); UpdateFindCounter(r); }
+            WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd);
+            if (r && r->findEdit){
+            #ifdef _WIN32
+              char buf[512]; GetWindowTextA(r->findEdit, buf, sizeof(buf)); r->findQuery=buf;
+              r->findCurrentIndex=0; r->findTotalMatches=0; LogF("[Find] query change '%s'", r->findQuery.c_str()); UpdateFindCounter(r);
+            #else
+              // NSTextField* stored in r->findEdit; safely bridge and read stringValue
+              NSString* s = [(NSTextField*)r->findEdit stringValue];
+              const char* cstr = s? [s UTF8String] : ""; r->findQuery = cstr? cstr : "";
+              r->findCurrentIndex=0; r->findTotalMatches=0; LogF("[Find] query change '%s' (mac)", r->findQuery.c_str()); MacUpdateFindCounter(r);
+            #endif
+            }
           }
           return 0;
         }
@@ -1197,7 +1258,9 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_DESTROY:
       LogRaw("[WM_DESTROY]");
+    #ifdef _WIN32
       if (g_rwvMsgHook){ UnhookWindowsHookEx(g_rwvMsgHook); g_rwvMsgHook=nullptr; LogRaw("[FindHook] removed WH_GETMESSAGE"); }
+    #endif
     case WM_TIMER:
       // (таймеры для повторного обновления заголовка удалены как лишняя нагрузка)
       break;

@@ -16,14 +16,20 @@ include_directories(${WDL_PATH}/swell)
 
 # Добавляем исходники
 set(SOURCES
-  main.mm
-  api.mm
-  helpers.mm
-  webview_win.cpp
-  webview_darwin.mm
-  globals.mm
-    resources.rc
+    main.mm
+    api.mm
+    helpers.mm
+    webview_win.cpp
+    webview_darwin.mm
+    globals.mm
 )
+
+# Windows-only resource script (breaks macOS/clang if added unconditionally)
+if (WIN32)
+    list(APPEND SOURCES resources.rc)
+endif()
+
+## Embedded PNG resources нужны только для macOS (Windows загружает через Win32 ресурсы)
 
 # Создаем библиотеку
 add_library(reaper_webview MODULE ${SOURCES})
@@ -34,6 +40,24 @@ target_compile_definitions(reaper_webview_debug PRIVATE ENABLE_LOG)
 
 # Настройки для разных платформ
 if(APPLE)
+    # ----- Embedded PNG resources (only macOS) -----
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(EMBED_INPUT_DIR ${CMAKE_SOURCE_DIR}/res)
+    set(EMBED_OUT_H ${CMAKE_BINARY_DIR}/embedded_resources.h)
+    set(EMBED_OUT_CPP ${CMAKE_BINARY_DIR}/embedded_resources.cpp)
+    add_custom_command(
+        OUTPUT ${EMBED_OUT_H} ${EMBED_OUT_CPP}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/compile_resources.py ${EMBED_INPUT_DIR} ${EMBED_OUT_H} ${EMBED_OUT_CPP}
+        DEPENDS ${CMAKE_SOURCE_DIR}/tools/compile_resources.py
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Embedding PNG resources (macOS) from ${EMBED_INPUT_DIR}"
+    )
+    add_custom_target(embed_res_mac ALL DEPENDS ${EMBED_OUT_H} ${EMBED_OUT_CPP})
+    include_directories(${CMAKE_BINARY_DIR})
+    target_sources(reaper_webview PRIVATE ${EMBED_OUT_CPP})
+    target_sources(reaper_webview_debug PRIVATE ${EMBED_OUT_CPP})
+    add_dependencies(reaper_webview embed_res_mac)
+    add_dependencies(reaper_webview_debug embed_res_mac)
     set(SWELL_STUB ${CMAKE_SOURCE_DIR}/WDL/swell/swell-modstub.mm)
     target_sources(reaper_webview PRIVATE ${SWELL_STUB})
     target_sources(reaper_webview_debug PRIVATE ${SWELL_STUB})
