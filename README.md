@@ -53,12 +53,13 @@ Embed modern web content (Edge WebView2 on Windows / WKWebView on macOS) inside 
 * Логирование (debug таргет)
 
 ### Быстрая установка
-1. (Когда появятся релизы) скачать архив.
+1. Скачать последний релиз: https://github.com/SadFrozz/reaper_webview/releases
 2. Скопировать бинарник:
    * Windows: `%AppData%/REAPER/UserPlugins/reaper_webview.dll` (или `reaper_webview_debug.dll` для отладки и сбора логов работы плагина)
    * macOS: `~/Library/Application Support/REAPER/UserPlugins/reaper_webview.dylib` (или `reaper_webview_debug.dylib` для отладки и сбора логов работы плагина)
 3. Перезапустить REAPER.
 4. Использовать через ReaScript.
+5. Смотреть изменения между версиями: `CHANGELOG.md`.
 
 ### API
 Функция: `WEBVIEW_Navigate(url, optsJSON)`
@@ -151,12 +152,13 @@ Embeds a modern web engine (WebView2 / WKWebView) into REAPER: dockable / floati
 * Debug logging build target
 
 ### Quick Install
-1. (When releases are published) download the archive.
+1. Download latest release: https://github.com/SadFrozz/reaper_webview/releases
 2. Copy the binary:
   * Windows: `%AppData%/REAPER/UserPlugins/reaper_webview.dll` (or `reaper_webview_debug.dll` for debugging & log collection)
   * macOS: `~/Library/Application Support/REAPER/UserPlugins/reaper_webview.dylib` (or `reaper_webview_debug.dylib` for debugging & log collection)
 3. Restart REAPER.
 4. Use via ReaScript (`WEBVIEW_Navigate`).
+5. See version changes in `CHANGELOG.md`.
 
 ### API (English)
 Function: `WEBVIEW_Navigate(url, optsJSON)`
