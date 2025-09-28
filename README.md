@@ -130,6 +130,8 @@ MIT (см. `LICENSE`).
 ### Статус
 Активная разработка (ядро и поиск стабильны).
 
+Приветствуются issue c сообщениями об ошибках, идеями улучшений или для уточнения непонятных моментов.
+
 ---
 
 ## Information in English
@@ -228,7 +230,5 @@ MIT (see `LICENSE`). Third‑party components keep original licenses.
 
 ### Status
 Active (core + find stable). API surface expanding.
-
----
 
 Feel free to open issues for bugs, enhancement ideas, or clarifications.

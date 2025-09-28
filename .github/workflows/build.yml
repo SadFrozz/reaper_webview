@@ -2,9 +2,13 @@ name: Build WebView Plugin
 
 on:
   push:
-    branches: '**'
+    branches:
+      - main
+    tags:
+      - 'v*'
   pull_request:
-    branches: '**'
+    branches:
+      - main
 
 jobs:
   build:
@@ -82,7 +86,7 @@ jobs:
       if: runner.os == 'Windows'
       run: cmake --build build --config Release --target reaper_webview reaper_webview_debug
 
-    # --- ИСПРАВЛЕННЫЙ БЛОК ДЛЯ WINDOWS ---
+    # --- WINDOWS ARTIFACT ---
     - name: Prepare Windows Artifact
       if: runner.os == 'Windows'
       shell: pwsh
@@ -107,7 +111,7 @@ jobs:
         if-no-files-found: warn
         retention-days: 7
 
-    # --- БЛОК ДЛЯ MACOS (без изменений, но теперь логически отделен) ---
+    # --- MACOS ARTIFACT ---
     - name: Prepare macOS Artifact
       if: runner.os == 'macOS'
       run: |
@@ -124,3 +128,79 @@ jobs:
           build/reaper_webview_debug.dylib
         if-no-files-found: error
         retention-days: 7
+
+  release-from-tag:
+    name: Create Release from Tag
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: reaper-webview-windows-x64
+          path: artifacts/windows
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: reaper-webview-macos-universal
+          path: artifacts/macos
+
+      - name: Repackage artifacts
+        run: |
+          set -e
+          mkdir dist
+          cd artifacts/windows
+          zip -r ../../dist/reaper_webview_windows.zip .
+          cd ../../artifacts/macos
+          zip -r ../../dist/reaper_webview_macos.zip .
+          cd ../../dist
+          sha256sum * > SHA256SUMS.txt || shasum -a 256 * > SHA256SUMS.txt
+
+      - name: Generate Release Notes
+        id: notes
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}" # e.g. v0.1.0
+          CHANGELOG_SECTION=""
+          if [ -f CHANGELOG.md ]; then
+            # Extract lines from the matching version header until next version header or EOF
+            # Supports headings like '## v0.1.0' optionally followed by status words.
+            CHANGELOG_SECTION=$(awk -v tag="$TAG" 'BEGIN{found=0} /^## / { if(found){ exit } } $0 ~ "^## "tag { found=1; next } found { print }' CHANGELOG.md | sed '/^---$/d')
+          fi
+          if [ -z "$CHANGELOG_SECTION" ]; then
+            CHANGELOG_SECTION="(No specific changelog section found for $TAG)"
+          fi
+
+          {
+            echo "release_body<<'EOF'"
+            echo "Reaper WebView Extension"
+            echo ""
+            echo "Tag: $TAG"
+            echo ""
+            echo "Changelog:"; echo ""; echo "$CHANGELOG_SECTION" | sed 's/^/  /'
+            echo ""
+            echo "Artifacts:"
+            echo "- reaper_webview_windows.zip (Release + Debug DLLs + optional WebView2Loader)"
+            echo "- reaper_webview_macos.zip (Universal Release + Debug dylibs)"
+            echo ""
+            echo "SHA256 sums included in SHA256SUMS.txt"
+            echo ""
+            echo "Install: copy the appropriate binary into REAPER UserPlugins (see README)."
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Reaper WebView ${{ github.ref_name }}
+          body: ${{ steps.notes.outputs.release_body }}
+          draft: false
+          prerelease: false
+          files: |
+            dist/reaper_webview_windows.zip
+            dist/reaper_webview_macos.zip
+            dist/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
