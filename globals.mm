@@ -26,6 +26,9 @@ bool    g_com_initialized = false;
 // Per-instance caching now inside WebViewInstanceRecord (lastTabTitle/lastWndText)
 
 std::string g_instanceId;
+std::string g_activeInstanceId; // explicit current active window instance
+std::string g_lastFocusedInstanceId; // previous active instance
+std::string g_focusPrimaryInstanceId; // last instance that actually owned focus
 
 int  g_last_dock_idx        = -1;
 bool g_last_dock_float      = false;
@@ -34,9 +37,11 @@ int  g_want_dock_on_create  = -1;
 #ifdef _WIN32
 int      g_titleBarH       = 24;  // фикс, без привязки к DPI
 int      g_titlePadX       = 8;
+int      g_findBarH        = 30;  // find bar height (Windows)
 #else
 CGFloat      g_titleBarH    = 24.0;
 CGFloat      g_titlePadX    = 8.0;
+CGFloat      g_findBarH     = 30.0; // find bar height (macOS)
 #endif
 
 std::unordered_map<std::string,int>      g_registered_commands;
@@ -92,6 +97,7 @@ WebViewInstanceRecord* EnsureInstanceAndMaybeNavigate(const std::string& id, con
 				ptr->titleOverride = def->titleOverride.empty()? kTitleBase : def->titleOverride;
 				ptr->panelMode     = def->panelMode;
 				ptr->lastUrl       = def->lastUrl; // стартовая навигация может унаследовать
+				ptr->basicCtxMenu  = def->basicCtxMenu;
 				ptr->wantDockOnCreate = def->wantDockOnCreate;
 				ptr->lastDockIdx      = def->lastDockIdx;
 				ptr->lastDockFloat    = def->lastDockFloat;

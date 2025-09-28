@@ -3,81 +3,93 @@
 // 2025 and later
 // api.mm
 #include "predef.h"
-#include "api.h"      // собственный публичный интерфейс
-#include "globals.h"  // объявления структур/extern
-#include "helpers.h"  // утилиты (строки, домен, табы)
-#include "log.h"      // логирование
+#include "api.h"      // Public plugin API header
+#include "globals.h"  // Struct declarations / extern globals
+#include "helpers.h"  // Utilities (strings, domain, tabs)
+#include "log.h"      // Logging
 
 // ------------------------------------------------------------------
-// Регистрация без повторного набора имени функции
+// Registration helper without repeatedly typing the function name
 // ------------------------------------------------------------------
-// Формат строки для APIdef_ согласно reaper_plugin.h:
+// APIdef_ string format per reaper_plugin.h:
 //  returnType '\0' argTypesCSV '\0' argNamesCSV '\0' helpText '\0'
-// Строка должна жить в памяти всё время жизни плагина.
-// Также для Lua/EEL2/Python нужна регистрация APIvararg_* — функция-обёртка:
+// The string must remain valid for the entire plugin lifetime.
+// For Lua/EEL2/Python we also register APIvararg_* stubs:
 //   void *vararg(void **arglist, int numparms)
-// аргументы достаются напрямую из arglist, возвращаемое значение
-// упаковывается как описано в заголовке SDK.
+// Arguments are extracted directly from arglist; the return value is packed
+// as described in the SDK header.
 
 struct ApiRegistrationInfo {
-  const char* name;          // Имя без префикса: WEBVIEW_Navigate
+  const char* name;          // Name without prefix: WEBVIEW_Navigate
   const char* retType;       // "void"
   const char* argTypesCSV;   // "const char*,const char*"
   const char* argNamesCSV;   // "url,opts"
   const char* helpText;      // Multiline help text (ASCII/UTF-8 safe)
   void (*cFunc)(const char*, const char*); // C-интерфейс (API_*)
-  void* (*varargFunc)(void**, int);        // Реализация для ReaScript (APIvararg_*)
-  const char* defCString;    // готовая нуль-разделённая строка (генерируется)
+  void* (*varargFunc)(void**, int);        // ReaScript implementation (APIvararg_*)
+  const char* defCString;    // Ready null-delimited definition string (generated)
 };
 
 static bool g_api_registered = false;
-static std::vector<std::unique_ptr<std::string>> g_api_def_storage; // держим строки в памяти
+static std::vector<std::unique_ptr<std::string>> g_api_def_storage; // Own storage to keep strings alive
 
 // Forward vararg stubs
 static void* Vararg_WEBVIEW_Navigate(void** arglist, int numparms);
 
 // ------------------------------------------------------------------
-// Собственно API-функции (реализация)
+// Actual API function implementations
 // ------------------------------------------------------------------
 
-// Единая точка входа: url + JSON-опции или "0"
-static void API_WEBVIEW_Navigate(const char* url, const char* opts)
+// Single entry point: url + JSON options or "0"
+void API_WEBVIEW_Navigate(const char* url, const char* opts)
 {
-  // Считываем опции (без немедленного применения к глобалам)
+  // Parse options (without immediate application to globals)
   std::string newTitle;
   std::string newInstance;
   ShowPanelMode newShow = ShowPanelMode::Unset;
+  bool newBasicCtx = false;
   if (is_truthy(opts)) {
     newTitle    = GetJsonString(opts, "SetTitle");
     newInstance = GetJsonString(opts, "InstanceId");
     newShow     = ParseShowPanel(GetJsonString(opts, "ShowPanel"));
+    // BasicCtxMenu: any truthy => enable basic context menu
+    std::string bcm = GetJsonString(opts, "BasicCtxMenu");
+    if (!bcm.empty()) newBasicCtx = is_truthy(bcm.c_str());
   }
 
-  // --- Multi-instance resolve ---
-  // InstanceId правила:
-  //   "" (отсутствует) -> wv_default
-  //   "random" -> wv_<N>
-  //   строка, начинающаяся на wv_ -> принимается как есть
-  //   любое иное значение -> трактуется как wv_default
+  // --- Multi-instance resolution ---
+  // InstanceId rules:
+  //   "" (missing) -> wv_default
+  //   "random"     -> wv_<N>
+  //   starts with wv_ -> accepted verbatim
+  //   anything else -> treated as wv_default
   bool wasRandom=false;
-  const std::string normalizedId = NormalizeInstanceId(newInstance, &wasRandom);
-  // Захват старого заголовка (если есть) для отслеживания изменения
+  std::string requestedId = newInstance;
+  // Support virtual tokens: "current" and "last" BEFORE NormalizeInstanceId.
+  if (requestedId == "current") {
+    if (!g_activeInstanceId.empty()) requestedId = g_activeInstanceId; else requestedId = "random"; // fallback -> random per требованию
+  } else if (requestedId == "last") {
+    if (!g_lastFocusedInstanceId.empty()) requestedId = g_lastFocusedInstanceId; else if(!g_activeInstanceId.empty()) requestedId = g_activeInstanceId; else requestedId = "random"; // fallback -> random
+  }
+  const std::string normalizedId = NormalizeInstanceId(requestedId, &wasRandom);
+  // Capture old title (if present) to detect/log changes
   WebViewInstanceRecord* before = GetInstanceById(normalizedId);
   std::string oldTitle = before ? before->titleOverride : std::string();
   auto* rec = EnsureInstanceAndMaybeNavigate(normalizedId, url?url:std::string(), (url&&*url), newTitle, newShow);
-  g_instanceId = normalizedId; // активный id
+  if (rec && newBasicCtx) rec->basicCtxMenu = true;
+  g_instanceId = normalizedId; // active id
 
-  // Глобальные поля больше не используются как источник истинного состояния (оставлены для legacy участков докера)
+  // Global fields no longer authoritative (kept for legacy docker code paths)
   if (rec && rec->wantDockOnCreate >= 0) g_want_dock_on_create = rec->wantDockOnCreate;
 
-  // Лог параметров вызова
+  // Log call parameters
   LogF("[API] WEBVIEW_Navigate url='%s' opts='%s' SetTitle='%s' InstanceIdRaw='%s' norm='%s' wasRandom=%d ShowPanel=%d", 
     url?url:"", opts?opts:"", newTitle.c_str(), newInstance.c_str(), normalizedId.c_str(), (int)wasRandom, (int)newShow);
 
-  // Переход к per-instance открытию (пока может переиспользовать одно окно)
+  // Proceed to per-instance open (may reuse single window for now)
   OpenOrActivateInstance(g_instanceId, url?std::string(url):std::string());
 
-  // Обновить титулы (по hwnd найденного инстанса)
+  // Update titles (using hwnd of matched instance)
   if (rec && rec->hwnd) {
     if (!newTitle.empty() && newTitle != oldTitle) {
       LogF("[TitleChange] instance='%s' '%s' -> '%s' (updating docker tab)", normalizedId.c_str(), oldTitle.c_str(), rec->titleOverride.c_str());
@@ -86,15 +98,15 @@ static void API_WEBVIEW_Navigate(const char* url, const char* opts)
   }
 }
 
-// ----- Пример заготовки под будущие API -----
+// ----- Example placeholder for future API -----
 // static int API_WEBVIEW_GetSomething(const char* opts) { return 123; }
 
 // ------------------------------------------------------------------
-// Список API
+// API list
 // ------------------------------------------------------------------
 
 // -------------------- Vararg wrappers --------------------
-// Преобразуют универсальный вызов ReaScript к нашему C API.
+// Convert generic ReaScript call to our C API.
 static void* Vararg_WEBVIEW_Navigate(void** arglist, int numparms)
 {
   const char* url  = (numparms > 0 && arglist[0]) ? (const char*)arglist[0] : nullptr;
@@ -103,7 +115,7 @@ static void* Vararg_WEBVIEW_Navigate(void** arglist, int numparms)
   return nullptr; // void
 }
 
-// -------------------- Определение списка API --------------------
+// -------------------- API list definition --------------------
 
 #define HELP_NAV \
 "WEBVIEW_Navigate(url, opts)\n" \
@@ -117,6 +129,7 @@ static void* Vararg_WEBVIEW_Navigate(void** arglist, int numparms)
 "                  hide   : do not show panel (window stays hidden until navigation/activation)\n" \
 "                  docker : ensure docked (if REAPER docking available)\n" \
 "                  always : force visible (floating or docked depending on previous state)\n" \
+"    BasicCtxMenu : bool   -> when true show only minimal context menu (Dock/Undock + Close).\n" \
 "  Behavior notes:\n" \
 "    - First call creates instance window if needed.\n" \
 "    - Title override persists per-instance until another SetTitle or plugin unload.\n" \
@@ -127,12 +140,12 @@ static void* Vararg_WEBVIEW_Navigate(void** arglist, int numparms)
 
 static ApiRegistrationInfo g_api_list[] = {
   { "WEBVIEW_Navigate", "void", "const char*,const char*", "url,opts", HELP_NAV, &API_WEBVIEW_Navigate, &Vararg_WEBVIEW_Navigate, nullptr },
-  // Добавлять новые API здесь
+  // Add new API entries here
 };
 
 static void BuildDefString(ApiRegistrationInfo& api)
 {
-  if (api.defCString) return; // уже собрали
+  if (api.defCString) return; // already built
   auto holder = std::make_unique<std::string>();
   holder->append(api.retType);           holder->push_back('\0');
   holder->append(api.argTypesCSV);       holder->push_back('\0');
@@ -152,7 +165,7 @@ void RegisterAPI()
     auto& api = g_api_list[i];
     BuildDefString(api);
 
-    std::string base = api.name; // без префикса
+  std::string base = api.name; // without prefix
     std::string key_func   = "API_"        + base;
     std::string key_def    = "APIdef_"     + base;
     std::string key_vararg = "APIvararg_"  + base;

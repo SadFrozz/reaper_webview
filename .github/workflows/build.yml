@@ -22,6 +22,10 @@ jobs:
         submodules: recursive
         token: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Ensure Python (macOS)
+      if: runner.os == 'macOS'
+      run: python3 --version
+
     - name: Install Windows dependencies
       if: runner.os == 'Windows'
       shell: pwsh

@@ -3,9 +3,93 @@
 // 2025 and later
 // helpers.mm
 
+#ifdef _WIN32
+#define RWV_WITH_WEBVIEW2 1
+#endif
 #include "predef.h"
 #include "helpers.h"
 #include "log.h"
+
+#ifdef _WIN32
+void GetPanelThemeColors(HWND panelHwnd, HDC dc, COLORREF* outBk, COLORREF* outTx)
+{
+  if (!outBk || !outTx) return;
+  COLORREF tx = GetSysColor(COLOR_WINDOWTEXT);
+  COLORREF bk = GetSysColor(COLOR_BTNFACE);
+  if (g_hwndParent && IsWindow(g_hwndParent)) {
+    HBRUSH br = (HBRUSH)SendMessage(g_hwndParent, WM_CTLCOLORSTATIC, (WPARAM)dc, (LPARAM)panelHwnd);
+    if (br) {
+      tx = GetTextColor(dc);
+      COLORREF tbk = GetBkColor(dc);
+      if (tbk != CLR_INVALID) bk = tbk;
+    }
+  }
+  if (GetColorThemeStruct) {
+    // optional heuristic fallback if contrast too low
+    int ltx = (30*((tx>>16)&0xFF)+59*((tx>>8)&0xFF)+11*(tx&0xFF))/100;
+    int lbk = (30*((bk>>16)&0xFF)+59*((bk>>8)&0xFF)+11*(bk&0xFF))/100;
+    if (abs(ltx-lbk) < 25) {
+      int sz=0; void* p=GetColorThemeStruct(&sz);
+      if (p && sz>=64) {
+        int* arr=(int*)p; int n=sz/sizeof(int);
+        for(int i=0;i<n-1 && i<128;i++){ int c1=arr[i]&0xFFFFFF; int c2=arr[i+1]&0xFFFFFF; int r1=(c1>>16)&0xFF,g1=(c1>>8)&0xFF,b1=c1&0xFF; int r2=(c2>>16)&0xFF,g2=(c2>>8)&0xFF,b2=c2&0xFF; int l1=(30*r1+59*g1+11*b1)/100; int l2=(30*r2+59*g2+11*b2)/100; if (abs(l1-l2)>60){ bk=RGB(r1,g1,b1); tx=RGB(r2,g2,b2); break; } }
+      }
+    }
+  }
+  *outBk = bk; *outTx = tx;
+}
+#else
+void GetPanelThemeColorsMac(int* outBg, int* outTx)
+{
+  // Mirror Windows approach: 1) get base colors (theme if available, else fallbacks)
+  // 2) compute luminance diff; 3) if low contrast AND theme struct present, scan adjacent pairs
+  if (outBg) *outBg = -1; if (outTx) *outTx = -1;
+  int bk = -1, tx = -1;
+  int raw_theme_bg = -1, raw_theme_tx = -1;
+
+  if (GetThemeColor) {
+    raw_theme_bg = GetThemeColor("col_main_bg",0);
+    raw_theme_tx = GetThemeColor("col_main_text",0);
+    if (raw_theme_bg >= 0) bk = raw_theme_bg & 0xFFFFFF;
+    if (raw_theme_tx >= 0) tx = raw_theme_tx & 0xFFFFFF;
+  }
+  bool usedFallbackBk = false;
+  if (bk < 0) { bk = 0xC0C0C0; usedFallbackBk = true; }
+  if (tx < 0) { tx = 0x000000; } // default text if theme text missing
+
+  int rbk=(bk>>16)&0xFF, gbk=(bk>>8)&0xFF, bbk=bk&0xFF;
+  int rtx=(tx>>16)&0xFF, gtx=(tx>>8)&0xFF, btx=tx&0xFF;
+  int lbk=(30*rbk+59*gbk+11*bbk)/100; int ltx=(30*rtx+59*gtx+11*btx)/100;
+  int diff = std::abs(ltx-lbk);
+  bool scanned = false;
+  int chosen_c1 = -1, chosen_c2 = -1, chosen_l1 = -1, chosen_l2 = -1;
+
+  if (diff < 25 && GetColorThemeStruct) {
+    int sz = 0; void* p = GetColorThemeStruct(&sz);
+    if (p && sz >= 64) {
+      int* arr = (int*)p; int n = sz / (int)sizeof(int);
+      for (int i=0; i < n-1 && i < 128; ++i) {
+        int c1 = arr[i] & 0xFFFFFF; int c2 = arr[i+1] & 0xFFFFFF;
+        int r1=(c1>>16)&0xFF,g1=(c1>>8)&0xFF,b1=c1&0xFF; int r2=(c2>>16)&0xFF,g2=(c2>>8)&0xFF,b2=c2&0xFF;
+        int l1=(30*r1+59*g1+11*b1)/100; int l2=(30*r2+59*g2+11*b2)/100;
+        if (std::abs(l1-l2) > 60) { bk = c1; tx = c2; rbk=r1; gbk=g1; bbk=b1; rtx=r2; gtx=g2; btx=b2; lbk=l1; ltx=l2; diff=std::abs(l1-l2); scanned = true; chosen_c1=c1; chosen_c2=c2; chosen_l1=l1; chosen_l2=l2; break; }
+      }
+    }
+  }
+
+  if (outBg) *outBg = bk; if (outTx) *outTx = tx;
+  // Compute starting luminance diff only if both raw colors exist
+  int start_l_diff = -1;
+  if (raw_theme_bg >= 0 && raw_theme_tx >= 0) {
+    int rbg0=(raw_theme_bg>>16)&0xFF, gbg0=(raw_theme_bg>>8)&0xFF, bbg0=raw_theme_bg&0xFF;
+    int rtx0=(raw_theme_tx>>16)&0xFF, gtx0=(raw_theme_tx>>8)&0xFF, btx0=raw_theme_tx&0xFF;
+    int lbg0=(30*rbg0+59*gbg0+11*bbg0)/100; int ltx0=(30*rtx0+59*gtx0+11*btx0)/100;
+    start_l_diff = std::abs(lbg0-ltx0);
+  }
+  LogF("[MacThemeColorsWinLike] raw_bg=%d raw_tx=%d fbBk=%d startDiff=%d finalDiff=%d scanned=%d bk=0x%06X tx=0x%06X chosenPair=(0x%06X,0x%06X) lumPair=(%d,%d)",
+       raw_theme_bg, raw_theme_tx, (int)usedFallbackBk, start_l_diff, diff, (int)scanned, bk, tx, chosen_c1, chosen_c2, chosen_l1, chosen_l2);
+}
+#endif
 
 #ifdef _WIN32
 // --- UTF-8 <-> UTF-16 ---

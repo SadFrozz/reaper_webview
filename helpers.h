@@ -29,3 +29,12 @@ void PlatformMakeTopLevel(HWND hwnd);
 bool is_truthy(const char* s);
 std::string GetJsonString(const char* json, const char* key);
 ShowPanelMode ParseShowPanel(const std::string& v);
+
+// ================= Theme color helpers for panels =================
+#ifdef _WIN32
+// Resolve panel background/text colors using REAPER theme forwarding + fallback.
+void GetPanelThemeColors(HWND panelHwnd, HDC dc, COLORREF* outBk, COLORREF* outTx);
+#else
+// Returns 24-bit RGB colors (background/text) via out params (may be -1 for fallback usage).
+void GetPanelThemeColorsMac(int* outBg, int* outTx);
+#endif

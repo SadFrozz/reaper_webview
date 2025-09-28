@@ -57,15 +57,26 @@ extern const char* kTitleBase;
 // (deprecated globals for title caching removed; caching now per-instance)
 
 extern std::string g_instanceId; // текущий активный id (для новых вызовов API)
+// Extended tracking: explicit active (focused) and last-focused instance ids.
+// g_instanceId is still used as context during creation; g_activeInstanceId reflects the
+// instance last activated via user focus or command; g_lastFocusedInstanceId keeps the
+// previous active to support "last" resolution semantics.
+extern std::string g_activeInstanceId;
+extern std::string g_lastFocusedInstanceId;
+extern std::string g_focusPrimaryInstanceId; // последний инстанс с реальным пользовательским фокусом (edit/webview)
 enum class ShowPanelMode { Unset, Hide, Docker, Always };
 
 // ================= Multi-instance support =================
 struct WebViewInstanceRecord {
   std::string id;
   HWND hwnd = nullptr;
+  // Monotonic timestamp (GetTickCount on Win / mach_absolute_time mapped on mac) of last real focus
+  // Updated in UpdateFocusChain; used to resolve search target across multiple docks
+  unsigned long lastFocusTick = 0;
   std::string titleOverride;      // per-instance title override (defaults kTitleBase)
   ShowPanelMode panelMode = ShowPanelMode::Unset;
   std::string lastUrl;
+  bool basicCtxMenu = false;      // if true -> only Dock/Undock + Close shown
   // Docking persistence per instance
   int  wantDockOnCreate = -1;     // -1 unknown, 0 undock, 1 dock
   int  lastDockIdx = -1;
@@ -73,6 +84,19 @@ struct WebViewInstanceRecord {
 #ifdef _WIN32
   ICoreWebView2Controller* controller = nullptr; // stored raw; lifetime managed in webview_win.cpp
   ICoreWebView2*           webview    = nullptr;
+  struct ICoreWebView2Environment* environment = nullptr; // keep environment to fabricate find options
+  WNDPROC origHostWndProc = nullptr; // original WndProc of host window (subclass to capture focus intent)
+  // Focus event tokens (controller GotFocus/LostFocus) to improve multi-docker focus resolution
+  struct EventRegistrationToken { long long value; }; // lightweight local definition to avoid including full headers here
+  EventRegistrationToken gotFocusToken{};  // valid if controller focus event subscribed
+  EventRegistrationToken lostFocusToken{}; // valid if controller focus event subscribed
+    // Native Find API (WebView2). Pointers acquired lazily; may be null if runtime doesn't support.
+    struct ICoreWebView2Find*         nativeFind = nullptr;       // ICoreWebView2Find instance
+    struct ICoreWebView2FindOptions*  nativeFindOpts = nullptr;   // Options reused between starts
+    bool nativeFindActive = false;                                // true once Start succeeded
+    // Event tokens (valid only while nativeFindActive)
+    unsigned long long nativeFindActiveToken = 0;                 // ActiveMatchIndexChanged token placeholder
+    unsigned long long nativeFindCountToken = 0;                  // MatchCountChanged token placeholder
   // Per-instance title bar (Windows)
   HWND     titleBar       = nullptr;
   HFONT    titleFont      = nullptr;
@@ -83,15 +107,63 @@ struct WebViewInstanceRecord {
   WKWebView* webView = nil;
   // Per-instance title bar (macOS)
   NSView*      titleBarView = nil;
-  NSTextField* titleLabel   = nil;
+  // Manual text drawing (Windows parity) - no NSTextField now
+  // NSTextField removed: text stored in panelTitleString and drawn in drawRect
+  // Cached colors (24-bit RGB) for mac panel to avoid recomputing each layout
+  int          titleTextColor = -1;
+  int          titleBkColor   = -1;
+  std::string  panelTitleString; // current displayed panel text (domain - pageTitle)
 #endif
   // Per-instance cached captions
   std::string lastTabTitle;
   std::string lastWndText;
+  // ================= Find bar state (per-instance) =================
+  bool showFindBar = false;          // visibility flag
+  std::string findQuery;             // current search query (raw text)
+  bool findCaseSensitive = false;    // case sensitivity flag
+  bool findHighlightAll = false;     // highlight all occurrences flag
+  int  findCurrentIndex = 0;         // 1-based current match index (0 if none)
+  int  findTotalMatches = 0;         // total matches (0 if unknown)
+  // Highlight-all parity (mac native + Windows): mac использует JS подсветку поверх native find
+  std::string findLastHighlightedQuery; // кэш последнего запроса для которого строили span'ы
+  bool findLastHighlightedCase = false; // кэш флага caseSensitive при построении подсветки
+#ifdef _WIN32
+  HWND findBarWnd = nullptr;         // container window for find bar
+  HWND findEdit = nullptr;           // edit control handle
+  HWND findBtnPrev = nullptr;        // previous match button
+  HWND findBtnNext = nullptr;        // next match button
+  HWND findChkCase = nullptr;        // case sensitive checkbox
+  HWND findChkHighlight = nullptr;   // highlight all checkbox
+  HWND findLblCase = nullptr;        // static label for case checkbox (text)
+  HWND findLblHighlight = nullptr;   // static label for highlight all checkbox (text)
+  HWND findCounterStatic = nullptr;  // static label n/N
+  HWND findBtnClose = nullptr;       // close button
+  // Navigation button bitmaps (3-state horizontal strips: normal|hot|down)
+  HBITMAP bmpPrev = nullptr;
+  HBITMAP bmpNext = nullptr;
+  int bmpPrevW = 0, bmpPrevH = 0; // full strip dimensions
+  int bmpNextW = 0, bmpNextH = 0;
+  bool prevHot=false, prevDown=false;
+  bool nextHot=false, nextDown=false;
+#else
+  NSView* findBarView = nil;         // container view
+  NSTextField* findEdit = nil;       // text input
+  NSButton* findBtnPrev = nil;       // prev
+  NSButton* findBtnNext = nil;       // next
+  NSButton* findChkCase = nil;       // case checkbox
+  NSButton* findChkHighlight = nil;  // highlight all checkbox
+  NSTextField* findCounterLabel = nil; // n/N label
+  NSButton* findBtnClose = nil;      // close button
+#endif
 };
 
 extern std::unordered_map<std::string, std::unique_ptr<WebViewInstanceRecord>> g_instances; // id -> record
 extern int g_randomInstanceCounter; // for random ids
+// Exported find navigation state (shared between main.mm and webview_win.cpp)
+#ifdef _WIN32
+extern bool g_findEnterActive;
+extern DWORD g_findLastEnterTick;
+#endif
 WebViewInstanceRecord* GetInstanceById(const std::string& id);
 WebViewInstanceRecord* EnsureInstanceAndMaybeNavigate(const std::string& id, const std::string& url, bool navigate, const std::string& newTitle, ShowPanelMode newMode);
 std::string NormalizeInstanceId(const std::string& raw, bool* outWasRandom=nullptr);
@@ -110,9 +182,11 @@ extern int   g_want_dock_on_create; // -1 unknown(first run), 0 undock, 1 dock (
 #ifdef _WIN32
 extern int      g_titleBarH;
 extern int      g_titlePadX;
+extern int      g_findBarH;
 #else
 extern CGFloat      g_titleBarH;
 extern CGFloat      g_titlePadX;
+extern CGFloat      g_findBarH;
 #endif
 
 // команды
@@ -127,3 +201,5 @@ void NavigateExisting(const std::string& url); // legacy single active instance 
 void NavigateExistingInstance(const std::string& instanceId, const std::string& url);
 // per-instance open/activate (creates window if missing)
 void OpenOrActivateInstance(const std::string& instanceId, const std::string& url);
+// focus chain updater
+void UpdateFocusChain(const std::string& inst);
