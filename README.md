@@ -1,4 +1,4 @@
-﻿# Reaper WebView Extension
+# Reaper WebView Extension
 
 Embed modern web content (Edge WebView2 on Windows / WKWebView on macOS) inside REAPER as a dockable / floating panel with multi‑instance support and a scriptable API.
 
@@ -9,7 +9,6 @@ Embed modern web content (Edge WebView2 on Windows / WKWebView on macOS) inside 
 * [**Информация на русском**](#информация-на-русском)
 * [**Information in English**](#information-in-english)
 
----
 ---
 
 ## Оглавление / Contents
@@ -36,7 +35,6 @@ Embed modern web content (Edge WebView2 on Windows / WKWebView on macOS) inside 
   * [License](#license)
   * [Status](#status)
 
----
 ---
 
 ## Информация на русском
@@ -132,7 +130,6 @@ MIT (см. `LICENSE`).
 ### Статус
 Активная разработка (ядро и поиск стабильны).
 
----
 ---
 
 ## Information in English
@@ -233,12 +230,5 @@ MIT (see `LICENSE`). Third‑party components keep original licenses.
 Active (core + find stable). API surface expanding.
 
 ---
----
 
 Feel free to open issues for bugs, enhancement ideas, or clarifications.
-
-## Лицензия
-MIT (см. `LICENSE`).
-
----
-
