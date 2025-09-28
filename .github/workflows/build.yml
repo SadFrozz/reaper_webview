@@ -173,11 +173,18 @@ jobs:
             CHANGELOG_SECTION="(No specific changelog section found for $TAG)"
           fi
 
+          # Detect prerelease markers (Beta/Alpha) in the CHANGELOG header line for this tag
+          PRERELEASE=false
+          if grep -E "^## ${TAG} (Alpha|Beta)" CHANGELOG.md >/dev/null 2>&1; then
+            PRERELEASE=true
+          fi
+
           {
-            echo "release_body<<'EOF'"
+            echo "release_body<<EOF"
             echo "Reaper WebView Extension"
             echo ""
             echo "Tag: $TAG"
+            if [ "$PRERELEASE" = true ]; then echo "(Pre-release)"; fi
             echo ""
             echo "Changelog:"; echo ""; echo "$CHANGELOG_SECTION" | sed 's/^/  /'
             echo ""
@@ -191,13 +198,15 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
+          echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Reaper WebView ${{ github.ref_name }}
           body: ${{ steps.notes.outputs.release_body }}
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.notes.outputs.prerelease }}
           files: |
             dist/reaper_webview_windows.zip
             dist/reaper_webview_macos.zip
