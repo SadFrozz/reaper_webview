@@ -26,13 +26,48 @@
 #include "globals.h"   // extern-глобалы/прототипы
 #include "helpers.h"
 
+#include <algorithm>
+
+#ifdef __APPLE__
+// Forward declarations for mac native find functions (WKWebView find API)
+extern "C" void MacFindStartOrUpdate(struct WebViewInstanceRecord* rec);
+extern "C" void MacFindNavigate(struct WebViewInstanceRecord* rec, bool forward);
+extern "C" void MacFindClose(struct WebViewInstanceRecord* rec);
+#ifdef __OBJC__
+#include <objc/runtime.h>
+#import <Cocoa/Cocoa.h>
+@interface RWVUrlDlgHandler : NSObject
+@property(assign) NSPanel* panel;
+@property(assign) NSTextField* edit;
+@property(assign) NSButton* btn1;
+@property(assign) NSButton* btn2;
+@property(assign) NSButton* btnCancel;
+@property(assign) int mode;
+@property(assign) BOOL accepted;
+@property(retain) NSString* token;
+- (void)onClick:(id)sender;
+@end
+@implementation RWVUrlDlgHandler
+- (void)onClick:(id)sender {
+  if(sender==_btnCancel){ _accepted=NO; [_panel orderOut:nil]; [NSApp stopModal]; return; }
+  if(_mode==1){ _token = (sender==_btn1)?@"current":@"random"; }
+  else if(_mode==2){ _token = (sender==_btn1)?@"last":@"random"; }
+  else { _token=@"random"; }
+  _accepted=YES; [_panel orderOut:nil]; [NSApp stopModal];
+}
+@end
+#endif
+#endif
+
+// API navigation function declared in api.h
+
 // ======================== Title panel (creation + logic stays here) =========================
 #ifndef IDC_FIND_EDIT
 #define IDC_FIND_EDIT     2101
 #define IDC_FIND_PREV     2102
 #define IDC_FIND_NEXT     2103
 #define IDC_FIND_CASE     2104
-#define IDC_FIND_HILITE   2105
+#define IDC_FIND_HILITE   2105 // deprecated (UI removed)
 #define IDC_FIND_COUNTER  2106
 #define IDC_FIND_CLOSE    2107
 #endif
@@ -94,28 +129,31 @@ static LRESULT CALLBACK RWVNavBtnProc(HWND h, UINT m, WPARAM w, LPARAM l)
   }
   return callOrig();
 }
-static DWORD g_findLastEnterTick = 0; // timestamp of last Enter press in find edit
-static bool  g_findEnterActive = false; // true while we suppress focus changes
+DWORD g_findLastEnterTick = 0; // timestamp of last Enter press in find edit (exported for accel handler)
+bool  g_findEnterActive = false; // true while we suppress focus changes (exported)
 // Custom message for deferred refocus after handling Enter inside find edit
 static const UINT WM_RWV_FIND_REFOCUS = WM_APP + 0x452;
 static HHOOK g_rwvMsgHook = nullptr; // message hook to pre-swallow VK_RETURN
 static HWND  g_lastFindEdit = nullptr; // last known find edit hwnd
 // Simple inline navigation (placeholder for real search logic) to avoid button focus side-effects
-static void RWV_FindNavigateInline(WebViewInstanceRecord* rec, bool fwd)
-{
-  if (!rec) return;
-  LogF("[Find] nav %s (inline) query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
-  // Future: update indices and call UpdateFindCounter(rec) after search results
-}
+// Inline navigate helper removed: now directly call native WinFindNavigate
+#ifdef _WIN32
+extern void WinFindNavigate(struct WebViewInstanceRecord* rec, bool forward);
+#endif
+// Forward declare focus chain updater (defined later)
+// forward now provided in globals.h; keep for local compiler units that included only main.mm prior
+// (no static, exported)
+void UpdateFocusChain(const std::string& inst);
 static LRESULT CALLBACK RWVFindEditProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
   switch(m){
     case WM_GETDLGCODE: return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTMESSAGE;
-    case WM_SETFOCUS: LogRaw("[FindFocus] edit WM_SETFOCUS"); g_lastFindEdit = h; break;
+    case WM_SETFOCUS: {
+      LogRaw("[FindFocus] edit WM_SETFOCUS"); g_lastFindEdit = h; HWND host = GetParent(GetParent(h)); WebViewInstanceRecord* rec = GetInstanceByHwnd(host); if (rec) UpdateFocusChain(rec->id); break; }
     case WM_KEYDOWN:
       if (w==VK_RETURN){
         HWND host = GetParent(GetParent(h)); WebViewInstanceRecord* rec = GetInstanceByHwnd(host); bool shift = (GetKeyState(VK_SHIFT)&0x8000)!=0;
-        if (rec){ bool fwd = !shift; g_findEnterActive = true; g_findLastEnterTick = GetTickCount(); RWV_FindNavigateInline(rec, fwd); SetFocus(h); SendMessageW(h, EM_SETSEL, (WPARAM)-1, (LPARAM)-1); HWND findBar = GetParent(h); if (findBar && IsWindow(findBar)) PostMessage(findBar, WM_RWV_FIND_REFOCUS, (WPARAM)h, 0); return 0; }
+  if (rec){ bool fwd = !shift; g_findEnterActive = true; g_findLastEnterTick = GetTickCount(); WinFindNavigate(rec, fwd); SetFocus(h); SendMessageW(h, EM_SETSEL, (WPARAM)-1, (LPARAM)-1); HWND findBar = GetParent(h); if (findBar && IsWindow(findBar)) PostMessage(findBar, WM_RWV_FIND_REFOCUS, (WPARAM)h, 0); return 0; }
       }
       break;
     case WM_CHAR: if (w=='\r') return 0; break;
@@ -127,6 +165,36 @@ static LRESULT CALLBACK RWVFindEditProc(HWND h, UINT m, WPARAM w, LPARAM l)
   }
   return CallWindowProcW(s_origFindEditProc,h,m,w,l);
 }
+
+#ifdef _WIN32
+// Host window subclass to capture focus transitions even when WebView holds internal focus
+static LRESULT CALLBACK RWVHostSubclassProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(h);
+  switch(m){
+    case WM_MOUSEACTIVATE:
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_SETFOCUS:
+    case WM_ACTIVATE:
+    case WM_SHOWWINDOW:
+    case WM_NCLBUTTONDOWN:
+    case WM_NCRBUTTONDOWN:
+    case WM_WINDOWPOSCHANGED: // 0x0047 - layout/visibility changes (docker tab activation)
+    {
+      if(rec){
+        UpdateFocusChain(rec->id);
+        if (g_activeInstanceId != rec->id){ if(!g_activeInstanceId.empty()) g_lastFocusedInstanceId = g_activeInstanceId; g_activeInstanceId = rec->id; }
+        LogF("[FocusTick] hostMsg=%u id='%s' tick=%lu", (unsigned)m, rec->id.c_str(), (unsigned long)rec->lastFocusTick);
+      }
+      break;
+    }
+  }
+  if(rec && rec->origHostWndProc) return CallWindowProc(rec->origHostWndProc,h,m,w,l);
+  return DefWindowProc(h,m,w,l);
+}
+#endif
 
 
 static void DestroyTitleBarResources(WebViewInstanceRecord* rec)
@@ -154,8 +222,8 @@ static LRESULT CALLBACK RWVTitleBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
       // invalidate find bar to sync colors
       if (rec && rec->findBarWnd) {
         InvalidateRect(rec->findBarWnd,nullptr,TRUE);
-        HWND kids[9] = { rec->findEdit, rec->findBtnPrev, rec->findBtnNext, rec->findChkCase, rec->findLblCase, rec->findChkHighlight, rec->findLblHighlight, rec->findCounterStatic, rec->findBtnClose };
-        for (int i=0;i<9;++i) if (kids[i]) InvalidateRect(kids[i],nullptr,TRUE);
+  HWND kids[7] = { rec->findEdit, rec->findBtnPrev, rec->findBtnNext, rec->findChkCase, rec->findLblCase, rec->findCounterStatic, rec->findBtnClose };
+  for (int i=0;i<7;++i) if (kids[i]) InvalidateRect(kids[i],nullptr,TRUE);
       }
       return 0;
     }
@@ -184,6 +252,7 @@ static void EnsureFindBarCreated(HWND hwnd)
   rec->findBarWnd = CreateWindowExW(0, L"RWVFindBar", L"", WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
                                    0,0,10,g_findBarH, hwnd, (HMENU)(INT_PTR)3002, (HINSTANCE)g_hInst, nullptr);
   if (!rec->findBarWnd) return;
+  rec->findHighlightAll = true; // force always-highlight on Windows
 
   int h=g_findBarH-8; if (h<16) h=16; int y=4;
   // Создаём в порядке логики (edit слева, навигация, опции, счётчик; close будет позиционироваться справа в layout)
@@ -235,13 +304,13 @@ static void EnsureFindBarCreated(HWND hwnd)
   // Create checkboxes without text; labels will be separate STATIC controls for consistent themed text color
   rec->findChkCase = CreateWindowExW(0,L"BUTTON",L"",WS_CHILD|BS_AUTOCHECKBOX,0,y,18,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CASE,(HINSTANCE)g_hInst,nullptr);
   rec->findLblCase = CreateWindowExW(0,L"STATIC",L"Case Sensitive",WS_CHILD|SS_CENTERIMAGE,0,y,110,h, rec->findBarWnd,nullptr,(HINSTANCE)g_hInst,nullptr);
-  rec->findChkHighlight = CreateWindowExW(0,L"BUTTON",L"",WS_CHILD|BS_AUTOCHECKBOX,0,y,18,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_HILITE,(HINSTANCE)g_hInst,nullptr);
-  rec->findLblHighlight = CreateWindowExW(0,L"STATIC",L"Highlight All",WS_CHILD|SS_CENTERIMAGE,0,y,100,h, rec->findBarWnd,nullptr,(HINSTANCE)g_hInst,nullptr);
+  rec->findChkHighlight = nullptr; // removed UI
+  rec->findLblHighlight = nullptr; // removed UI
   rec->findCounterStatic = CreateWindowExW(0,L"STATIC",L"0/0",WS_CHILD|SS_CENTERIMAGE,0,y,60,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_COUNTER,(HINSTANCE)g_hInst,nullptr);
   rec->findBtnClose = CreateWindowExW(0,L"BUTTON",L"X",WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,0,y,24,h, rec->findBarWnd,(HMENU)(INT_PTR)IDC_FIND_CLOSE,(HINSTANCE)g_hInst,nullptr);
 
   HFONT useFont = rec->titleFont ? rec->titleFont : (HFONT)SendMessage(hwnd, WM_GETFONT,0,0);
-  HWND ctrls[] = { rec->findEdit, rec->findBtnPrev, rec->findBtnNext, rec->findChkCase, rec->findLblCase, rec->findChkHighlight, rec->findLblHighlight, rec->findCounterStatic, rec->findBtnClose };
+  HWND ctrls[] = { rec->findEdit, rec->findBtnPrev, rec->findBtnNext, rec->findChkCase, rec->findLblCase, rec->findCounterStatic, rec->findBtnClose };
   for (HWND c : ctrls) if (c && useFont) SendMessage(c, WM_SETFONT, (WPARAM)useFont, TRUE);
   // Create overlay statics over checkboxes to capture clicks without moving focus
   if (rec->findChkCase) {
@@ -249,11 +318,7 @@ static void EnsureFindBarCreated(HWND hwnd)
     HWND ov = CreateWindowExW(0,L"STATIC",L"",WS_CHILD|SS_NOTIFY,pt.x,pt.y,w,h2,rec->findBarWnd,(HMENU)(INT_PTR)(IDC_FIND_CASE+1000),(HINSTANCE)g_hInst,nullptr);
     if(ov) ShowWindow(ov,SW_SHOWNA);
   }
-  if (rec->findChkHighlight) {
-    RECT rc; GetWindowRect(rec->findChkHighlight,&rc); POINT pt{rc.left,rc.top}; ScreenToClient(rec->findBarWnd,&pt); int w=rc.right-rc.left, h2=rc.bottom-rc.top;
-    HWND ov = CreateWindowExW(0,L"STATIC",L"",WS_CHILD|SS_NOTIFY,pt.x,pt.y,w,h2,rec->findBarWnd,(HMENU)(INT_PTR)(IDC_FIND_HILITE+1000),(HINSTANCE)g_hInst,nullptr);
-    if(ov) ShowWindow(ov,SW_SHOWNA);
-  }
+  // highlight overlay removed
   // NOTE: Optionally could disable visual themes via SetWindowTheme, but we avoid extra deps.
   if (rec->findEdit && !s_origFindEditProc) s_origFindEditProc = (WNDPROC)SetWindowLongPtr(rec->findEdit, GWLP_WNDPROC, (LONG_PTR)RWVFindEditProc);
   if (rec->findBtnPrev && !s_origPrevBtnProc){ s_origPrevBtnProc = (WNDPROC)SetWindowLongPtr(rec->findBtnPrev, GWLP_WNDPROC, (LONG_PTR)RWVNavBtnProc); LogRaw("[FindNavBtn] subclass prev"); }
@@ -287,7 +352,7 @@ static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
       HBRUSH br = CreateSolidBrush(bk);
       FillRect(dc,&r,br); DeleteObject(br);
       // force children redraw for color sync
-      if (rec){ HWND kids[7]={rec->findChkCase,rec->findLblCase,rec->findChkHighlight,rec->findLblHighlight,rec->findBtnPrev,rec->findBtnNext,rec->findCounterStatic}; for (HWND c: kids) if (c) InvalidateRect(c,nullptr,TRUE);}      
+  if (rec){ HWND kids[5]={rec->findChkCase,rec->findLblCase,rec->findBtnPrev,rec->findBtnNext,rec->findCounterStatic}; for (HWND c: kids) if (c) InvalidateRect(c,nullptr,TRUE);}      
       EndPaint(h,&ps); return 0;
     }
     case WM_COMMAND:
@@ -297,7 +362,7 @@ static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
       WebViewInstanceRecord* rec = GetInstanceByHwnd(host);
       // Overlay statics map to underlying checkboxes
       if (cid==IDC_FIND_CASE+1000 && rec && rec->findChkCase){ SendMessage(rec->findChkCase,BM_CLICK,0,0); if(rec->findEdit) PostMessage(h, WM_RWV_FIND_REFOCUS,(WPARAM)rec->findEdit,0); return 0; }
-      if (cid==IDC_FIND_HILITE+1000 && rec && rec->findChkHighlight){ SendMessage(rec->findChkHighlight,BM_CLICK,0,0); if(rec->findEdit) PostMessage(h, WM_RWV_FIND_REFOCUS,(WPARAM)rec->findEdit,0); return 0; }
+  // highlight overlay command removed
       if (host) return (LRESULT)SendMessageW(host, m, w, l);
       break;
     }
@@ -359,8 +424,8 @@ static LRESULT CALLBACK RWVFindBarProc(HWND h, UINT m, WPARAM w, LPARAM l)
   auto hitInBox=[&](HWND btn){ if(!btn) return false; RECT rc; GetClientRect(btn,&rc); int box=24; int w=rc.right-rc.left; int h2=rc.bottom-rc.top; RECT inner=rc; if(w>box){ int dx=(w-box)/2; inner.left+=dx; inner.right=inner.left+box; } if(h2>box){ int dy=(h2-box)/2; inner.top+=dy; inner.bottom=inner.top+box; } POINT local=pt; MapWindowPoints(h,btn,&local,1); return PtInRect(&inner,local)!=0; };
         if(child==rec->findBtnPrev && hitInBox(rec->findBtnPrev)){ rec->prevDown=true; InvalidateRect(rec->findBtnPrev,nullptr,TRUE); }
         else if(child==rec->findBtnNext && hitInBox(rec->findBtnNext)){ rec->nextDown=true; InvalidateRect(rec->findBtnNext,nullptr,TRUE); }
-        if (child == rec->findLblCase && rec->findChkCase){ SendMessage(rec->findChkCase, BM_CLICK, 0, 0); if(rec->findEdit) SetFocus(rec->findEdit); return 0; }
-        if (child == rec->findLblHighlight && rec->findChkHighlight){ SendMessage(rec->findChkHighlight, BM_CLICK, 0, 0); if(rec->findEdit) SetFocus(rec->findEdit); return 0; }
+  if (child == rec->findLblCase && rec->findChkCase){ SendMessage(rec->findChkCase, BM_CLICK, 0, 0); if(rec->findEdit) SetFocus(rec->findEdit); return 0; }
+  // highlight label removed
       }
       break;
     }
@@ -451,33 +516,27 @@ void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible)
       int w = rc.right-rc.left; int h = g_findBarH; int y = (rc.bottom-rc.top) - h;
       MoveWindow(rec->findBarWnd, 0, y, w, h, TRUE);
       ShowWindow(rec->findBarWnd, SW_SHOWNA);
-      // Layout: edit, prev, next, case, highlight, counter (всё слева), close закреплён справа
-  int pad=0; int curX=pad; int innerH=h-8; if(innerH<16) innerH=16; int yC=(h-innerH)/2;
-  int btnBox=24; // logical slot width now equals visual width (no extra spacing)
-  int btnVisual=24; // visual box
+      // Layout: фиксированная ширина edit (180), остальное как раньше. Паддинг 20 по краям.
+      int pad=20; int curX=pad; int innerH=h-8; if(innerH<16) innerH=16; int yC=(h-innerH)/2;
+      int btnBox=24; int btnVisual=24; 
       auto showCtrl=[&](HWND ctrl){ if(ctrl) ShowWindow(ctrl,SW_SHOWNA); };
-  if (rec->findEdit) { MoveWindow(rec->findEdit,curX,yC,180,innerH,TRUE); showCtrl(rec->findEdit); curX+=180+8; }
-  if (rec->findBtnPrev){
-    MoveWindow(rec->findBtnPrev,curX,(h-btnVisual)/2,btnBox,btnVisual,TRUE);
-    showCtrl(rec->findBtnPrev);
-    // Increased gap between prev and next buttons by +4 (was +4, now +8) per user request
-    curX+=btnBox+8;
-  }
-  if (rec->findBtnNext){ MoveWindow(rec->findBtnNext,curX,(h-btnVisual)/2,btnBox,btnVisual,TRUE); showCtrl(rec->findBtnNext); curX+=btnBox+10; }
-  // Case checkbox + label
-  if (rec->findChkCase){ MoveWindow(rec->findChkCase,curX,yC,18,innerH,TRUE); showCtrl(rec->findChkCase); curX+=18; }
-  if (rec->findLblCase){ MoveWindow(rec->findLblCase,curX,yC,98,innerH,TRUE); showCtrl(rec->findLblCase); curX+=98+8; }
-  // Highlight checkbox + label
-  // Reintroduce highlight group left shift (10px), and extra 10px before counter
-  int highlightShift = 10; curX -= highlightShift; if (curX < pad) curX = pad;
-  if (rec->findChkHighlight){ MoveWindow(rec->findChkHighlight,curX,yC,18,innerH,TRUE); showCtrl(rec->findChkHighlight); curX+=18; }
-  if (rec->findLblHighlight){ MoveWindow(rec->findLblHighlight,curX,yC,92,innerH,TRUE); showCtrl(rec->findLblHighlight); curX+=92+8; }
-  curX -= 10; if (curX < pad) curX = pad; // additional 10px shift before counter
-  if (rec->findCounterStatic){ MoveWindow(rec->findCounterStatic,curX,yC,60,innerH,TRUE); showCtrl(rec->findCounterStatic); curX+=60+6; }
-      int closeW=24; int rightX = w - pad - closeW;
+      int editW=180; if (rec->findEdit) { MoveWindow(rec->findEdit,curX,yC,editW,innerH,TRUE); showCtrl(rec->findEdit); curX+=editW+8; }
+      int closeW=24; int rightX = w - pad - closeW; // для кнопки закрытия (позиционируем в конце)
+      if (rec->findBtnPrev){
+        MoveWindow(rec->findBtnPrev,curX,(h-btnVisual)/2,btnBox,btnVisual,TRUE);
+        showCtrl(rec->findBtnPrev);
+        curX+=btnBox+8; // gap после prev
+      }
+      if (rec->findBtnNext){ MoveWindow(rec->findBtnNext,curX,(h-btnVisual)/2,btnBox,btnVisual,TRUE); showCtrl(rec->findBtnNext); curX+=btnBox+10; }
+      if (rec->findChkCase){ MoveWindow(rec->findChkCase,curX,yC,18,innerH,TRUE); showCtrl(rec->findChkCase); curX+=18; }
+      if (rec->findLblCase){ MoveWindow(rec->findLblCase,curX,yC,98,innerH,TRUE); showCtrl(rec->findLblCase); curX+=98+8; }
+      if (curX < pad) curX = pad;
+      if (rec->findCounterStatic){ MoveWindow(rec->findCounterStatic,curX,yC,60,innerH,TRUE); showCtrl(rec->findCounterStatic); curX+=60+6; }
+      // Кнопка закрытия справа с паддингом
       if (rec->findBtnClose){ MoveWindow(rec->findBtnClose,rightX,yC,closeW,innerH,TRUE); SetWindowPos(rec->findBtnClose,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE); showCtrl(rec->findBtnClose); }
       bottom = g_findBarH;
       UpdateFindCounter(rec);
+      LogF("[FindBarLayout] inst=%s w=%d editW=%d pad=%d curXend=%d", rec->id.c_str(), w, editW, pad, curX);
     }
   } else if (rec && rec->findBarWnd) {
     ShowWindow(rec->findBarWnd, SW_HIDE);
@@ -624,7 +683,6 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
 @property (nonatomic, strong) NSButton*   btnPrev;
 @property (nonatomic, strong) NSButton*   btnNext;
 @property (nonatomic, strong) NSButton*   chkCase;
-@property (nonatomic, strong) NSButton*   chkHighlight;
 @property (nonatomic, strong) NSTextField* lblCounter;
 @property (nonatomic, strong) NSButton*   btnClose;
 @end
@@ -637,7 +695,7 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
 {
   if (commandSelector == @selector(insertNewline:) || commandSelector == @selector(insertLineBreak:)) {
     bool shift = (([NSEvent modifierFlags] & NSEventModifierFlagShift) != 0);
-    WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(rec){ bool fwd = !shift; LogF("[Find][mac] nav %s via Enter query='%s'", fwd?"next":"prev", rec->findQuery.c_str()); MacUpdateFindCounter(rec);}    
+  WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(rec){ bool fwd = !shift; LogF("[Find][mac] nav %s via Enter query='%s'", fwd?"next":"prev", rec->findQuery.c_str()); MacFindNavigate(rec, fwd); MacUpdateFindCounter(rec);}    
     return YES; // swallow
   }
   return NO;
@@ -646,9 +704,9 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
 {
   WebViewInstanceRecord* rec = GetInstanceByHwnd(self.rwvHostHWND); if(!rec) return;
   rec->findQuery = self.txtField.stringValue ? [self.txtField.stringValue UTF8String] : "";
-  rec->findCurrentIndex = 0; rec->findTotalMatches = 0; // reset until real search implemented
+  rec->findCurrentIndex = 0; rec->findTotalMatches = 0;
   LogF("[Find] query change '%s' (mac)", rec->findQuery.c_str());
-  // Update counter label
+  MacFindStartOrUpdate(rec);
   int cur=rec->findCurrentIndex, tot=rec->findTotalMatches; self.lblCounter.stringValue=[NSString stringWithFormat:@"%d/%d",cur,tot];
 }
 - (void)updateCounter
@@ -665,11 +723,9 @@ static void SetTitleBarText(HWND hwnd, const std::string& s){ WebViewInstanceRec
     [self setHidden:YES];
     LayoutTitleBarAndWebView(self.rwvHostHWND, rec->titleBarView && ![rec->titleBarView isHidden]);
   } else if (sender == self.btnPrev || sender == self.btnNext) {
-    bool fwd = (sender == self.btnNext); LogF("[Find] nav %s (mac) query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
+  bool fwd = (sender == self.btnNext); LogF("[Find] nav %s (mac) query='%s'", fwd?"next":"prev", rec->findQuery.c_str()); MacFindNavigate(rec, fwd);
   } else if (sender == self.chkCase) {
-    rec->findCaseSensitive = (self.chkCase.state == NSControlStateValueOn); LogF("[Find] case=%d (mac)", (int)rec->findCaseSensitive);
-  } else if (sender == self.chkHighlight) {
-    rec->findHighlightAll = (self.chkHighlight.state == NSControlStateValueOn); LogF("[Find] highlight=%d (mac)", (int)rec->findHighlightAll);
+  rec->findCaseSensitive = (self.chkCase.state == NSControlStateValueOn); LogF("[Find] case=%d (mac)", (int)rec->findCaseSensitive); MacFindStartOrUpdate(rec);
   }
   [self updateCounter];
 }
@@ -692,7 +748,7 @@ static void EnsureFindBarCreated(HWND hwnd)
   fb.rwvHostHWND = hwnd;
   [fb setAutoresizingMask:(NSViewWidthSizable | NSViewMaxYMargin)];
   // Replicate Windows ordering & spacing semantics
-  CGFloat pad=0; CGFloat curX=pad; CGFloat barH=g_findBarH; CGFloat innerH=barH-8; if(innerH<16) innerH=16; CGFloat centerY = barH * 0.5f;
+  CGFloat pad=20; CGFloat curX=pad; CGFloat barH=g_findBarH; CGFloat innerH=barH-8; if(innerH<16) innerH=16; CGFloat centerY = barH * 0.5f;
   // Edit (fixed width 180)
   fb.txtField = [[NSTextField alloc] initWithFrame:NSMakeRect(curX, centerY - innerH/2, 180, innerH)];
   [fb.txtField setAutoresizingMask:NSViewMaxXMargin]; fb.txtField.delegate=fb; curX += 180 + 8;
@@ -703,7 +759,7 @@ static void EnsureFindBarCreated(HWND hwnd)
   fb.chkCase = [[NSButton alloc] initWithFrame:NSMakeRect(curX, centerY - innerH/2, 120, innerH)]; [fb.chkCase setButtonType:NSButtonTypeSwitch]; [fb.chkCase setTitle:@"Case Sensitive"]; [fb.chkCase setTarget:fb]; [fb.chkCase setAction:@selector(commonButtonAction:)]; curX += 120 + 8;
   // Highlight All (shift left 10 like Windows before placing)
   curX -= 10; if(curX<pad) curX=pad;
-  fb.chkHighlight = [[NSButton alloc] initWithFrame:NSMakeRect(curX, centerY - innerH/2, 120, innerH)]; [fb.chkHighlight setButtonType:NSButtonTypeSwitch]; [fb.chkHighlight setTitle:@"Highlight All"]; [fb.chkHighlight setTarget:fb]; [fb.chkHighlight setAction:@selector(commonButtonAction:)]; curX += 120 + 8;
+  // Highlight All control removed (always-on highlight semantics)
   // Additional left shift 10 before counter
   curX -= 10; if(curX<pad) curX=pad;
   // Counter label: unified creation; apply global optical shift (positive = down)
@@ -721,7 +777,7 @@ static void EnsureFindBarCreated(HWND hwnd)
   [fb addSubview:fb.btnPrev];
   [fb addSubview:fb.btnNext];
   [fb addSubview:fb.chkCase];
-  [fb addSubview:fb.chkHighlight];
+  // highlight removed
   [fb addSubview:fb.lblCounter];
   [fb addSubview:fb.btnClose];
 
@@ -730,9 +786,10 @@ static void EnsureFindBarCreated(HWND hwnd)
   rec->findBtnPrev = fb.btnPrev;
   rec->findBtnNext = fb.btnNext;
   rec->findChkCase = fb.chkCase;
-  rec->findChkHighlight = fb.chkHighlight;
+  rec->findChkHighlight = nil; // removed
   rec->findCounterLabel = fb.lblCounter;
   rec->findBtnClose = fb.btnClose;
+  rec->findHighlightAll = true; // force always-highlight (macOS)
 
   [host addSubview:fb positioned:NSWindowBelow relativeTo:nil];
   [fb setHidden:YES];
@@ -743,7 +800,7 @@ static void EnsureFindBarCreated(HWND hwnd)
 static void MacLayoutFindBar(WebViewInstanceRecord* rec)
 {
   if(!rec || !rec->findBarView) return; NSView* fb = rec->findBarView; CGFloat w = fb.frame.size.width; CGFloat h = g_findBarH;
-  CGFloat pad=0; CGFloat curX=pad; CGFloat barH=h; CGFloat innerH=barH-8; if(innerH<16) innerH=16; CGFloat centerY = barH*0.5f;
+  CGFloat pad=20; CGFloat curX=pad; CGFloat barH=h; CGFloat innerH=barH-8; if(innerH<16) innerH=16; CGFloat centerY = barH*0.5f;
   // All controls share identical vertical centering; counter uses global optical shift
   CGFloat baseY = centerY-innerH/2; // strict center for all controls
   // Edit
@@ -756,7 +813,7 @@ static void MacLayoutFindBar(WebViewInstanceRecord* rec)
   if(rec->findChkCase){ [(NSView*)rec->findChkCase setFrame:NSMakeRect(curX, centerY-innerH/2,120,innerH)]; curX+=120+8; }
   // Highlight group shift
   curX-=10; if(curX<pad) curX=pad;
-  if(rec->findChkHighlight){ [(NSView*)rec->findChkHighlight setFrame:NSMakeRect(curX, centerY-innerH/2,120,innerH)]; curX+=120+8; }
+  // highlight removed
   // Counter shift
   curX-=10; if(curX<pad) curX=pad;
   if(rec->findCounterLabel){ CGFloat finalY = baseY - g_macFindCounterShift; NSRect fr = NSMakeRect(curX, finalY,60,innerH); [rec->findCounterLabel setFrame:fr]; curX+=60+6; LogF("[Find][mac] counter layout baseY=%g finalY=%g shift=%d", (double)baseY, (double)finalY, g_macFindCounterShift); }
@@ -935,6 +992,8 @@ static void SizeWebViewToClient(HWND hwnd)
 #endif
 
 // ============================== контекстное меню дока ==============================
+// Forward prototypes needed before menu code
+static bool Act_OpenUrlDialog(int flag); // реализация ниже
 static inline int GET_LP_X(LPARAM lp) { return (int)(short)LOWORD(lp); }
 static inline int GET_LP_Y(LPARAM lp) { return (int)(short)HIWORD(lp); }
 
@@ -983,6 +1042,10 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
   WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd);
   const bool basicOnly = rec && rec->basicCtxMenu;
 
+  // Всегда первый пункт: Open URL + разделитель
+  AppendMenuA(m, MF_STRING, 10105, "Open URL");
+  AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+
   if (!basicOnly) {
     // Reload / Back / Forward / Find stub
     AppendMenuA(m, MF_STRING, 10110, "Reload");
@@ -1001,7 +1064,7 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
     AppendMenuA(m, MF_STRING | (canBack?0:MF_DISABLED|MF_GRAYED),   10111, "Back");
     AppendMenuA(m, MF_STRING | (canFwd?0:MF_DISABLED|MF_GRAYED),    10112, "Forward");
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
-    AppendMenuA(m, MF_STRING, 10113, "Find on page (stub)");
+  AppendMenuA(m, MF_STRING, 10113, "Find on page");
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
   }
 
@@ -1015,7 +1078,10 @@ static void ShowLocalDockMenu(HWND hwnd, int x, int y)
   DestroyMenu(m);
   if (!cmd) return;
 
-  if (cmd == 10001) {
+  if (cmd == 10105) {
+    // Вызов диалога Open URL. Используем прямой вызов handler.
+    Act_OpenUrlDialog(0);
+  } else if (cmd == 10001) {
     bool nowFloat=false; int nowIdx=-1;
     const bool nowDock = QueryDockState(hwnd,&nowFloat,&nowIdx);
 
@@ -1085,6 +1151,23 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
   switch (msg)
   {
+    case WM_SETFOCUS:
+    {
+      WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd);
+      if (r) UpdateFocusChain(r->id);
+      break;
+    }
+    case WM_SHOWWINDOW:
+    {
+      if (wp) { // becoming visible
+        WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd);
+        if (r) {
+          // Не перезаписываем primary если пользователь недавно переключился на другой таб (primary-stable лог сохранит)
+          if (g_focusPrimaryInstanceId != r->id) UpdateFocusChain(r->id);
+        }
+      }
+      break;
+    }
     case WM_INITDIALOG:
     {
     #ifdef _WIN32
@@ -1092,22 +1175,64 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         g_rwvMsgHook = SetWindowsHookExW(WH_GETMESSAGE, [](int code, WPARAM wP, LPARAM lP)->LRESULT {
           if (code >= 0) {
             MSG* m = (MSG*)lP;
-            if (m && m->message==WM_KEYDOWN && m->wParam==VK_RETURN) {
-              HWND foc = GetFocus();
-              if (foc && foc == g_lastFindEdit) {
-                bool shift = (GetKeyState(VK_SHIFT)&0x8000)!=0;
-                HWND findBar = GetParent(foc);
-                HWND host = findBar ? GetParent(findBar) : nullptr;
-                WebViewInstanceRecord* rec = GetInstanceByHwnd(host);
-                if (rec) {
-                  bool fwd = !shift;
-                  g_findEnterActive = true; g_findLastEnterTick = GetTickCount();
-                  RWV_FindNavigateInline(rec, fwd);
-                  LogF("[Find] nav %s query='%s'", fwd?"next":"prev", rec->findQuery.c_str());
-                  SetFocus(foc); SendMessage(foc, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+            if (m) {
+              // Ctrl+F handling (show find bar or navigate like Enter). Shift+Ctrl+F navigates backward.
+              if (m->message==WM_KEYDOWN && (m->wParam=='F' || m->wParam=='f') && (GetKeyState(VK_CONTROL)&0x8000)) {
+                HWND foc = GetFocus(); HWND ctx = foc;
+                HWND host=nullptr;
+                if (ctx){
+                  // Fast path: inside our find bar controls
+                  int cid = (int)GetWindowLongPtr(ctx, GWLP_ID);
+                  if (cid==IDC_FIND_EDIT || cid==IDC_FIND_PREV || cid==IDC_FIND_NEXT || cid==IDC_FIND_CASE){ HWND fb=GetParent(ctx); host = fb? GetParent(fb):nullptr; }
+                  // Climb parent chain fully if not resolved
+                  if (!host){ HWND p = ctx; for (int safety=0; safety<32 && p && !host; ++safety){ if (GetInstanceByHwnd(p)) { host=p; break; } p=GetParent(p); } }
+                  // Fallback: brute scan child lists of known instance windows (in case focus in child reparented window)
+                  if (!host){ for (auto &kv : g_instances){ if (kv.second && kv.second->hwnd && IsChild(kv.second->hwnd, ctx)){ host = kv.second->hwnd; break; } } }
                 }
-                LogRaw("[FindHook] swallow VK_RETURN pre-translate");
-                m->message = WM_NULL; m->wParam = 0; return 1; // eat
+                if (!host){ LogRaw("[FindCtrlF] no host for Ctrl+F (ignored)"); }
+                if (host){
+                  WebViewInstanceRecord* rec = GetInstanceByHwnd(host);
+                  if (rec){
+                    bool shift = (GetKeyState(VK_SHIFT)&0x8000)!=0;
+                    if (!rec->showFindBar){
+                      rec->showFindBar = true; LogRaw("[FindCtrlF] show find bar (Ctrl+F)");
+                      bool titleVisible = (rec->titleBar && IsWindow(rec->titleBar) && IsWindowVisible(rec->titleBar));
+                      LayoutTitleBarAndWebView(host, titleVisible);
+                      EnsureFindBarCreated(host); // ensure controls constructed before focusing
+                      if (rec->findEdit && IsWindow(rec->findEdit)){ SetFocus(rec->findEdit); SendMessageW(rec->findEdit, EM_SETSEL, 0, -1); }
+                    } else {
+                      EnsureFindBarCreated(host);
+                      if (rec->findEdit && IsWindow(rec->findEdit)) SetFocus(rec->findEdit);
+                      g_findEnterActive = true; g_findLastEnterTick = GetTickCount();
+                      WinFindNavigate(rec, !shift);
+                      LogF("[FindCtrlF] nav %s query='%s'", shift?"prev":"next", rec->findQuery.c_str());
+                      if (rec->findEdit && IsWindow(rec->findEdit)) SendMessageW(rec->findEdit, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+                    }
+                    LogRaw("[FindHook] swallow Ctrl+F");
+                    m->message = WM_NULL; m->wParam = 0; return 1; // eat
+                  }
+                }
+              }
+              if (m->message==WM_KEYDOWN && m->wParam==VK_RETURN) {
+                HWND foc = GetFocus();
+                if (foc) {
+                  int cid = (int)GetWindowLongPtr(foc, GWLP_ID);
+                  if (cid == IDC_FIND_EDIT) {
+                    bool shift = (GetKeyState(VK_SHIFT)&0x8000)!=0;
+                    HWND findBar = GetParent(foc);
+                    HWND host = findBar ? GetParent(findBar) : nullptr;
+                    WebViewInstanceRecord* rec = GetInstanceByHwnd(host);
+                    if (rec) {
+                      bool fwd = !shift;
+                      g_findEnterActive = true; g_findLastEnterTick = GetTickCount();
+                      WinFindNavigate(rec, fwd);
+                      LogF("[Find] nav %s query='%s' (Enter hook)", fwd?"next":"prev", rec->findQuery.c_str());
+                      SetFocus(foc); SendMessageW(foc, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+                    }
+                    LogRaw("[FindHook] swallow VK_RETURN pre-translate");
+                    m->message = WM_NULL; m->wParam = 0; return 1; // eat
+                  }
+                }
               }
             }
           }
@@ -1218,13 +1343,21 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
           }
           return 0;
         }
+        case 10105: // Open URL (context menu routed here only if dialog created as modeless in future; сейчас не должен попадать)
+          Act_OpenUrlDialog(0); return 0;
         case IDC_FIND_EDIT:
         {
           if (HIWORD(wp)==EN_CHANGE) {
             WebViewInstanceRecord* r = GetInstanceByHwnd(hwnd);
             if (r && r->findEdit){
             #ifdef _WIN32
-              char buf[512]; GetWindowTextA(r->findEdit, buf, sizeof(buf)); r->findQuery=buf;
+              // Read Unicode text from edit control and convert to UTF-8 (avoid mojibake for Cyrillic etc.)
+              wchar_t wbuf[512]; wbuf[0]=0; GetWindowTextW(r->findEdit, wbuf, (int)(sizeof(wbuf)/sizeof(wbuf[0])));
+              // Convert to UTF-8
+              int need = WideCharToMultiByte(CP_UTF8,0,wbuf,-1,nullptr,0,nullptr,nullptr);
+              std::string utf8;
+              if (need>0){ utf8.resize(need-1); WideCharToMultiByte(CP_UTF8,0,wbuf,-1,(LPSTR)utf8.data(),need,nullptr,nullptr); }
+              r->findQuery = utf8;
               r->findCurrentIndex=0; r->findTotalMatches=0; LogF("[Find] query change '%s'", r->findQuery.c_str()); UpdateFindCounter(r);
               WinFindStartOrUpdate(r);
             #else
@@ -1244,12 +1377,21 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
       }
       return 0; // other commands not handled
 
-    case WM_CLOSE:
+    case WM_CLOSE: {
       LogRaw("[WM_CLOSE]");
       RememberWantDock(hwnd);
-      // Очистить ссылки в записи инстанса
+      std::string closedId;
+      bool closedWasPrimary=false, closedWasActive=false, closedWasLast=false;
+      // Очистить ссылки в записи инстанса и зафиксировать идентификаторы до их обнуления
       for (auto &kv : g_instances) {
         if (kv.second && kv.second->hwnd == hwnd) {
+          closedId = kv.first;
+          closedWasPrimary = (g_focusPrimaryInstanceId == kv.first);
+          closedWasActive  = (g_activeInstanceId == kv.first);
+          closedWasLast    = (g_lastFocusedInstanceId == kv.first);
+          if (closedWasPrimary) g_focusPrimaryInstanceId.clear();
+          if (closedWasActive)  g_activeInstanceId.clear();
+          if (closedWasLast)    g_lastFocusedInstanceId.clear();
           kv.second->hwnd = nullptr;
 #ifdef _WIN32
           if (kv.second->bmpPrev){ DeleteObject(kv.second->bmpPrev); kv.second->bmpPrev=nullptr; }
@@ -1264,15 +1406,52 @@ static INT_PTR WINAPI WebViewDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
       }
       PurgeDeadInstances();
+      struct TmpRec { std::string id; DWORD tick; };
+      std::vector<TmpRec> live; live.reserve(g_instances.size());
+      for (auto &kv: g_instances){ WebViewInstanceRecord* r=kv.second.get(); if(!r||!r->hwnd||!IsWindow(r->hwnd)) continue; DWORD t=r->lastFocusTick? (DWORD)r->lastFocusTick : 0; live.push_back({kv.first,t}); }
+      std::sort(live.begin(),live.end(),[](const TmpRec&a,const TmpRec&b){ return (DWORD)(b.tick - a.tick) < 0x80000000UL; });
+      auto containsId=[&](const std::string& id){ for(auto &t: live) if(t.id==id) return true; return false; };
+      if (live.empty()) {
+        g_focusPrimaryInstanceId.clear();
+        g_activeInstanceId.clear();
+        g_lastFocusedInstanceId.clear();
+      } else {
+        if (closedWasPrimary || closedWasActive) {
+          // Новый режим: НЕ продвигаем автоматически новую primary.
+          // Самая свежая оставшаяся вкладка уходит в last, primary/active остаются пустыми -> диалог покажет режим last.
+          g_focusPrimaryInstanceId.clear();
+          g_activeInstanceId.clear();
+          g_lastFocusedInstanceId = live.front().id; // top fresh becomes last candidate
+        } else {
+          // Закрывалась не primary: сохраняем текущие ссылки если валидны
+          if (!g_focusPrimaryInstanceId.empty() && !containsId(g_focusPrimaryInstanceId)) g_focusPrimaryInstanceId.clear();
+          if (!g_activeInstanceId.empty() && !containsId(g_activeInstanceId)) g_activeInstanceId.clear();
+          if (!g_lastFocusedInstanceId.empty() && !containsId(g_lastFocusedInstanceId)) g_lastFocusedInstanceId.clear();
+          // Если active пуст, но primary есть – синхронизируем (старое поведение)
+          if (g_activeInstanceId.empty() && !g_focusPrimaryInstanceId.empty()) g_activeInstanceId = g_focusPrimaryInstanceId;
+          // Если last пуст и есть хотя бы 2 живых — выберем вторую по свежести (или первую если одна)
+          if (g_lastFocusedInstanceId.empty()) {
+            if (live.size()>1) {
+              // Выбираем логически "предыдущую" не равную primary/active
+              for (size_t i=0;i<live.size();++i){ const std::string &cand=live[i].id; if(cand!=g_focusPrimaryInstanceId && cand!=g_activeInstanceId){ g_lastFocusedInstanceId=cand; break; } }
+              if (g_lastFocusedInstanceId.empty()) g_lastFocusedInstanceId = live.front().id; // fallback
+            } else {
+              // одна вкладка: last остаётся пустым
+            }
+          }
+        }
+      }
+      LogF("[FocusChain] after-close (new policy) closed='%s' wasPrimary=%d wasActive=%d -> primary='%s' active='%s' last='%s'", closedId.c_str(), (int)closedWasPrimary, (int)closedWasActive, g_focusPrimaryInstanceId.c_str(), g_activeInstanceId.c_str(), g_lastFocusedInstanceId.c_str());
       { bool f=false; int idx=-1; bool id = DockIsChildOfDock ? (DockIsChildOfDock(hwnd,&f) >= 0) : false; if (id && DockWindowRemove) DockWindowRemove(hwnd); }
       DestroyWindow(hwnd);
-      return 0;
+      return 0; }
 
     case WM_DESTROY:
       LogRaw("[WM_DESTROY]");
     #ifdef _WIN32
       if (g_rwvMsgHook){ UnhookWindowsHookEx(g_rwvMsgHook); g_rwvMsgHook=nullptr; LogRaw("[FindHook] removed WH_GETMESSAGE"); }
     #endif
+      break;
     case WM_TIMER:
       // (таймеры для повторного обновления заголовка удалены как лишняя нагрузка)
       break;
@@ -1346,6 +1525,9 @@ void OpenOrActivateInstance(const std::string& instanceId, const std::string& ur
   // If this rec already has its own hwnd, just activate it
   if (rec->hwnd && IsWindow(rec->hwnd)) {
     g_instanceId = instanceId; // switch active context (still used by StartWebView callbacks)
+    if (g_activeInstanceId != instanceId) { if (!g_activeInstanceId.empty()) g_lastFocusedInstanceId = g_activeInstanceId; g_activeInstanceId = instanceId; }
+    // Обновляем цепочку фокуса (пользователь активировал окно через команду)
+    UpdateFocusChain(instanceId);
     if (!url.empty()) NavigateExistingInstance(instanceId, url);
     else if (!rec->lastUrl.empty()) LogF("[InstanceActivate] id='%s' reuse lastUrl='%s'", instanceId.c_str(), rec->lastUrl.c_str());
     bool floating=false; int dockId = DockIsChildOfDock ? DockIsChildOfDock(rec->hwnd,&floating) : -1;
@@ -1362,6 +1544,14 @@ void OpenOrActivateInstance(const std::string& instanceId, const std::string& ur
   LogF("[InstanceCreate] created window %p for id='%s'", (void*)hwnd, instanceId.c_str());
   if (rec->hwnd == nullptr && hwnd) {
     rec->hwnd = hwnd; rec->lastUrl = url; rec->wantDockOnCreate = g_want_dock_on_create; }
+#ifdef _WIN32
+  if (rec->hwnd && IsWindow(rec->hwnd) && !rec->origHostWndProc){
+    rec->origHostWndProc = (WNDPROC)SetWindowLongPtr(rec->hwnd, GWLP_WNDPROC, (LONG_PTR)RWVHostSubclassProc);
+    LogF("[HostSubclass] installed for id='%s' hwnd=%p", rec->id.c_str(), (void*)rec->hwnd);
+  }
+#endif
+  if (g_activeInstanceId != instanceId) { if (!g_activeInstanceId.empty()) g_lastFocusedInstanceId = g_activeInstanceId; g_activeInstanceId = instanceId; }
+  UpdateFocusChain(instanceId);
 }
 
 // ============================== Hook command ==============================
@@ -1385,6 +1575,10 @@ static bool Act_OpenDefault(int /*flag*/)
   return true;
 }
 
+// Forward declarations for new handlers
+static bool Act_Search(int flag);
+static bool Act_OpenUrlDialog(int flag); // forward (used also by context menu earlier in file)
+
 // ============================ structures =============================
 struct CommandSpec {
   const char* name;      // "FRZZ_WEBVIEW_OPEN"
@@ -1394,6 +1588,8 @@ struct CommandSpec {
 
 static const CommandSpec kCommandSpecs[] = {
   { "FRZZ_WEBVIEW_OPEN", "WebView: Open (default url)", &Act_OpenDefault },
+  { "FRZZ_WEBVIEW_SEARCH", "WebView: Search (show or navigate)", &Act_Search },
+  { "FRZZ_WEBVIEW_OPEN_URL", "WebView: Open URL", &Act_OpenUrlDialog },
 };
 
 // ============================== Registration blocks ==============================
@@ -1499,3 +1695,299 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
   }
   return 0;
 }
+
+// ================= Additional command handlers implementation (appended) =================
+#ifdef _WIN32
+extern void WinFindNavigate(struct WebViewInstanceRecord* rec, bool forward);
+extern void WinFindClose(struct WebViewInstanceRecord* rec);
+static void EnsureFindBarCreated(HWND hwnd); // forward
+#endif
+#ifdef __APPLE__
+// (removed duplicate MacFind* forward declarations; defined near top)
+#endif
+
+static WebViewInstanceRecord* RWV_InternalGetActiveInstance()
+{
+  if (!g_activeInstanceId.empty()) {
+    WebViewInstanceRecord* r = GetInstanceById(g_activeInstanceId);
+    if (r && r->hwnd && IsWindow(r->hwnd)) return r;
+  }
+  if (g_instances.size()==1) return g_instances.begin()->second.get();
+  return nullptr;
+}
+
+// Resolve real-time active instance for search (focus or visible window). Avoids false positives when
+// another dock tab is selected.
+static WebViewInstanceRecord* ResolveSearchTargetInstance()
+{
+  // 1) Direct focus chain via HWND ancestry
+  HWND foc = GetFocus();
+  if (foc){ HWND p=foc; for(int i=0;i<32 && p; ++i){ WebViewInstanceRecord* r=GetInstanceByHwnd(p); if(r) return r; p=GetParent(p);} }
+  // 1.25) Pointer hover heuristic: window currently under cursor (if host or child of host)
+  POINT pt; 
+#ifdef _WIN32
+  if (GetCursorPos(&pt))
+#else
+  GetCursorPos(&pt);
+  if (true)
+#endif
+  {
+    HWND hcur = WindowFromPoint(pt);
+    if (hcur){ HWND p=hcur; for(int i=0;i<32 && p; ++i){ WebViewInstanceRecord* r=GetInstanceByHwnd(p); if(r && r->hwnd && IsWindow(r->hwnd) && IsWindowVisible(r->hwnd)) { LogF("[SearchDiag] underCursor id='%s' hwnd=%p", r->id.c_str(), (void*)r->hwnd); return r; } p=GetParent(p);} }
+  }
+  // 1.5) Explicit primary
+  if(!g_focusPrimaryInstanceId.empty()){
+    WebViewInstanceRecord* r=GetInstanceById(g_focusPrimaryInstanceId); if(r && r->hwnd && IsWindow(r->hwnd)) return r; }
+  // 1.75) Last focused
+  if(!g_lastFocusedInstanceId.empty()){
+    WebViewInstanceRecord* r=GetInstanceById(g_lastFocusedInstanceId); if(r && r->hwnd && IsWindow(r->hwnd)) return r; }
+  // 2) Among visible windows pick most recent by lastFocusTick
+  WebViewInstanceRecord* best=nullptr; unsigned long bestTick=0; bool anyVisible=false;
+  for(auto &kv: g_instances){ WebViewInstanceRecord* r=kv.second.get(); if(!r||!r->hwnd||!IsWindow(r->hwnd)||!IsWindowVisible(r->hwnd)) continue; anyVisible=true; if(r->lastFocusTick && (!best || (DWORD)(r->lastFocusTick - bestTick) < 0x80000000UL)){ best=r; bestTick=r->lastFocusTick; } }
+  if(best) return best;
+  // 3) Fallback: first visible even if timestamp missing
+  if(anyVisible){ for(auto &kv: g_instances){ WebViewInstanceRecord* r=kv.second.get(); if(r&&r->hwnd&&IsWindow(r->hwnd)&&IsWindowVisible(r->hwnd)) return r; } }
+  // 4) Any instance
+  for(auto &kv: g_instances){ if(kv.second.get()) return kv.second.get(); }
+  return nullptr;
+}
+
+void UpdateFocusChain(const std::string& inst)
+{
+  if (inst.empty()) return; 
+  if (g_focusPrimaryInstanceId == inst) {
+    // Refresh timestamp for stability (user refocused same instance component)
+    WebViewInstanceRecord* rec = GetInstanceById(inst);
+    if (rec) rec->lastFocusTick = GetTickCount();
+    if (g_activeInstanceId != inst){ if(!g_activeInstanceId.empty()) g_lastFocusedInstanceId = g_activeInstanceId; g_activeInstanceId = inst; }
+    if (rec) LogF("[FocusTick] stable id='%s' tick=%lu", rec->id.c_str(), (unsigned long)rec->lastFocusTick);
+    LogF("[FocusChain] primary-stable='%s' last='%s'", inst.c_str(), g_lastFocusedInstanceId.c_str());
+    return;
+  }
+  std::string prevPrimary = g_focusPrimaryInstanceId;
+  if (!g_focusPrimaryInstanceId.empty() && g_focusPrimaryInstanceId != inst) {
+    if (g_lastFocusedInstanceId != g_focusPrimaryInstanceId) {
+      g_lastFocusedInstanceId = g_focusPrimaryInstanceId;
+    }
+  }
+  g_focusPrimaryInstanceId = inst;
+  // stamp focus time
+  WebViewInstanceRecord* rec = GetInstanceById(inst); if (rec) rec->lastFocusTick = GetTickCount();
+  if (g_activeInstanceId != inst){ if(!g_activeInstanceId.empty()) g_lastFocusedInstanceId = g_activeInstanceId; g_activeInstanceId = inst; }
+  if (rec) LogF("[FocusTick] primary-switch id='%s' tick=%lu", rec->id.c_str(), (unsigned long)rec->lastFocusTick);
+  LogF("[FocusChain] primary='%s' last='%s' (prevPrimary='%s')", g_focusPrimaryInstanceId.c_str(), g_lastFocusedInstanceId.c_str(), prevPrimary.c_str());
+}
+static bool Act_Search(int /*flag*/)
+{
+#ifdef _WIN32
+  WebViewInstanceRecord* rec = ResolveSearchTargetInstance();
+  POINT cpt{}; GetCursorPos(&cpt); HWND rawUnder = WindowFromPoint(cpt); LogF("[SearchDiag] primary='%s' last='%s' active='%s' focusHWND=%p cursor=(%ld,%ld) underHWND=%p", g_focusPrimaryInstanceId.c_str(), g_lastFocusedInstanceId.c_str(), g_activeInstanceId.c_str(), (void*)GetFocus(), (long)cpt.x,(long)cpt.y,(void*)rawUnder);
+  // List candidates with visibility, focus path and lastFocusTick
+  for (auto &kv : g_instances){ WebViewInstanceRecord* r = kv.second.get(); if(!r) continue; bool vis = r->hwnd && IsWindow(r->hwnd) && IsWindowVisible(r->hwnd); bool isFocus = false; HWND foc=GetFocus(); if(foc){ HWND p=foc; for(int i=0;i<32 && p; ++i){ if(p==r->hwnd){ isFocus=true; break;} p=GetParent(p);} } LogF("[SearchDiag] cand id='%s' hwnd=%p vis=%d isFocusPath=%d lastTick=%lu", r->id.c_str(), (void*)r->hwnd, (int)vis, (int)isFocus, (unsigned long)r->lastFocusTick); }
+  if (rec) LogF("[Search] target instance='%s' hwnd=%p", rec->id.c_str(), (void*)rec->hwnd); else LogRaw("[Search] no target instance (null)");
+  if (!rec) {
+    MessageBoxA(g_hwndParent ? g_hwndParent : GetForegroundWindow(),
+      "No active WebView instance. Launch or focus a WebView instance and try again.",
+      "WebView Search", MB_OK|MB_ICONINFORMATION);
+    return false;
+  }
+  UpdateFocusChain(rec->id); // ensure focus chain aligns with chosen instance
+  if (!rec->showFindBar) {
+    if (!rec->controller) {
+      MessageBoxA(rec->hwnd ? rec->hwnd : (g_hwndParent?g_hwndParent:GetForegroundWindow()),
+        "WebView not initialized yet.", "WebView Search", MB_OK|MB_ICONINFORMATION);
+      return false;
+    }
+    rec->showFindBar = true; bool titleVisible = (rec->titleBar && IsWindow(rec->titleBar) && IsWindowVisible(rec->titleBar));
+    LayoutTitleBarAndWebView(rec->hwnd, titleVisible);
+    EnsureFindBarCreated(rec->hwnd);
+    if (rec->findEdit && IsWindow(rec->findEdit)) { SetFocus(rec->findEdit); SendMessageW(rec->findEdit, EM_SETSEL, 0, -1); }
+  } else {
+    EnsureFindBarCreated(rec->hwnd);
+    if (rec->findEdit && IsWindow(rec->findEdit)) SetFocus(rec->findEdit);
+    g_findEnterActive = true; g_findLastEnterTick = GetTickCount();
+    WinFindNavigate(rec, true); // navigate forward
+    if (rec->findEdit && IsWindow(rec->findEdit)) SendMessageW(rec->findEdit, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+  }
+  return true;
+#else
+  WebViewInstanceRecord* rec = RWV_InternalGetActiveInstance(); if (!rec) return false;
+  if (!rec->showFindBar) {
+    rec->showFindBar = true;
+    LayoutTitleBarAndWebView(rec->hwnd, rec->titleBarView && ![rec->titleBarView isHidden]);
+    EnsureFindBarCreated(rec->hwnd);
+    if(rec->findEdit){ [(NSTextField*)rec->findEdit selectText:nil]; [[(NSTextField*)rec->findEdit window] makeFirstResponder:(NSTextField*)rec->findEdit]; }
+    LogRaw("[FindAction][mac] show via action list");
+  } else {
+    EnsureFindBarCreated(rec->hwnd);
+    if(rec->findEdit){ [[(NSTextField*)rec->findEdit window] makeFirstResponder:(NSTextField*)rec->findEdit]; }
+    MacFindNavigate(rec, true); // forward navigation like Windows
+    LogF("[FindAction][mac] nav next query='%s'", rec->findQuery.c_str());
+  }
+  return true;
+#endif
+}
+
+#ifdef _WIN32
+static INT_PTR CALLBACK RWVUrlDlgProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+  switch(m){
+    case WM_INITDIALOG:
+    {
+  const int pad=10; // горизонтальный и вертикальный внутренний отступ (требование пользователя)
+  // Получаем фактическую клиентскую ширину (диалог создан из шаблона ~400, но берем реальную)
+  RECT cli{}; GetClientRect(h,&cli); int dlgW = cli.right - cli.left; if(dlgW < 260) dlgW = 260; // защита от слишком узкого
+      // Получаем системный логфонт (иконка) как базу для единообразия с title bar
+      LOGFONTW lf{}; SystemParametersInfoW(SPI_GETICONTITLELOGFONT,sizeof(lf),&lf,0);
+      HFONT font = CreateFontIndirectW(&lf);
+      // Однострочный layout: "URL:" (узкая метка) + edit тянется до кнопок
+  HWND hLbl = CreateWindowExW(0,L"STATIC",L"URL:",WS_CHILD|WS_VISIBLE,pad,pad+2,40,18,h,(HMENU)0,(HINSTANCE)g_hInst,nullptr);
+  int labelW = 40; int gapAfterLabel = 6; int editX = pad + labelW + gapAfterLabel; int editH=22;
+  int editWInit = dlgW - editX - pad; if (editWInit < 120) editWInit = 120;
+  HWND hEdit = CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",L"https://",WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL,editX,pad,editWInit,editH,h,(HMENU)1001,(HINSTANCE)g_hInst,nullptr);
+      // Определяем живые *видимые* инстансы (для логики режима диалога важно что вкладка действительно отображается)
+      struct LiveInfo { std::string id; DWORD tick; bool visible; };
+      std::vector<LiveInfo> liveInfos; liveInfos.reserve(g_instances.size());
+      for (auto &kv : g_instances){
+        WebViewInstanceRecord* r=kv.second.get();
+        if(!r||!r->hwnd||!IsWindow(r->hwnd)) continue;
+        bool vis = IsWindowVisible(r->hwnd)!=0; // если вкладка в доке не активна — окно скрыто
+        DWORD t = r->lastFocusTick? (DWORD)r->lastFocusTick : 0;
+        liveInfos.push_back({kv.first, t, vis});
+      }
+      // Отдельный список id для прежнего использования
+      std::vector<std::string> liveIds; for(auto &li: liveInfos) liveIds.push_back(li.id);
+      auto isVisibleId=[&](const std::string& id){ for(auto &li: liveInfos) if(li.id==id && li.visible) return true; return false; };
+      auto bestVisible=[&]()->std::string{ std::string best; DWORD bestT=0; for(auto &li: liveInfos){ if(!li.visible) continue; if(best.empty() || (DWORD)(li.tick - bestT) < 0x80000000UL){ best=li.id; bestT=li.tick; } } return best; };
+      bool haveActive=false, haveLast=false; 
+      if (!g_focusPrimaryInstanceId.empty()){
+        WebViewInstanceRecord* a = GetInstanceById(g_focusPrimaryInstanceId); haveActive = (a && a->hwnd && IsWindow(a->hwnd) && isVisibleId(g_focusPrimaryInstanceId)); }
+      if (!g_lastFocusedInstanceId.empty()){
+        WebViewInstanceRecord* lr = GetInstanceById(g_lastFocusedInstanceId); haveLast = (lr && lr->hwnd && IsWindow(lr->hwnd) && isVisibleId(g_lastFocusedInstanceId)); }
+      // Если нет active/last, но есть хотя бы один живой инстанс (даже если он не видим) — используем самый свежий как last
+      if (!haveActive && !haveLast && !liveInfos.empty()) {
+        // Возьмём самый свежий по lastFocusTick даже если он невидим — важно показать режим Last Tab вместо создания новой
+        std::string bestAny; DWORD bestTick=0;
+        for (auto &li: liveInfos){ if(bestAny.empty() || (DWORD)(li.tick - bestTick) < 0x80000000UL){ bestAny=li.id; bestTick=li.tick; } }
+        if(!bestAny.empty()) { g_lastFocusedInstanceId = bestAny; haveLast = true; }
+      } else if (!haveActive){
+        // Нет active, но возможно есть видимый кандидат для last уже обработан выше
+        if (!haveLast){ std::string cand = bestVisible(); if(!cand.empty()) { g_lastFocusedInstanceId = cand; haveLast=true; } }
+      }
+      if (haveActive && liveIds.empty()) haveActive=false; // защита
+      // Определяем режим более строго:
+      // mode 1: есть active (фокусный инстанс)
+      // mode 2: нет active, но есть last
+      // mode 3: нет вообще живых
+      int mode=3; if (!liveIds.empty()) { if (haveActive) mode=1; else if (haveLast) mode=2; else mode=3; }
+      SetWindowLongPtr(h,DWLP_USER, mode);
+  int btnY = pad + editH + 10; // кнопки на следующей строке
+  int leftX=pad; int btnH=22; int cancelW=80; int gap=8; int btnW=110;
+      HWND bCurrent=nullptr,bLast=nullptr,bNew=nullptr,bCancel=nullptr;
+      if (mode==1){
+        bCurrent = CreateWindowExW(0,L"BUTTON",L"Current tab",WS_CHILD|WS_VISIBLE|BS_DEFPUSHBUTTON,leftX,btnY,btnW,btnH,h,(HMENU)IDOK,(HINSTANCE)g_hInst,nullptr); leftX+=btnW+gap;
+        bNew = CreateWindowExW(0,L"BUTTON",L"New tab",WS_CHILD|WS_VISIBLE,leftX,btnY,btnW,btnH,h,(HMENU)1002,(HINSTANCE)g_hInst,nullptr); leftX+=btnW+gap;
+      } else if (mode==2){
+        bLast = CreateWindowExW(0,L"BUTTON",L"Last tab",WS_CHILD|WS_VISIBLE|BS_DEFPUSHBUTTON,leftX,btnY,btnW,btnH,h,(HMENU)1003,(HINSTANCE)g_hInst,nullptr); leftX+=btnW+gap;
+        bNew = CreateWindowExW(0,L"BUTTON",L"New tab",WS_CHILD|WS_VISIBLE,leftX,btnY,btnW,btnH,h,(HMENU)1002,(HINSTANCE)g_hInst,nullptr); leftX+=btnW+gap;
+      } else { // mode 3
+        bNew = CreateWindowExW(0,L"BUTTON",L"Open URL",WS_CHILD|WS_VISIBLE|BS_DEFPUSHBUTTON,leftX,btnY,btnW,btnH,h,(HMENU)IDOK,(HINSTANCE)g_hInst,nullptr); leftX+=btnW+gap;
+      }
+  int cancelX = dlgW - pad - cancelW; bCancel = CreateWindowExW(0,L"BUTTON",L"Cancel",WS_CHILD|WS_VISIBLE,cancelX,btnY,cancelW,btnH,h,(HMENU)IDCANCEL,(HINSTANCE)g_hInst,nullptr);
+  // Финально растянем edit до правого паддинга (не зависит от кнопок, они ниже)
+  int newEditW = dlgW - editX - pad; if (newEditW < 120) newEditW = 120; if (hEdit) MoveWindow(hEdit, editX, pad, newEditW, editH, TRUE);
+      // Итоговая высота по самой нижней кнопке
+      int totalHClient = btnY + btnH + pad;
+      // Текущая полная высота окна (включая non-client) и расчёт требуемой полной высоты для обеспечения totalHClient клиентской
+      RECT wr{}; GetWindowRect(h,&wr); RECT cr{}; GetClientRect(h,&cr); int curClientH = cr.bottom-cr.top; int curFullH = wr.bottom-wr.top;
+      if (curClientH != totalHClient){
+        // Увеличиваем/уменьшаем окно сохраняя верхний левый угол
+        int delta = totalHClient - curClientH; MoveWindow(h, wr.left, wr.top, wr.right-wr.left, curFullH + delta, TRUE);
+      }
+      // Применяем шрифт ко всем контролам
+      HWND ctrls[] = { hLbl, hEdit, bCurrent, bLast, bNew, bCancel };
+      for (HWND c : ctrls) if (c && font) SendMessageW(c, WM_SETFONT, (WPARAM)font, TRUE);
+  LogF("[OpenURLDlgLayout] dlgW=%d editX=%d editW=%d pad=%d totalClientH=%d mode=%d", dlgW, editX, newEditW, pad, totalHClient, mode);
+      SetWindowTextW(h, L"WebView: Open URL");
+      LogF("[OpenURLDlg] init haveActive=%d haveLast=%d liveCount=%d mode=%d", (int)haveActive,(int)haveLast,(int)liveIds.size(),mode);
+      if (hEdit) SendMessageW(hEdit, EM_SETSEL, 0, -1);
+      // Центрирование относительно главного окна REAPER
+      HWND hParent = g_hwndParent ? g_hwndParent : GetForegroundWindow();
+      if (hParent) {
+        RECT pr; GetWindowRect(hParent,&pr); RECT sr; GetWindowRect(h,&sr);
+        int pw = pr.right-pr.left, ph = pr.bottom-pr.top; int sw = sr.right-sr.left, sh = sr.bottom-sr.top;
+        int nx = pr.left + (pw - sw)/2; int ny = pr.top + (ph - sh)/2;
+        // Без мерцания: только перемещение если вне
+        SetWindowPos(h,nullptr,nx,ny,0,0,SWP_NOACTIVATE|SWP_NOSIZE|SWP_NOZORDER);
+      }
+      return TRUE;
+    }
+    case WM_COMMAND:
+    {
+      int id = LOWORD(w);
+      if (id==IDOK || id==1002 || id==1003) {
+        wchar_t buf[2048]; GetDlgItemTextW(h,1001,buf,2048); std::wstring wurl(buf); std::string url = Narrow(wurl);
+        if (url.empty() || url=="https://") { MessageBoxA(h,"URL is empty","WebView",MB_OK|MB_ICONWARNING); return TRUE; }
+        LONG_PTR mode = GetWindowLongPtr(h,DWLP_USER);
+        std::string instToken;
+        if (id==1002) instToken = "random"; // New tab
+        else if (id==1003) instToken = "last"; // Last tab button
+        else { // IDOK depends on mode
+          if (mode==1) instToken = "current"; // haveActive
+          else if (mode==2) instToken = "last"; // no active but have last
+          else instToken = "random"; // open first when no instances -> random (создаём новый)
+        }
+        char json[512]; snprintf(json,sizeof(json),"{\"InstanceId\":\"%s\"}",instToken.c_str());
+        LogF("[OpenURLDlg] submit mode=%ld btn=%d token='%s' url='%s'", (long)mode,id,instToken.c_str(),url.c_str());
+        API_WEBVIEW_Navigate(url.c_str(), json);
+        EndDialog(h,1); return TRUE; }
+      if (id==IDCANCEL) { EndDialog(h,0); return TRUE; }
+      break;
+    }
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLOREDIT:
+    {
+      HDC dc = (HDC)w; COLORREF bk,tx; GetPanelThemeColors(h,dc,&bk,&tx); SetTextColor(dc,tx); SetBkColor(dc,bk);
+      static HBRUSH hbr=0; if (hbr) DeleteObject(hbr); hbr=CreateSolidBrush(bk); return (INT_PTR)hbr;
+    }
+  }
+  return FALSE;
+}
+#endif
+
+static bool Act_OpenUrlDialog(int /*flag*/)
+{
+#ifdef _WIN32
+  DLGTEMPLATE dt{}; dt.style=DS_SETFONT|WS_CAPTION|WS_SYSMENU|DS_MODALFRAME; dt.cx=400; dt.cy=85; dt.dwExtendedStyle=0;
+  struct Pack { DLGTEMPLATE dt; WORD menu,cls,title,pt; WCHAR font[14]; } pack{}; pack.dt=dt; pack.menu=0; pack.cls=0; pack.title=0; pack.pt=8; lstrcpyW(pack.font,L"MS Shell Dlg");
+  INT_PTR r = DialogBoxIndirectParamW((HINSTANCE)g_hInst, &pack.dt, g_hwndParent?g_hwndParent:GetForegroundWindow(), RWVUrlDlgProc, 0);
+  LogF("[OpenUrl] dialog result=%lld", (long long)r);
+  return r>0;
+#else
+  @autoreleasepool {
+    bool haveActive = !g_activeInstanceId.empty(); bool haveLast = !g_lastFocusedInstanceId.empty();
+    if (!haveActive && !haveLast && !g_instances.empty()) {
+      WebViewInstanceRecord* best=nullptr; DWORD bestTick=0; for(auto &kv: g_instances){ WebViewInstanceRecord* r=kv.second.get(); if(!r) continue; if(!best || (DWORD)(r->lastFocusTick - bestTick) < 0x80000000UL){ best=r; bestTick=r->lastFocusTick; } } if(best){ g_lastFocusedInstanceId=best->id; haveLast=true; }
+    }
+    int mode=3; if(haveActive) mode=1; else if(haveLast) mode=2; else mode=3;
+    NSRect rc = NSMakeRect(0,0,480,130);
+    NSPanel* panel = [[NSPanel alloc] initWithContentRect:rc styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:NO];
+    [panel setTitle:@"WebView: Open URL"]; [panel setReleasedWhenClosed:NO]; [panel setLevel:NSModalPanelWindowLevel]; [panel setHidesOnDeactivate:NO];
+    NSView* content = [panel contentView]; CGFloat pad=10;
+    NSTextField* lbl = [[NSTextField alloc] initWithFrame:NSMakeRect(pad, rc.size.height-34, rc.size.width-2*pad, 20)]; [lbl setBezeled:NO]; [lbl setEditable:NO]; [lbl setDrawsBackground:NO]; [lbl setStringValue:@"Enter URL:"];
+    NSTextField* edit = [[NSTextField alloc] initWithFrame:NSMakeRect(pad, rc.size.height-60, rc.size.width-2*pad, 24)]; [edit setStringValue:@"https://"];
+    auto makeBtn=^NSButton*(NSString* t, CGFloat x){ NSButton* b=[[NSButton alloc] initWithFrame:NSMakeRect(x,12,120,28)]; [b setTitle:t]; [b setBezelStyle:NSBezelStyleRounded]; return b; };
+    NSButton* btn1=nil; NSButton* btn2=nil; CGFloat x=pad; if(mode==1){ btn1=makeBtn(@"Current tab",x); x+=130; btn2=makeBtn(@"New tab",x); x+=130; } else if(mode==2){ btn1=makeBtn(@"Last tab",x); x+=130; btn2=makeBtn(@"New tab",x); x+=130; } else { btn1=makeBtn(@"Open URL",x); x+=130; }
+    NSButton* btnCancel=makeBtn(@"Cancel", rc.size.width-pad-120);
+    [btn1 setKeyEquivalent:@"\r"]; [btnCancel setKeyEquivalent:@"\e"]; // Enter / Escape
+    [content addSubview:lbl]; [content addSubview:edit]; [content addSubview:btn1]; if(btn2)[content addSubview:btn2]; [content addSubview:btnCancel];
+    RWVUrlDlgHandler* h = [[RWVUrlDlgHandler alloc] init]; h.panel=panel; h.mode=mode; h.edit=edit; h.btn1=btn1; h.btn2=btn2; h.btnCancel=btnCancel; h.accepted=NO; h.token=nil;
+    [btn1 setTarget:h]; [btn1 setAction:@selector(onClick:)]; if(btn2){ [btn2 setTarget:h]; [btn2 setAction:@selector(onClick:)]; } [btnCancel setTarget:h]; [btnCancel setAction:@selector(onClick:)];
+    [NSApp runModalForWindow:panel]; bool result=false; if(h.accepted){ NSString* s=[h.edit stringValue]; std::string url=s?[s UTF8String]:""; if(!url.empty() && url!="https://"){ std::string token = h.token? [h.token UTF8String] : "random"; char json[256]; snprintf(json,sizeof(json),"{\"InstanceId\":\"%s\"}", token.c_str()); LogF("[OpenURLDlg][mac] submit mode=%d token='%s' url='%s'", mode, token.c_str(), url.c_str()); API_WEBVIEW_Navigate(url.c_str(), json); result=true; } }
+    return result;
+  }
+#endif
+}
+

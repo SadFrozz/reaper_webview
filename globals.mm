@@ -26,6 +26,9 @@ bool    g_com_initialized = false;
 // Per-instance caching now inside WebViewInstanceRecord (lastTabTitle/lastWndText)
 
 std::string g_instanceId;
+std::string g_activeInstanceId; // explicit current active window instance
+std::string g_lastFocusedInstanceId; // previous active instance
+std::string g_focusPrimaryInstanceId; // last instance that actually owned focus
 
 int  g_last_dock_idx        = -1;
 bool g_last_dock_float      = false;

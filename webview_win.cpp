@@ -18,6 +18,24 @@
 #include "helpers.h"
 #include "webview.h"
 
+// Additional forward declarations / externs required by accelerator handler logic
+extern void EnsureFindBarCreated(HWND hwnd); // defined in main.mm
+extern void WinFindNavigate(struct WebViewInstanceRecord* rec, bool forward); // main.mm
+extern bool g_findEnterActive; // navigation suppression flags from main.mm
+extern DWORD g_findLastEnterTick;
+
+// Shim: main.mm keeps real creation logic static. We provide a minimal forwarder that forces
+// layout update to ensure bar exists when accelerator triggers before explicit toggle.
+// If later we refactor creation into shared TU, this shim can be removed.
+static void RWV_WinEnsureFindBarShim(HWND host)
+{
+  if (!host) return; WebViewInstanceRecord* rec = GetInstanceByHwnd(host); if (!rec) return; 
+  if (rec->findBarWnd && IsWindow(rec->findBarWnd)) return; // already have
+  // Force layout path which internally calls static EnsureFindBarCreated
+  bool titleVisible = (rec->titleBar && IsWindow(rec->titleBar) && IsWindowVisible(rec->titleBar));
+  LayoutTitleBarAndWebView(host, titleVisible);
+}
+
 // forward (panel layout kept in main.mm)
 void LayoutTitleBarAndWebView(HWND hwnd, bool titleVisible);
 // Forward declaration for updating find counters (implemented in main.mm)
@@ -144,6 +162,59 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
 
               if (localWebView)
               {
+                // Subscribe to controller focus events for more reliable multi-dock focus tracking
+                if (rec && rec->controller) {
+                  auto gotCb = Microsoft::WRL::Callback<ICoreWebView2FocusChangedEventHandler>(
+                    [rec](ICoreWebView2Controller* /*sender*/, IUnknown* /*args*/) -> HRESULT {
+                      UpdateFocusChain(rec->id);
+                      LogF("[FocusEvt] GotFocus id='%s' tick=%lu", rec->id.c_str(), (unsigned long)rec->lastFocusTick);
+                      return S_OK;
+                    });
+                  EventRegistrationToken tok1{}; if (SUCCEEDED(rec->controller->add_GotFocus(gotCb.Get(), (EventRegistrationToken*)&tok1))) rec->gotFocusToken = *(WebViewInstanceRecord::EventRegistrationToken*)&tok1;
+                  auto lostCb = Microsoft::WRL::Callback<ICoreWebView2FocusChangedEventHandler>(
+                    [rec](ICoreWebView2Controller* /*sender*/, IUnknown* /*args*/) -> HRESULT {
+                      // LostFocus здесь не всегда нужен, но логируем для диагностики (не обновляем lastFocusTick)
+                      LogF("[FocusEvt] LostFocus id='%s'", rec->id.c_str());
+                      return S_OK;
+                    });
+                  EventRegistrationToken tok2{}; rec->controller->add_LostFocus(lostCb.Get(), (EventRegistrationToken*)&tok2); rec->lostFocusToken = *(WebViewInstanceRecord::EventRegistrationToken*)&tok2;
+                }
+                // Intercept Ctrl+F via AcceleratorKeyPressed to suppress default WebView find dialog
+                if (rec && rec->controller) {
+                  EventRegistrationToken accelTok{};
+                  rec->controller->add_AcceleratorKeyPressed(Callback<ICoreWebView2AcceleratorKeyPressedEventHandler>(
+                    [rec](ICoreWebView2Controller* /*sender*/, ICoreWebView2AcceleratorKeyPressedEventArgs* args)->HRESULT {
+                      COREWEBVIEW2_KEY_EVENT_KIND kind; if (FAILED(args->get_KeyEventKind(&kind))) return S_OK;
+                      if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN) return S_OK;
+                      UINT key=0; args->get_VirtualKey(&key);
+                      INT modifiers=0; args->get_KeyEventLParam(&modifiers); // modifiers not directly exposed; use GetKeyState as fallback
+                      bool ctrl = (GetKeyState(VK_CONTROL)&0x8000)!=0;
+                      bool shift = (GetKeyState(VK_SHIFT)&0x8000)!=0;
+                      if (ctrl && (key=='F' || key=='f')) {
+                        // Mark handled to suppress default dialog
+                        args->put_Handled(TRUE);
+                        // Show or navigate find bar
+                        if (!rec->showFindBar) {
+                          rec->showFindBar = true; LogRaw("[AccelCtrlF] show find bar");
+                          bool titleVisible = (rec->titleBar && IsWindow(rec->titleBar) && IsWindowVisible(rec->titleBar));
+                          LayoutTitleBarAndWebView(rec->hwnd, titleVisible);
+                          RWV_WinEnsureFindBarShim(rec->hwnd);
+                          if (rec->findEdit && IsWindow(rec->findEdit)) { SetFocus(rec->findEdit); SendMessageW(rec->findEdit, EM_SETSEL, 0, -1); }
+                        } else {
+                          RWV_WinEnsureFindBarShim(rec->hwnd);
+                          if (rec->findEdit && IsWindow(rec->findEdit)) SetFocus(rec->findEdit);
+                          g_findEnterActive = true; g_findLastEnterTick = GetTickCount();
+                          WinFindNavigate(rec, !shift);
+                          LogF("[AccelCtrlF] nav %s query='%s'", shift?"prev":"next", rec->findQuery.c_str());
+                          if (rec->findEdit && IsWindow(rec->findEdit)) SendMessageW(rec->findEdit, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+                        }
+                        // Update focus chain explicitly (user intent is on this instance)
+                        UpdateFocusChain(rec->id);
+                      }
+                      return S_OK;
+                    }
+                  ).Get(), &accelTok);
+                }
                 // Try to acquire native Find interface once controller/webview ready
                 WebViewInstanceRecord* recAcquire = GetInstanceById(activeId);
                 if (recAcquire && recAcquire->webview) {
@@ -271,17 +342,17 @@ struct ICoreWebView2_28;
 static void WinNativeFindUpdateCounters(WebViewInstanceRecord* rec)
 {
   if (!rec || !rec->nativeFind) return;
-  INT32 rawIdx=-1, rawTotal=0;
-  rec->nativeFind->get_ActiveMatchIndex(&rawIdx); // may be -1 if not yet selected
-  rec->nativeFind->get_MatchCount(&rawTotal);
-  int uiIdx = 0; int uiTotal = 0;
-  if (rawTotal > 0) {
-    uiTotal = (int)rawTotal;
-    if (rawIdx >= 0) uiIdx = (int)rawIdx + 1; // convert zero-based -> 1-based
+  INT32 idx=0, total=0;
+  HRESULT hrIdx = rec->nativeFind->get_ActiveMatchIndex(&idx);
+  rec->nativeFind->get_MatchCount(&total);
+  if (total <= 0) {
+    rec->findCurrentIndex = 0; rec->findTotalMatches = 0;
+  } else {
+    rec->findTotalMatches = (int)total;
+    // Docs: ActiveMatchIndex starts at 1, returns -1 if none.
+    if (FAILED(hrIdx) || idx <= 0) rec->findCurrentIndex = 0; else rec->findCurrentIndex = (int)idx;
+    if (rec->findCurrentIndex > rec->findTotalMatches) rec->findCurrentIndex = rec->findTotalMatches;
   }
-  rec->findCurrentIndex = uiIdx;
-  rec->findTotalMatches = uiTotal;
-  LogF("[FindNative] Counters rawIdx=%d rawTotal=%d uiIdx=%d uiTotal=%d", (int)rawIdx, (int)rawTotal, uiIdx, uiTotal);
   UpdateFindCounter(rec);
 }
 
@@ -316,23 +387,11 @@ void WinEnsureNativeFind(WebViewInstanceRecord* rec)
   LogRaw("[FindNative] acquired ICoreWebView2Find (events subscribe)");
   // Subscribe events
   auto hr1 = rec->nativeFind->add_ActiveMatchIndexChanged(Callback<ICoreWebView2FindActiveMatchIndexChangedEventHandler>(
-    [rec](ICoreWebView2Find*, IUnknown*)->HRESULT {
-        WinNativeFindUpdateCounters(rec);
-        if (rec->nativeFind && !rec->findHighlightAll && !rec->nativeFindAutoActivated) {
-          INT32 rawIdx=-1, rawTotal=0; rec->nativeFind->get_ActiveMatchIndex(&rawIdx); rec->nativeFind->get_MatchCount(&rawTotal);
-          if (rawIdx < 0 && rawTotal > 0) { rec->nativeFind->FindNext(); rec->nativeFindAutoActivated = true; LogRaw("[FindNative] Event auto FindNext (ActiveMatchIndexChanged) to select first match"); }
-        }
-        return S_OK; }
-  ).Get(), reinterpret_cast<EventRegistrationToken*>(&rec->nativeFindActiveToken));
+    [rec](ICoreWebView2Find*, IUnknown*)->HRESULT { WinNativeFindUpdateCounters(rec); return S_OK; }
+  ).Get(), (EventRegistrationToken*)&rec->nativeFindActiveToken);
   auto hr2 = rec->nativeFind->add_MatchCountChanged(Callback<ICoreWebView2FindMatchCountChangedEventHandler>(
-    [rec](ICoreWebView2Find*, IUnknown*)->HRESULT {
-        WinNativeFindUpdateCounters(rec);
-        if (rec->nativeFind && !rec->findHighlightAll && !rec->nativeFindAutoActivated) {
-          INT32 rawIdx=-1, rawTotal=0; rec->nativeFind->get_ActiveMatchIndex(&rawIdx); rec->nativeFind->get_MatchCount(&rawTotal);
-            if (rawIdx < 0 && rawTotal > 0) { rec->nativeFind->FindNext(); rec->nativeFindAutoActivated = true; LogRaw("[FindNative] Event auto FindNext (MatchCountChanged) to select first match"); }
-        }
-        return S_OK; }
-  ).Get(), reinterpret_cast<EventRegistrationToken*>(&rec->nativeFindCountToken));
+    [rec](ICoreWebView2Find*, IUnknown*)->HRESULT { WinNativeFindUpdateCounters(rec); return S_OK; }
+  ).Get(), (EventRegistrationToken*)&rec->nativeFindCountToken);
   LogF("[FindNative] ready find=%p opts=%p ev1=0x%lX ev2=0x%lX", (void*)rec->nativeFind, (void*)rec->nativeFindOpts, (long)hr1, (long)hr2);
 }
 
@@ -353,10 +412,14 @@ void WinFindStartOrUpdate(WebViewInstanceRecord* rec)
       ICoreWebView2FindOptions* fresh = nullptr; HRESULT hrC = env15->CreateFindOptions(&fresh);
       if (SUCCEEDED(hrC) && fresh) {
         rec->nativeFindOpts = fresh;
-        std::wstring wq(rec->findQuery.begin(), rec->findQuery.end());
+        // Convert UTF-8 query to UTF-16 for WebView2 FindTerm
+        std::wstring wq; if (!rec->findQuery.empty()) {
+          int wlen = MultiByteToWideChar(CP_UTF8, 0, rec->findQuery.c_str(), -1, nullptr, 0);
+          if (wlen>0) { wq.resize(wlen-1); MultiByteToWideChar(CP_UTF8,0,rec->findQuery.c_str(),-1,(LPWSTR)wq.data(),wlen); }
+        }
         rec->nativeFindOpts->put_FindTerm(wq.c_str());
         rec->nativeFindOpts->put_IsCaseSensitive(rec->findCaseSensitive ? TRUE : FALSE);
-        rec->nativeFindOpts->put_ShouldHighlightAllMatches(rec->findHighlightAll ? TRUE : FALSE);
+        rec->nativeFindOpts->put_ShouldHighlightAllMatches(TRUE); // forced
         rec->nativeFindOpts->put_SuppressDefaultFindDialog(TRUE);
         // We do NOT set ShouldMatchWord (leave default false)
       } else {
@@ -370,25 +433,10 @@ void WinFindStartOrUpdate(WebViewInstanceRecord* rec)
   // If previously active and query changed, stop to start a new session from top
   if (rec->nativeFindActive) rec->nativeFind->Stop();
   rec->nativeFindActive = true;
-  rec->nativeFindAutoActivated = false; // reset for new session
   HRESULT hrStart = rec->nativeFind->Start(rec->nativeFindOpts, Callback<ICoreWebView2FindStartCompletedHandler>(
-    [rec](HRESULT /*result*/) -> HRESULT {
-        // We might not yet have ActiveMatchIndex; counters will update via events.
-        // Force immediate counter poll for logging.
-        WinNativeFindUpdateCounters(rec);
-        // If highlightAll is false we often need an explicit first navigation to select first match.
-        if (rec->nativeFind && !rec->findHighlightAll) {
-          INT32 rawIdx=-1, rawTotal=0; rec->nativeFind->get_ActiveMatchIndex(&rawIdx); rec->nativeFind->get_MatchCount(&rawTotal);
-          if (rawIdx < 0 && rawTotal > 0) { rec->nativeFind->FindNext(); rec->nativeFindAutoActivated = true; LogRaw("[FindNative] Auto FindNext to activate first match (highlightAll=0)"); }
-        }
-        // Attempt to force rendering highlight by programmatic focus move
-        if (rec->controller) {
-          Microsoft::WRL::ComPtr<ICoreWebView2Controller> c2; rec->controller->QueryInterface(IID_PPV_ARGS(&c2));
-          if (c2) c2->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
-        }
-        return S_OK; }
+    [rec](HRESULT /*result*/) -> HRESULT { /* initial events will follow */ return S_OK; }
   ).Get());
-  LogF("[FindNative] Start term='%s' case=%d highlight=%d hr=0x%lX", rec->findQuery.c_str(), (int)rec->findCaseSensitive, (int)rec->findHighlightAll, (long)hrStart);
+  LogF("[FindNative] Start term='%s' case=%d highlight=1 hr=0x%lX", rec->findQuery.c_str(), (int)rec->findCaseSensitive, (long)hrStart);
 }
 
 void WinFindNavigate(WebViewInstanceRecord* rec, bool forward)
@@ -397,10 +445,6 @@ void WinFindNavigate(WebViewInstanceRecord* rec, bool forward)
   if (!rec->nativeFindActive || !rec->nativeFind) { LogRaw("[FindNative] navigate ignored (inactive)"); return; }
   if (forward) rec->nativeFind->FindNext(); else rec->nativeFind->FindPrevious();
   LogF("[FindNative] Navigate %s", forward?"next":"prev");
-  if (rec->controller) {
-    Microsoft::WRL::ComPtr<ICoreWebView2Controller> c2; rec->controller->QueryInterface(IID_PPV_ARGS(&c2));
-    if (c2) c2->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
-  }
 }
 
 void WinFindClose(WebViewInstanceRecord* rec)
@@ -409,10 +453,9 @@ void WinFindClose(WebViewInstanceRecord* rec)
   if (rec->nativeFind) {
     rec->nativeFind->Stop();
     rec->nativeFindActive = false;
-    // Remove events if subscribed (value of token may be 0 for uninitialized)
-  if (rec->nativeFindActiveToken.value) rec->nativeFind->remove_ActiveMatchIndexChanged(*reinterpret_cast<EventRegistrationToken*>(&rec->nativeFindActiveToken));
-  if (rec->nativeFindCountToken.value) rec->nativeFind->remove_MatchCountChanged(*reinterpret_cast<EventRegistrationToken*>(&rec->nativeFindCountToken));
-    rec->nativeFindActiveToken.value = 0; rec->nativeFindCountToken.value=0;
+    if (rec->nativeFindActiveToken) rec->nativeFind->remove_ActiveMatchIndexChanged(*(EventRegistrationToken*)&rec->nativeFindActiveToken);
+    if (rec->nativeFindCountToken) rec->nativeFind->remove_MatchCountChanged(*(EventRegistrationToken*)&rec->nativeFindCountToken);
+    rec->nativeFindActiveToken = 0; rec->nativeFindCountToken=0;
     if (rec->nativeFindOpts) { rec->nativeFindOpts->Release(); rec->nativeFindOpts = nullptr; }
     rec->nativeFind->Release(); rec->nativeFind = nullptr;
     LogRaw("[FindNative] stopped & released");

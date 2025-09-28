@@ -41,7 +41,7 @@ static void* Vararg_WEBVIEW_Navigate(void** arglist, int numparms);
 // ------------------------------------------------------------------
 
 // Единая точка входа: url + JSON-опции или "0"
-static void API_WEBVIEW_Navigate(const char* url, const char* opts)
+void API_WEBVIEW_Navigate(const char* url, const char* opts)
 {
   // Считываем опции (без немедленного применения к глобалам)
   std::string newTitle;
@@ -64,7 +64,14 @@ static void API_WEBVIEW_Navigate(const char* url, const char* opts)
   //   строка, начинающаяся на wv_ -> принимается как есть
   //   любое иное значение -> трактуется как wv_default
   bool wasRandom=false;
-  const std::string normalizedId = NormalizeInstanceId(newInstance, &wasRandom);
+  std::string requestedId = newInstance;
+  // Support virtual tokens: "current" and "last" BEFORE NormalizeInstanceId.
+  if (requestedId == "current") {
+    if (!g_activeInstanceId.empty()) requestedId = g_activeInstanceId; else requestedId = "random"; // fallback -> random per требованию
+  } else if (requestedId == "last") {
+    if (!g_lastFocusedInstanceId.empty()) requestedId = g_lastFocusedInstanceId; else if(!g_activeInstanceId.empty()) requestedId = g_activeInstanceId; else requestedId = "random"; // fallback -> random
+  }
+  const std::string normalizedId = NormalizeInstanceId(requestedId, &wasRandom);
   // Захват старого заголовка (если есть) для отслеживания изменения
   WebViewInstanceRecord* before = GetInstanceById(normalizedId);
   std::string oldTitle = before ? before->titleOverride : std::string();

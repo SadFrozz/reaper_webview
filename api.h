@@ -15,6 +15,9 @@ void RegisterAPI(void);
 // Отменяет регистрацию (вызвать при выгрузке плагина)
 void UnregisterAPI(void);
 
+// Internal C API (used across translation units). Not part of stable external SDK yet.
+void API_WEBVIEW_Navigate(const char* url, const char* opts);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif
