@@ -1,4 +1,6 @@
 // Reaper WebView Plugin
+// (c) Andrew "SadFrozz" Brodsky
+// 2025 and later
 // log.h — единый кроссплатформенный логгер (header-only)
 #pragma once
 

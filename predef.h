@@ -2,6 +2,8 @@
 // (c) Andrew "SadFrozz" Brodsky
 // 2025 and later
 // predef.h
+// Common predefines and includes for all translation units
+
 #pragma once
 
 // ===== platform =====
@@ -13,13 +15,13 @@
   #define NOMINMAX
   #endif
 
-  // Базовые Win-заголовки (без тяжёлых библиотек)
+  // Basic Win32 headers (avoid pulling in heavy libraries)
   #include <winsock2.h>
   #include <windows.h>
   #include <objbase.h>
 
-  // ВАЖНО: WIL / WebView2 подключаем ТОЛЬКО если TU действительно их использует.
-  // Перед #include "predef.h" в таком TU нужно определить RWV_WITH_WEBVIEW2.
+  // IMPORTANT: Include WIL / WebView2 ONLY if this translation unit actually uses them.
+  // Before including "predef.h" define RWV_WITH_WEBVIEW2 in that TU.
   #if defined(RWV_WITH_WEBVIEW2)
     #include <wrl.h>
     #include "deps/wil/com.h"
@@ -72,10 +74,10 @@
 #include <memory>
 
 // ===== WDL / REAPER SDK =====
-#include "WDL/wdltypes.h"           // <- про это спрашивали: подключаем тут
+#include "WDL/wdltypes.h"           // Asked about this earlier: include here globally
 #include "sdk/reaper_plugin.h"
 
-// ВНИМАНИЕ: reaper_plugin_functions.h подключаем здесь,
-// но определение указателей произойдёт только в том TU,
-// где ПЕРЕД ЭТИМ заголовком задан REAPERAPI_IMPLEMENT.
+// NOTE: reaper_plugin_functions.h is included here, but pointer definitions
+// happen only in the translation unit that defines REAPERAPI_IMPLEMENT
+// before including this header.
 #include "sdk/reaper_plugin_functions.h"

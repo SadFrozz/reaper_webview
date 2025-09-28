@@ -10,14 +10,14 @@
 #include "helpers.h"
 #include "webview.h"
 #include "log.h"
-#include <unordered_map> // для карт наблюдателей
+#include <unordered_map> // for observer maps
 
 // Forward decls for functions implemented in main.mm (mac UI helpers)
 extern "C" void MacFindNavigate(struct WebViewInstanceRecord* rec, bool forward);
-// EnsureFindBarCreated реализована в main.mm, но здесь она недоступна — не вызываем напрямую.
+// EnsureFindBarCreated is implemented in main.mm; not directly accessible here, so do not call.
 
 
-// Используется пер-инстансовое хранение WKWebView (WebViewInstanceRecord)
+// Per-instance storage of WKWebView (WebViewInstanceRecord)
 
 @interface FRZWebViewDelegate : NSObject <WKNavigationDelegate, WKScriptMessageHandler>
 @end
@@ -37,7 +37,7 @@ static void ObserveTitleIfNeeded(WKWebView* wv, HWND hwnd);
 {
   if (![message.name isEqualToString:@"frzCtx"]) return;
 
-  // Глобальные координаты курсора (Cocoa: 0,0 — снизу слева)
+  // Global cursor coordinates (Cocoa: origin 0,0 is bottom-left)
   NSPoint p = [NSEvent mouseLocation];
   int sx = (int)llround(p.x);
   int sy = (int)llround(p.y);
@@ -57,18 +57,18 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
 
   WKWebViewConfiguration* cfg = [[WKWebViewConfiguration alloc] init];
 
-  // JS-хук для ПКМ и отключение selection
+  // JS hook for right-click (custom context menu) and disabling selection
   WKUserContentController* ucc = [[WKUserContentController alloc] init];
   [cfg setUserContentController:ucc];
 
   NSString *js =
   @"(function(){"
-    // Глушим собственное контекстное меню страницы
+  // Suppress the page's native context menu
     "window.addEventListener('contextmenu', function(e){ e.preventDefault(); "
       "try{ window.webkit.messageHandlers.frzCtx.postMessage('CTX'); }catch(_){ }"
     "}, true);"
 
-    // Отключаем выделение
+  // Disable text selection
     "var st = document.createElement('style');"
     "st.textContent='*{ -webkit-user-select:none !important; user-select:none !important; }';"
     "document.documentElement.appendChild(st);"
@@ -278,9 +278,9 @@ void NavigateExistingInstance(const std::string& instanceId, const std::string& 
 }
 
 // ====================== Native Find (macOS WKWebView) ======================
-// Используем публичный API find:configuration:completionHandler: с WKFindConfiguration.
-// Поведение по возможности приближено к Windows реализации: счётчик n/N и навигация по Enter/кнопкам.
-// Highlight-all недоступен нативно – принимаем ограничение (Windows всегда highlight). 
+// Uses public API find:configuration:completionHandler: with WKFindConfiguration.
+// Behavior approximates Windows implementation: n/N counter and navigation via Enter/buttons.
+// Native highlight-all is not available – we supplement with JS highlight logic.
 
 static void MacUpdateFindCounter(struct WebViewInstanceRecord* rec)
 {
@@ -290,18 +290,18 @@ static void MacUpdateFindCounter(struct WebViewInstanceRecord* rec)
 static void MacResetFindState(struct WebViewInstanceRecord* rec)
 {
   if(!rec) return; rec->findCurrentIndex=0; rec->findTotalMatches=0; MacUpdateFindCounter(rec);
-  // Удаляем текущее выделение (чтобы визуально очистить) – допустимо простым JS, не трогая DOM структуру
+  // Remove current selection (visual reset) – safe via simple JS without altering structural DOM
   if(rec->webView){ [rec->webView evaluateJavaScript:@"window.getSelection && window.getSelection().removeAllRanges();" completionHandler:nil]; }
-  // Удаляем все ранее созданные подсветки (span.__rwv_find)
+  // Remove all previously created highlight spans (span.__rwv_find)
   if(rec->webView){ [rec->webView evaluateJavaScript:@"(function(){ var xs=document.querySelectorAll('span.__rwv_find'); for(var i=0;i<xs.length;i++){ var s=xs[i]; var p=s.parentNode; while(s.firstChild) p.insertBefore(s.firstChild,s); p.removeChild(s);} })();" completionHandler:nil]; }
   rec->findLastHighlightedQuery.clear(); rec->findLastHighlightedCase=false;
 }
 
-// Полная подсветка всех совпадений через JS (независимо от текущего выбранного match нативного API)
+// Full JS-based highlight of all matches (independent of native current match)
 static void MacBuildHighlightAll(struct WebViewInstanceRecord* rec)
 {
   if(!rec || !rec->webView) return; if(rec->findQuery.empty()){ return; }
-  // Диагностика: проверим видимость body и длину текста
+  // Diagnostics: check body presence and text length
   [rec->webView evaluateJavaScript:@"(function(){ try { var b=document.body; if(!b) return 'NOBODY'; var t=b.innerText||b.textContent||''; return 'LEN:'+t.length; } catch(e){ return 'ERR:'+e; } })();" completionHandler:^(id r, NSError* e){ if(!e && [r isKindOfClass:[NSString class]]) { LogF("[Find][mac-fast] bodyCheck %s query='%s'", [(NSString*)r UTF8String], rec->findQuery.c_str()); } }];
   bool same = (rec->findLastHighlightedQuery == rec->findQuery && rec->findLastHighlightedCase == rec->findCaseSensitive);
   if(same){
@@ -341,7 +341,7 @@ static void MacBuildHighlightAll(struct WebViewInstanceRecord* rec)
   [rec->webView evaluateJavaScript:njs completionHandler:^(id r, NSError* e){ 
     if(e){ 
       LogF("[Find][mac-fast] js-eval error: %s", e.localizedDescription.UTF8String); 
-      // При ошибке сбрасываем состояние чтобы избежать рассинхронизации
+  // On error reset state to avoid desynchronization
       rec->findCurrentIndex = 0; rec->findTotalMatches=0; rec->findLastHighlightedQuery.clear(); rec->findLastHighlightedCase=false; 
       dispatch_async(dispatch_get_main_queue(), ^{ MacUpdateFindCounter(rec); });
       return; 
@@ -355,16 +355,16 @@ static void MacBuildHighlightAll(struct WebViewInstanceRecord* rec)
       return;
     }
     if(mCount == -2){
-      // Too many matches: we did not highlight all, fallback count to inform approximate total and allow refinement
+  // Too many matches: highlight truncated; fallback count for approximate total and user refinement
       NSString* fb2 = [NSString stringWithFormat:@"(function(){ try { if(!window.__rwvFind) return 'NO_HELPER'; return 'FB:'+window.__rwvFind.fallbackCount(\"%@\",%s); } catch(e){ return 'FBERR:'+e; } })();", [NSString stringWithUTF8String:esc.c_str()], rec->findCaseSensitive?"true":"false"];
       [rec->webView evaluateJavaScript:fb2 completionHandler:^(id fr, NSError* fe){ if(!fe && [fr isKindOfClass:[NSString class]]){ LogF("[Find][mac-fast] too-many matches (limited) %s query='%s'", [(NSString*)fr UTF8String], rec->findQuery.c_str()); }}];
       rec->findLastHighlightedQuery.clear(); rec->findLastHighlightedCase=false; mCount = 0; // treat as zero highlighted
     }
     if(mCount==0 && !rec->findQuery.empty()){
-      // fallback только для диагностики: просто считаем число вхождений без модификации DOM чтобы понять есть ли вообще совпадения в тексте
+  // Fallback (diagnostic only): count occurrences without DOM modification to confirm existence
       NSString* fb = [NSString stringWithFormat:@"(function(){ try { if(!window.__rwvFind) return 'NO_HELPER'; return 'FB:'+window.__rwvFind.fallbackCount(\"%@\",%s); } catch(e){ return 'FBERR:'+e; } })();", [NSString stringWithUTF8String:esc.c_str()], rec->findCaseSensitive?"true":"false"];
       [rec->webView evaluateJavaScript:fb completionHandler:^(id fr, NSError* fe){ if(!fe && [fr isKindOfClass:[NSString class]]){ LogF("[Find][mac-fast] fallback diag %s query='%s'", [(NSString*)fr UTF8String], rec->findQuery.c_str()); }}];
-      // разрешим последующим вызовам снова перестраивать (не держим кэш для нулевого результата)
+  // Allow future rebuilds (do not cache zero-result state)
       rec->findLastHighlightedQuery.clear(); rec->findLastHighlightedCase=false; LogF("[Find][mac-fast] zero matches -> clear lastHighlighted to allow rebuild query='%s'", rec->findQuery.c_str());
     }
     if(prevQuery == rec->findQuery){ if(prevIndex<1) prevIndex=1; if(prevIndex>mCount) prevIndex=mCount; rec->findCurrentIndex = mCount?prevIndex:0; }
@@ -393,13 +393,13 @@ extern "C" void MacFindNavigate(struct WebViewInstanceRecord* rec, bool forward)
   if(!rec || !rec->webView) return; if(rec->findQuery.empty()){ MacResetFindState(rec); return; }
   WKWebView* wv = rec->webView; // no rebuild here; navigation only
   LogF("[Find][mac-native] nav %s query='%s'", forward?"forward":"backward", rec->findQuery.c_str());
-  // Простая циклическая навигация без нативного matchIndex чтения: используем локальные счётчики
+  // Simple cyclic navigation without native matchIndex: use local counters
   if(rec->findTotalMatches<=0){ MacFindStartOrUpdate(rec); return; }
   if(forward){ if(rec->findCurrentIndex < rec->findTotalMatches) rec->findCurrentIndex++; else rec->findCurrentIndex=1; }
   else { if(rec->findCurrentIndex>1) rec->findCurrentIndex--; else rec->findCurrentIndex=rec->findTotalMatches; }
   MacUpdateFindCounter(rec);
   int idx = rec->findCurrentIndex;
-  // Обновление текущего выделения: класс __rwv_find_current
+  // Update current highlight: apply __rwv_find_current class
   NSString* js = [NSString stringWithFormat:@"(function(){var L=document.querySelectorAll('span.__rwv_find'); for(var i=0;i<L.length;i++){L[i].classList.remove('__rwv_find_current'); L[i].style.background='rgba(255,230,128,0.9)'; L[i].style.outline='1px solid rgba(255,180,0,0.4)';} var i=%d; if(i>=1 && i<=L.length){var el=L[i-1]; el.classList.add('__rwv_find_current'); el.style.background='rgba(255,150,0,0.95)'; el.style.outline='2px solid rgba(255,90,0,0.9)'; el.scrollIntoView({block:'center'});} })();", idx];
   [wv evaluateJavaScript:js completionHandler:nil];
 }

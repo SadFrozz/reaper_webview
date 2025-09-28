@@ -173,7 +173,7 @@ void StartWebView(HWND hwnd, const std::string& initial_url)
                   EventRegistrationToken tok1{}; if (SUCCEEDED(rec->controller->add_GotFocus(gotCb.Get(), (EventRegistrationToken*)&tok1))) rec->gotFocusToken = *(WebViewInstanceRecord::EventRegistrationToken*)&tok1;
                   auto lostCb = Microsoft::WRL::Callback<ICoreWebView2FocusChangedEventHandler>(
                     [rec](ICoreWebView2Controller* /*sender*/, IUnknown* /*args*/) -> HRESULT {
-                      // LostFocus здесь не всегда нужен, но логируем для диагностики (не обновляем lastFocusTick)
+                      // LostFocus not always essential, but we log for diagnostics (do NOT update lastFocusTick)
                       LogF("[FocusEvt] LostFocus id='%s'", rec->id.c_str());
                       return S_OK;
                     });

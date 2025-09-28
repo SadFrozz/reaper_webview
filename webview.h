@@ -5,7 +5,7 @@
 #pragma once
 #include "predef.h"
 
-// Платформо-специфичная инициализация WebView, реализации — в webview_win.cpp / webview_mac.mm
+// Platform-specific WebView initialization, implementations live in webview_win.cpp / webview_mac.mm
 void StartWebView(HWND hwnd, const std::string& initial_url);
 
 #ifdef _WIN32
