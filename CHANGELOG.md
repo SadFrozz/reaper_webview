@@ -7,6 +7,20 @@ Format:
 - Newest entries on top.
 - Keep entries concise; detailed implementation notes go to commits/PRs.
 
+## v0.1.1 Beta
+### Changed
+- macOS find bar: removed ad-hoc pixel shift constants; unified intrinsic vertical centering for controls.
+- Checkbox label vertical alignment refined via baseline offset (improved optical centering, no frame hacks).
+- Navigation arrow buttons now inherit theme text color (consistent with text field / counter / checkbox).
+
+### Fixed
+- Slight misalignment of macOS find bar checkbox text relative to other controls.
+
+### Planned (Roadmap Snapshot)
+- (unchanged) WebView settings exposure inside REAPER preferences.
+- (unchanged) ReaRoute usage support.
+- (unchanged) Copy/Cut/Paste in custom context menu.
+
 ## v0.1.0 Beta
 ### Added
 - macOS find-in-page implementation achieving parity with Windows (highlight-all, counter, navigation, case handling).

@@ -64,7 +64,8 @@ void GetPanelThemeColorsMac(int* outBg, int* outTx)
   bool scanned = false;
   int chosen_c1 = -1, chosen_c2 = -1, chosen_l1 = -1, chosen_l2 = -1;
 
-  if (diff < 25 && GetColorThemeStruct) {
+  // Scan theme struct if contrast too low OR we had to fallback background (to try get a proper pair)
+  if ((diff < 25 || usedFallbackBk) && GetColorThemeStruct) {
     int sz = 0; void* p = GetColorThemeStruct(&sz);
     if (p && sz >= 64) {
       int* arr = (int*)p; int n = sz / (int)sizeof(int);
@@ -327,4 +328,52 @@ ShowPanelMode ParseShowPanel(const std::string& v)
     if (!strcasecmp(v.c_str(), "always")) return ShowPanelMode::Always;
   #endif
   return ShowPanelMode::Unset;
+}
+
+// -----------------------------------------------------
+// URL normalization / external dispatch decision
+// -----------------------------------------------------
+static inline bool HasScheme(const std::string& s)
+{
+  // scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ':'
+  size_t i=0; if (s.empty() || !std::isalpha((unsigned char)s[0])) return false;
+  for (i=1;i<s.size();++i) {
+    char c=s[i];
+    if (c==':') return i>0; // found scheme
+    if (!(std::isalnum((unsigned char)c) || c=='+' || c=='-' || c=='.')) return false;
+  }
+  return false;
+}
+
+bool NormalizeOrDispatchURL(const std::string& input,
+                            std::string& outNormalized,
+                            std::string& outExternal,
+                            std::string& outReason)
+{
+  outNormalized.clear(); outExternal.clear(); outReason.clear();
+  if (input.empty()) { outReason="empty"; return false; }
+  // Trim spaces
+  size_t a=0,b=input.size(); while(a<b && std::isspace((unsigned char)input[a])) ++a; while(b>a && std::isspace((unsigned char)input[b-1])) --b; std::string s=input.substr(a,b-a);
+  if (s.empty()) { outReason="all_whitespace"; return false; }
+  // Quick reject of lone placeholder
+  if (s=="https://" || s=="http://") { outReason="placeholder_only"; return false; }
+
+  // Detect scheme
+  if (HasScheme(s)) {
+    // Lowercase scheme portion for comparison
+    size_t colon = s.find(':');
+    std::string scheme; scheme.reserve(colon);
+    for (size_t i=0;i<colon;i++) scheme.push_back((char)std::tolower((unsigned char)s[i]));
+    // Schemes we allow to embed
+    static const char* kEmbedSchemes[] = { "http", "https", "file", "about", "data" };
+    bool embed=false; for (auto ks : kEmbedSchemes) { if (scheme == ks) { embed=true; break; } }
+    if (embed) { outNormalized = s; outReason="embed_scheme"; return true; }
+    // mailto and others -> external
+    outExternal = s; outReason = "external_scheme:" + scheme; return false;
+  }
+
+  // No scheme: treat as host/path; simple heuristic: if contains space -> invalid
+  if (s.find(' ') != std::string::npos) { outReason="space_in_url"; return false; }
+  // Prefix https://
+  outNormalized = std::string("https://") + s; outReason="prefixed_https"; return true;
 }

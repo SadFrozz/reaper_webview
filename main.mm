@@ -737,7 +737,12 @@ static void MacUpdateFindCounter(WebViewInstanceRecord* rec)
   rec->findCounterLabel.stringValue = [NSString stringWithFormat:@"%d/%d",cur,tot];
 }
 
-static int g_macFindCounterShift = 2; // optical downward shift (positive -> visually down)
+// Unified vertical centering for mac find bar (removed previous per-control shifts)
+// Additional fine‑tune vertical shifts (macOS UI polishing)
+// Removed per request: checkbox uses the same vertical centering as other controls
+// All find bar controls use unified vertical centering (no per-control shifts)
+static int g_macOpenUrlRowShift  = 0;   // row baseline shift now neutral
+static int g_macOpenUrlLabelOffset = -2; // apply only to label (negative -> move label up if it sat too low)
 static void EnsureFindBarCreated(HWND hwnd)
 {
   WebViewInstanceRecord* rec = GetInstanceByHwnd(hwnd); if(!rec) return; NSView* host=(NSView*)hwnd; if(!host) return;
@@ -756,18 +761,23 @@ static void EnsureFindBarCreated(HWND hwnd)
   CGFloat navSize=24; fb.btnPrev = [[NSButton alloc] initWithFrame:NSMakeRect(curX, centerY - navSize/2, navSize, navSize)]; [fb.btnPrev setTitle:@"▲"]; [fb.btnPrev setBezelStyle:NSBezelStyleTexturedRounded]; [fb.btnPrev setTarget:fb]; [fb.btnPrev setAction:@selector(commonButtonAction:)]; curX += navSize + 8;
   fb.btnNext = [[NSButton alloc] initWithFrame:NSMakeRect(curX, centerY - navSize/2, navSize, navSize)]; [fb.btnNext setTitle:@"▼"]; [fb.btnNext setBezelStyle:NSBezelStyleTexturedRounded]; [fb.btnNext setTarget:fb]; [fb.btnNext setAction:@selector(commonButtonAction:)]; curX += navSize + 10;
   // Case Sensitive checkbox
-  fb.chkCase = [[NSButton alloc] initWithFrame:NSMakeRect(curX, centerY - innerH/2, 120, innerH)]; [fb.chkCase setButtonType:NSButtonTypeSwitch]; [fb.chkCase setTitle:@"Case Sensitive"]; [fb.chkCase setTarget:fb]; [fb.chkCase setAction:@selector(commonButtonAction:)]; curX += 120 + 8;
+  fb.chkCase = [[NSButton alloc] initWithFrame:NSZeroRect];
+  [fb.chkCase setButtonType:NSButtonTypeSwitch];
+  [fb.chkCase setTitle:@"Case Sensitive"]; [fb.chkCase sizeToFit];
+  {
+    NSRect fr = fb.chkCase.frame; CGFloat ch = fr.size.height; fr.origin.x = curX; fr.origin.y = centerY - ch*0.5; fb.chkCase.frame = fr; curX += fr.size.width + 8;
+    LogF("[Find][mac] create checkbox intrinsic h=%g placedY=%g", (double)ch, (double)fr.origin.y);
+  }
   // Highlight All (shift left 10 like Windows before placing)
   curX -= 10; if(curX<pad) curX=pad;
   // Highlight All control removed (always-on highlight semantics)
   // Additional left shift 10 before counter
   curX -= 10; if(curX<pad) curX=pad;
-  // Counter label: unified creation; apply global optical shift (positive = down)
+  // Counter label: unified creation; no extra vertical shift
   NSFont* fnt = [NSFont systemFontOfSize:[NSFont systemFontSize]];
   CGFloat baseY = centerY - innerH/2; // strict center baseline
-  CGFloat finalY = baseY - g_macFindCounterShift;
-  fb.lblCounter = [[NSTextField alloc] initWithFrame:NSMakeRect(curX, finalY, 60, innerH)];
-  LogF("[Find][mac] counter create baseY=%g finalY=%g shift=%d", (double)baseY, (double)finalY, g_macFindCounterShift);
+  fb.lblCounter = [[NSTextField alloc] initWithFrame:NSMakeRect(curX, baseY, 60, innerH)];
+  LogF("[Find][mac] counter create baseY=%g", (double)baseY);
   [fb.lblCounter setBezeled:NO]; [fb.lblCounter setEditable:NO]; [fb.lblCounter setDrawsBackground:NO]; [fb.lblCounter setAlignment:NSTextAlignmentCenter]; [fb.lblCounter setFont:fnt]; fb.lblCounter.stringValue=@"0/0"; curX += 60 + 6;
   // Close (temp position; will be right-aligned in layout pass)
   fb.btnClose = [[NSButton alloc] initWithFrame:NSMakeRect(curX, centerY - innerH/2, 24, innerH)]; [fb.btnClose setBezelStyle:NSBezelStyleRegularSquare]; [fb.btnClose setTitle:@"X"]; [fb.btnClose setTarget:fb]; [fb.btnClose setAction:@selector(commonButtonAction:)];
@@ -794,6 +804,39 @@ static void EnsureFindBarCreated(HWND hwnd)
   [host addSubview:fb positioned:NSWindowBelow relativeTo:nil];
   [fb setHidden:YES];
   LogRaw("[Find][mac] created (initial hidden)");
+
+  // Apply panel theme colors to find bar (reuse panel title colors for consistency)
+  MacInitOrRefreshPanelColors(rec); // refresh rec->titleBkColor/titleTextColor
+  int bg = rec->titleBkColor; int tx = rec->titleTextColor;
+  NSColor* bgCol = (bg>=0)? [NSColor colorWithCalibratedRed:((bg>>16)&0xFF)/255.0 green:((bg>>8)&0xFF)/255.0 blue:(bg&0xFF)/255.0 alpha:1.0] : [NSColor windowBackgroundColor];
+  NSColor* txCol = (tx>=0)? [NSColor colorWithCalibratedRed:((tx>>16)&0xFF)/255.0 green:((tx>>8)&0xFF)/255.0 blue:(tx&0xFF)/255.0 alpha:1.0] : [NSColor textColor];
+  // Text field: only text color (background left default per original request)
+  if (fb.txtField) {
+    [fb.txtField setTextColor:txCol];
+  }
+  // Counter label text color
+  if (fb.lblCounter) {
+    [fb.lblCounter setTextColor:txCol];
+  }
+  // Case checkbox title color (attributed)
+  if (fb.chkCase) {
+    NSMutableAttributedString* attrTitle = [[NSMutableAttributedString alloc] initWithString:[fb.chkCase title]];
+    [attrTitle addAttribute:NSForegroundColorAttributeName value:txCol range:NSMakeRange(0, [attrTitle length])];
+    // Slight baseline lift to visually center text inside macOS checkbox (no manual frame shift)
+  [attrTitle addAttribute:NSBaselineOffsetAttributeName value:@(2.0) range:NSMakeRange(0, [attrTitle length])];
+    [fb.chkCase setAttributedTitle:attrTitle];
+  }
+  // Arrow buttons text color (apply same theme) – keep bezel default
+  if (fb.btnPrev) {
+    NSMutableAttributedString* at = [[NSMutableAttributedString alloc] initWithString:[fb.btnPrev title]];
+    [at addAttribute:NSForegroundColorAttributeName value:txCol range:NSMakeRange(0, [at length])];
+    [fb.btnPrev setAttributedTitle:at];
+  }
+  if (fb.btnNext) {
+    NSMutableAttributedString* at = [[NSMutableAttributedString alloc] initWithString:[fb.btnNext title]];
+    [at addAttribute:NSForegroundColorAttributeName value:txCol range:NSMakeRange(0, [at length])];
+    [fb.btnNext setAttributedTitle:at];
+  }
 }
 
 // Perform layout of mac find bar controls each time bar/frame changes (mirror Windows logic)
@@ -810,13 +853,17 @@ static void MacLayoutFindBar(WebViewInstanceRecord* rec)
   // Next
   if(rec->findBtnNext){ [(NSView*)rec->findBtnNext setFrame:NSMakeRect(curX, centerY-navSize/2,navSize,navSize)]; curX+=navSize+10; }
   // Case
-  if(rec->findChkCase){ [(NSView*)rec->findChkCase setFrame:NSMakeRect(curX, centerY-innerH/2,120,innerH)]; curX+=120+8; }
+  if(rec->findChkCase){
+    // Recompute intrinsic size each layout in case font/theme changed
+    NSButton* cb = (NSButton*)rec->findChkCase; [cb sizeToFit]; NSRect fr = cb.frame; CGFloat ch = fr.size.height; fr.origin.x = curX; fr.origin.y = centerY - ch*0.5; cb.frame = fr; curX += fr.size.width + 8;
+    LogF("[Find][mac] layout checkbox intrinsic h=%g y=%g", (double)ch, (double)fr.origin.y);
+  }
   // Highlight group shift
   curX-=10; if(curX<pad) curX=pad;
   // highlight removed
   // Counter shift
   curX-=10; if(curX<pad) curX=pad;
-  if(rec->findCounterLabel){ CGFloat finalY = baseY - g_macFindCounterShift; NSRect fr = NSMakeRect(curX, finalY,60,innerH); [rec->findCounterLabel setFrame:fr]; curX+=60+6; LogF("[Find][mac] counter layout baseY=%g finalY=%g shift=%d", (double)baseY, (double)finalY, g_macFindCounterShift); }
+  if(rec->findCounterLabel){ NSRect fr = NSMakeRect(curX, baseY,60,innerH); [rec->findCounterLabel setFrame:fr]; curX+=60+6; LogF("[Find][mac] counter layout baseY=%g", (double)baseY); }
   // Close right aligned
   CGFloat closeW=24; CGFloat rightX = w - pad - closeW;
   if(rec->findBtnClose){ [(NSView*)rec->findBtnClose setFrame:NSMakeRect(rightX, centerY-innerH/2,closeW,innerH)]; }
@@ -989,6 +1036,11 @@ static void SizeWebViewToClient(HWND hwnd)
 #ifndef WEBVIEWINITIALIZED
   #define WEBVIEWINITIALIZED
   #include "webview.h"
+  #ifdef _WIN32
+  #include <shellapi.h>
+  #else
+  #import <AppKit/AppKit.h>
+  #endif
 #endif
 
 // ============================== контекстное меню дока ==============================
@@ -1672,7 +1724,20 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     UnregisterCommandId();
   UnregisterAPI();
 
-    // Destroy all instance windows
+#ifndef _WIN32
+    // macOS: perform safe explicit cleanup of WKWebView observers prior to window destruction
+    // Iterate instances and remove title observers + stop loading to avoid async callbacks after teardown.
+    for (auto &kv : g_instances) {
+      WebViewInstanceRecord* recInst = kv.second.get(); if(!recInst) continue; 
+      if (recInst->webView) {
+        // Title observer removal via exported helper
+        FRZ_RemoveTitleObserverFor(recInst->webView);
+        @try { [recInst->webView stopLoading:nil]; } @catch(...) {}
+      }
+    }
+#endif
+
+    // Destroy all instance windows (original simple loop)
     for (auto &kv : g_instances) {
       if (kv.second && kv.second->hwnd && IsWindow(kv.second->hwnd)) {
         bool f=false; int idx=-1;
@@ -1691,6 +1756,11 @@ REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t
     if (g_com_initialized) { CoUninitialize(); g_com_initialized = false; }
 #else
   // macOS: per-instance UI элементы уже освобождены при уничтожении окон (нет глобальных g_titleBarView/g_titleLabel)
+  // Final safety pass (mac): ensure any lingering observers removed
+  for (auto &kv : g_instances) {
+    WebViewInstanceRecord* recInst = kv.second.get(); if(!recInst) continue; 
+    if (recInst->webView) FRZ_RemoveTitleObserverFor(recInst->webView);
+  }
 #endif
   }
   return 0;
@@ -1928,6 +1998,19 @@ static INT_PTR CALLBACK RWVUrlDlgProc(HWND h, UINT m, WPARAM w, LPARAM l)
       if (id==IDOK || id==1002 || id==1003) {
         wchar_t buf[2048]; GetDlgItemTextW(h,1001,buf,2048); std::wstring wurl(buf); std::string url = Narrow(wurl);
         if (url.empty() || url=="https://") { MessageBoxA(h,"URL is empty","WebView",MB_OK|MB_ICONWARNING); return TRUE; }
+        std::string norm, ext, reason; bool embed = NormalizeOrDispatchURL(url, norm, ext, reason);
+        if (!embed && !ext.empty()) {
+          LogF("[URL][DispatchExternal][DlgWin] '%s' reason=%s", url.c_str(), reason.c_str());
+          // ANSI variant; see note in api.mm about potential UTF-8/W conversion.
+          ShellExecuteA(NULL, "open", ext.c_str(), NULL, NULL, SW_SHOWNORMAL);
+          EndDialog(h,1); return TRUE;
+        } else if (embed && !norm.empty()) {
+          if (norm != url) { LogF("[URL][Normalize][DlgWin] '%s' -> '%s' reason=%s", url.c_str(), norm.c_str(), reason.c_str()); }
+          url = norm;
+        } else {
+          LogF("[URL][Ignore][DlgWin] '%s' reason=%s", url.c_str(), reason.c_str());
+          MessageBoxA(h,"Invalid URL","WebView",MB_OK|MB_ICONWARNING); return TRUE;
+        }
         LONG_PTR mode = GetWindowLongPtr(h,DWLP_USER);
         std::string instToken;
         if (id==1002) instToken = "random"; // New tab
@@ -1938,7 +2021,7 @@ static INT_PTR CALLBACK RWVUrlDlgProc(HWND h, UINT m, WPARAM w, LPARAM l)
           else instToken = "random"; // open first when no instances -> random (создаём новый)
         }
         char json[512]; snprintf(json,sizeof(json),"{\"InstanceId\":\"%s\"}",instToken.c_str());
-        LogF("[OpenURLDlg] submit mode=%ld btn=%d token='%s' url='%s'", (long)mode,id,instToken.c_str(),url.c_str());
+  LogF("[OpenURLDlg] submit mode=%ld btn=%d token='%s' url='%s'", (long)mode,id,instToken.c_str(),url.c_str());
         API_WEBVIEW_Navigate(url.c_str(), json);
         EndDialog(h,1); return TRUE; }
       if (id==IDCANCEL) { EndDialog(h,0); return TRUE; }
@@ -1972,12 +2055,17 @@ static bool Act_OpenUrlDialog(int /*flag*/)
       WebViewInstanceRecord* best=nullptr; DWORD bestTick=0; for(auto &kv: g_instances){ WebViewInstanceRecord* r=kv.second.get(); if(!r) continue; if(!best || (DWORD)(r->lastFocusTick - bestTick) < 0x80000000UL){ best=r; bestTick=r->lastFocusTick; } } if(best){ g_lastFocusedInstanceId=best->id; haveLast=true; }
     }
     int mode=3; if(haveActive) mode=1; else if(haveLast) mode=2; else mode=3;
-    NSRect rc = NSMakeRect(0,0,480,130);
+  NSRect rc = NSMakeRect(0,0,480,110);
     NSPanel* panel = [[NSPanel alloc] initWithContentRect:rc styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:NO];
     [panel setTitle:@"WebView: Open URL"]; [panel setReleasedWhenClosed:NO]; [panel setLevel:NSModalPanelWindowLevel]; [panel setHidesOnDeactivate:NO];
-    NSView* content = [panel contentView]; CGFloat pad=10;
-    NSTextField* lbl = [[NSTextField alloc] initWithFrame:NSMakeRect(pad, rc.size.height-34, rc.size.width-2*pad, 20)]; [lbl setBezeled:NO]; [lbl setEditable:NO]; [lbl setDrawsBackground:NO]; [lbl setStringValue:@"Enter URL:"];
-    NSTextField* edit = [[NSTextField alloc] initWithFrame:NSMakeRect(pad, rc.size.height-60, rc.size.width-2*pad, 24)]; [edit setStringValue:@"https://"];
+  NSView* content = [panel contentView]; CGFloat pad=10;
+  // Single row label + edit: label fixed width, edit expands
+  CGFloat baseRowTop = rc.size.height - 42 + g_macOpenUrlRowShift; // unified baseline for edit
+  CGFloat labelW = 80; CGFloat editH = 24;
+  CGFloat labelTop = baseRowTop + g_macOpenUrlLabelOffset;
+  LogF("[OpenURLDlg][mac] row base=%g editY=%g labelY=%g rowShift=%d labelShift=%d", (double)(rc.size.height - 42), (double)baseRowTop, (double)labelTop, g_macOpenUrlRowShift, g_macOpenUrlLabelOffset);
+  NSTextField* lbl = [[NSTextField alloc] initWithFrame:NSMakeRect(pad, labelTop, labelW, editH)]; [lbl setBezeled:NO]; [lbl setEditable:NO]; [lbl setDrawsBackground:NO]; [lbl setAlignment:NSTextAlignmentRight]; [lbl setStringValue:@"Enter URL:"];
+  NSTextField* edit = [[NSTextField alloc] initWithFrame:NSMakeRect(pad+labelW+8, baseRowTop, rc.size.width - (pad+labelW+8) - pad, editH)]; [edit setStringValue:@"https://"]; 
     auto makeBtn=^NSButton*(NSString* t, CGFloat x){ NSButton* b=[[NSButton alloc] initWithFrame:NSMakeRect(x,12,120,28)]; [b setTitle:t]; [b setBezelStyle:NSBezelStyleRounded]; return b; };
     NSButton* btn1=nil; NSButton* btn2=nil; CGFloat x=pad; if(mode==1){ btn1=makeBtn(@"Current tab",x); x+=130; btn2=makeBtn(@"New tab",x); x+=130; } else if(mode==2){ btn1=makeBtn(@"Last tab",x); x+=130; btn2=makeBtn(@"New tab",x); x+=130; } else { btn1=makeBtn(@"Open URL",x); x+=130; }
     NSButton* btnCancel=makeBtn(@"Cancel", rc.size.width-pad-120);
@@ -1985,7 +2073,19 @@ static bool Act_OpenUrlDialog(int /*flag*/)
     [content addSubview:lbl]; [content addSubview:edit]; [content addSubview:btn1]; if(btn2)[content addSubview:btn2]; [content addSubview:btnCancel];
     RWVUrlDlgHandler* h = [[RWVUrlDlgHandler alloc] init]; h.panel=panel; h.mode=mode; h.edit=edit; h.btn1=btn1; h.btn2=btn2; h.btnCancel=btnCancel; h.accepted=NO; h.token=nil;
     [btn1 setTarget:h]; [btn1 setAction:@selector(onClick:)]; if(btn2){ [btn2 setTarget:h]; [btn2 setAction:@selector(onClick:)]; } [btnCancel setTarget:h]; [btnCancel setAction:@selector(onClick:)];
-    [NSApp runModalForWindow:panel]; bool result=false; if(h.accepted){ NSString* s=[h.edit stringValue]; std::string url=s?[s UTF8String]:""; if(!url.empty() && url!="https://"){ std::string token = h.token? [h.token UTF8String] : "random"; char json[256]; snprintf(json,sizeof(json),"{\"InstanceId\":\"%s\"}", token.c_str()); LogF("[OpenURLDlg][mac] submit mode=%d token='%s' url='%s'", mode, token.c_str(), url.c_str()); API_WEBVIEW_Navigate(url.c_str(), json); result=true; } }
+
+    // Minimal theming (panel bg + label/edit text color only; leave buttons default, keep edit background system)
+    int bg=-1, tx=-1; GetPanelThemeColorsMac(&bg,&tx);
+    if (bg>=0) {
+      NSColor* bgCol=[NSColor colorWithCalibratedRed:((bg>>16)&0xFF)/255.0 green:((bg>>8)&0xFF)/255.0 blue:(bg&0xFF)/255.0 alpha:1.0];
+      if(bgCol) [panel setBackgroundColor:bgCol];
+    }
+    if (tx>=0) {
+      NSColor* txCol=[NSColor colorWithCalibratedRed:((tx>>16)&0xFF)/255.0 green:((tx>>8)&0xFF)/255.0 blue:(tx&0xFF)/255.0 alpha:1.0];
+      if(lbl) [lbl setTextColor:txCol];
+      if(edit) [edit setTextColor:txCol];
+    }
+  [NSApp runModalForWindow:panel]; bool result=false; if(h.accepted){ NSString* s=[h.edit stringValue]; std::string raw=s?[s UTF8String]:""; if(!raw.empty() && raw!="https://"){ std::string token = h.token? [h.token UTF8String] : "random"; std::string norm, ext, reason; bool embed=NormalizeOrDispatchURL(raw, norm, ext, reason); if(!embed && !ext.empty()){ LogF("[URL][DispatchExternal][DlgMac] '%s' reason=%s", raw.c_str(), reason.c_str()); @autoreleasepool { NSString* es=[NSString stringWithUTF8String:ext.c_str()]; if(es) [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:es]]; } result=true; } else if(embed && !norm.empty()){ if(norm!=raw) LogF("[URL][Normalize][DlgMac] '%s' -> '%s' reason=%s", raw.c_str(), norm.c_str(), reason.c_str()); char json[256]; snprintf(json,sizeof(json),"{\"InstanceId\":\"%s\"}", token.c_str()); LogF("[OpenURLDlg][mac] submit mode=%d token='%s' url='%s'", mode, token.c_str(), norm.c_str()); API_WEBVIEW_Navigate(norm.c_str(), json); result=true; } else { LogF("[URL][Ignore][DlgMac] '%s' reason=%s", raw.c_str(), reason.c_str()); } } }
     return result;
   }
 #endif
