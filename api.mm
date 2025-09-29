@@ -7,6 +7,11 @@
 #include "globals.h"  // Struct declarations / extern globals
 #include "helpers.h"  // Utilities (strings, domain, tabs)
 #include "log.h"      // Logging
+#ifdef _WIN32
+#include <shellapi.h>
+#else
+#import <AppKit/AppKit.h>
+#endif
 
 // ------------------------------------------------------------------
 // Registration helper without repeatedly typing the function name
@@ -43,6 +48,28 @@ static void* Vararg_WEBVIEW_Navigate(void** arglist, int numparms);
 // Single entry point: url + JSON options or "0"
 void API_WEBVIEW_Navigate(const char* url, const char* opts)
 {
+  // Normalize URL (or decide external dispatch) BEFORE any instance creation.
+  std::string normUrl; std::string externalUrl; std::string normReason;
+  if (url && *url) {
+    bool embed = NormalizeOrDispatchURL(url, normUrl, externalUrl, normReason);
+    if (!embed && !externalUrl.empty()) {
+      // Dispatch externally and return (do not open internal view)
+#ifdef _WIN32
+  // Use ANSI variant to avoid wide-char conversion boilerplate (externalUrl is UTF-8 but ShellExecuteA will treat as ANSI; acceptable for typical ASCII schemes/hosts). TODO: if full UTF-8 needed, convert to wide and use ShellExecuteW.
+  ShellExecuteA(NULL, "open", externalUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
+#else
+      @autoreleasepool { NSString* s=[NSString stringWithUTF8String:externalUrl.c_str()]; if(s) [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:s]]; }
+#endif
+      LogF("[URL][DispatchExternal][API] original='%s' reason='%s'", url, normReason.c_str());
+      url = nullptr; // prevent navigation below
+    } else if (embed && !normUrl.empty()) {
+      LogF("[URL][Normalize][API] '%s' -> '%s' reason=%s", url, normUrl.c_str(), normReason.c_str());
+      url = normUrl.c_str();
+    } else {
+      LogF("[URL][Ignore][API] invalid or placeholder '%s' reason=%s", url, normReason.c_str());
+      url = nullptr; // invalid
+    }
+  }
   // Parse options (without immediate application to globals)
   std::string newTitle;
   std::string newInstance;
