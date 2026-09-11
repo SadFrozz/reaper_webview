@@ -7,6 +7,30 @@ Format:
 - Newest entries on top.
 - Keep entries concise; detailed implementation notes go to commits/PRs.
 
+## v0.2.0 Beta
+### Added
+- `Plug-ins → WebView` settings page embedded directly into the REAPER Preferences window.
+- Global option to forward REAPER shortcuts while WebView is focused.
+- Per-instance shortcut-forwarding toggle for named instances in the context menu.
+- Copy, Cut, and Paste commands in the WebView context menu on Windows and macOS.
+- Option to open new WebView instances in the Docker.
+- Optional restoration of open instances when REAPER starts.
+- Configurable Home Page for the default WebView action.
+
+### Changed
+- Completely reorganized the source tree.
+- Updated CMake and GitHub Actions for the new directory and dependency structure.
+- WDL and reaper-sdk are now used as repository dependencies without being tied to a specific release version.
+
+### Fixed
+- Fixed the docking-state persistence regression introduced after version 0.1.1.
+- Escape closes the search bar even when its input field is focused.
+- Closing the search bar with Escape restores focus to the previously active page field.
+- Open URL on Windows immediately focuses and selects the address field.
+- Navigation and context-menu callbacks on macOS now target the WebView instance that originated the event.
+- Fixed a potential buffer overflow during UTF-8/UTF-16 conversion.
+- Per-window resources are released correctly when a WebView host is destroyed.
+
 ## v0.1.1 Beta
 ### Changed
 - macOS find bar: removed ad-hoc pixel shift constants; unified intrinsic vertical centering for controls.

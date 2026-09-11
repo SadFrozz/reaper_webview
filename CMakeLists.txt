@@ -1,171 +1,190 @@
-cmake_minimum_required(VERSION 3.10)
-project(reaper_webview)
+cmake_minimum_required(VERSION 3.20)
 
-# Подключаем стандартные модули
-include(CheckIncludeFile)
-include(CheckFunctionExists)
+project(reaper_webview VERSION 0.2.0 LANGUAGES C CXX)
 
-# Настройка путей
-set(SDK_PATH ${CMAKE_CURRENT_SOURCE_DIR}/sdk)
-set(WDL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/WDL)
+if(NOT WIN32 AND NOT APPLE)
+    message(FATAL_ERROR "reaper_webview currently supports Windows and macOS only")
+endif()
 
-# Добавляем include директории
-include_directories(${SDK_PATH})
-include_directories(${WDL_PATH})
-include_directories(${WDL_PATH}/swell)
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
 
-# Добавляем исходники
-set(SOURCES
-    main.mm
-    api.mm
-    helpers.mm
-    webview_win.cpp
-    webview_darwin.mm
-    globals.mm
+set(RWV_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/deps")
+set(RWV_REAPER_SDK_DIR "${RWV_DEPS_DIR}/reaper-sdk/sdk")
+set(RWV_WDL_DIR "${RWV_DEPS_DIR}/WDL/WDL")
+set(RWV_WIL_DIR "${RWV_DEPS_DIR}/wil/include")
+set(RWV_WEBVIEW2_SDK_DIR "${RWV_DEPS_DIR}/webview2-sdk")
+
+foreach(required_path IN ITEMS
+        "${RWV_REAPER_SDK_DIR}/reaper_plugin.h"
+        "${RWV_WDL_DIR}/wdltypes.h")
+    if(NOT EXISTS "${required_path}")
+        message(FATAL_ERROR "Missing required dependency: ${required_path}")
+    endif()
+endforeach()
+
+if(WIN32)
+    if(NOT EXISTS "${RWV_WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h")
+        set(RWV_WEBVIEW2_ARCHIVE "${CMAKE_CURRENT_BINARY_DIR}/Microsoft.Web.WebView2.zip")
+        file(MAKE_DIRECTORY "${RWV_WEBVIEW2_SDK_DIR}")
+        file(DOWNLOAD
+            "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2"
+            "${RWV_WEBVIEW2_ARCHIVE}"
+            TLS_VERIFY ON
+            STATUS RWV_WEBVIEW2_DOWNLOAD_STATUS
+        )
+        list(GET RWV_WEBVIEW2_DOWNLOAD_STATUS 0 RWV_WEBVIEW2_DOWNLOAD_CODE)
+        list(GET RWV_WEBVIEW2_DOWNLOAD_STATUS 1 RWV_WEBVIEW2_DOWNLOAD_MESSAGE)
+        if(NOT RWV_WEBVIEW2_DOWNLOAD_CODE EQUAL 0)
+            message(FATAL_ERROR "Failed to download Microsoft.Web.WebView2: ${RWV_WEBVIEW2_DOWNLOAD_MESSAGE}")
+        endif()
+        file(ARCHIVE_EXTRACT
+            INPUT "${RWV_WEBVIEW2_ARCHIVE}"
+            DESTINATION "${RWV_WEBVIEW2_SDK_DIR}"
+        )
+    endif()
+
+    foreach(required_path IN ITEMS
+            "${RWV_WIL_DIR}/wil/com.h"
+            "${RWV_WEBVIEW2_SDK_DIR}/build/native/include/WebView2.h"
+            "${RWV_WEBVIEW2_SDK_DIR}/build/native/x64/WebView2Loader.dll")
+        if(NOT EXISTS "${required_path}")
+            message(FATAL_ERROR "Missing required Windows dependency: ${required_path}")
+        endif()
+    endforeach()
+endif()
+
+set(RWV_SOURCES
+    src/main.mm
+    src/api.mm
+    src/helpers.mm
+    src/globals.mm
+    src/hotkeys.mm
+    src/settings.mm
 )
 
-# Windows-only resource script (breaks macOS/clang if added unconditionally)
-if (WIN32)
-    list(APPEND SOURCES resources.rc)
-endif()
-
-## Embedded PNG resources нужны только для macOS (Windows загружает через Win32 ресурсы)
-
-# Создаем библиотеку
-add_library(reaper_webview MODULE ${SOURCES})
-
-# Второй таргет: всегда с логами
-add_library(reaper_webview_debug MODULE ${SOURCES})
-target_compile_definitions(reaper_webview_debug PRIVATE ENABLE_LOG)
-
-# Настройки для разных платформ
-if(APPLE)
-    # ----- Embedded PNG resources (only macOS) -----
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
-    set(EMBED_INPUT_DIR ${CMAKE_SOURCE_DIR}/res)
-    set(EMBED_OUT_H ${CMAKE_BINARY_DIR}/embedded_resources.h)
-    set(EMBED_OUT_CPP ${CMAKE_BINARY_DIR}/embedded_resources.cpp)
-    add_custom_command(
-        OUTPUT ${EMBED_OUT_H} ${EMBED_OUT_CPP}
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/compile_resources.py ${EMBED_INPUT_DIR} ${EMBED_OUT_H} ${EMBED_OUT_CPP}
-        DEPENDS ${CMAKE_SOURCE_DIR}/tools/compile_resources.py
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Embedding PNG resources (macOS) from ${EMBED_INPUT_DIR}"
+if(WIN32)
+    list(APPEND RWV_SOURCES
+        src/platform/windows/webview_win.cpp
+        resources/windows/resources.rc
     )
-    add_custom_target(embed_res_mac ALL DEPENDS ${EMBED_OUT_H} ${EMBED_OUT_CPP})
-    include_directories(${CMAKE_BINARY_DIR})
-    target_sources(reaper_webview PRIVATE ${EMBED_OUT_CPP})
-    target_sources(reaper_webview_debug PRIVATE ${EMBED_OUT_CPP})
-    add_dependencies(reaper_webview embed_res_mac)
-    add_dependencies(reaper_webview_debug embed_res_mac)
-    set(SWELL_STUB ${CMAKE_SOURCE_DIR}/WDL/swell/swell-modstub.mm)
-    target_sources(reaper_webview PRIVATE ${SWELL_STUB})
-    target_sources(reaper_webview_debug PRIVATE ${SWELL_STUB})
-    target_compile_definitions(reaper_webview PRIVATE SWELL_PROVIDED_BY_APP)
-    target_compile_definitions(reaper_webview_debug PRIVATE SWELL_PROVIDED_BY_APP)
-    # Настройки для macOS
-    set_target_properties(reaper_webview PROPERTIES 
-        OUTPUT_NAME "reaper_webview"
-        SUFFIX ".dylib"
-        BUNDLE FALSE)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13")
-    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
-    find_library(COCOA_LIBRARY Cocoa)
-    find_library(WEBKIT_LIBRARY WebKit)
-    target_link_libraries(reaper_webview ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
-    #target_link_options(reaper_webview PRIVATE "-Wl,-undefined,dynamic_lookup")
-    target_compile_definitions(reaper_webview PRIVATE GA_PARENT=1)
-    target_compile_definitions(reaper_webview PRIVATE GA_ROOT=2)
-    target_compile_definitions(reaper_webview PRIVATE GA_ROOTOWNER=3)
+    # These shared files contain Objective-C++ only in Apple-only branches.
+    set_source_files_properties(
+        src/main.mm
+        src/api.mm
+        src/helpers.mm
+        src/globals.mm
+        src/hotkeys.mm
+        src/settings.mm
+        PROPERTIES LANGUAGE CXX
+    )
+else()
+    list(APPEND RWV_SOURCES src/platform/macos/webview_darwin.mm)
 
-    # debug-вариант (та же конфигурация, другое имя)
-    set_target_properties(reaper_webview_debug PROPERTIES 
-        OUTPUT_NAME "reaper_webview_debug"
-        SUFFIX ".dylib"
-        BUNDLE FALSE)
-    target_link_libraries(reaper_webview_debug ${COCOA_LIBRARY} ${WEBKIT_LIBRARY})
-    #target_link_options(reaper_webview_debug PRIVATE "-Wl,-undefined,dynamic_lookup")
-    target_compile_definitions(reaper_webview_debug PRIVATE GA_PARENT=1)
-    target_compile_definitions(reaper_webview_debug PRIVATE GA_ROOT=2)
-    target_compile_definitions(reaper_webview_debug PRIVATE GA_ROOTOWNER=3)
-elseif(WIN32)
-    # Настройки для Windows
-    set_target_properties(reaper_webview PROPERTIES
-        SUFFIX ".dll"
-        CXX_STANDARD 20
-        CXX_STANDARD_REQUIRED YES
-        CXX_EXTENSIONS NO)
-    
-    # Добавляем пути к зависимостям WebView2 и WIL
-    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/deps)
-    
-    target_compile_definitions(reaper_webview PRIVATE 
-        _WIN32_WINNT=0x0601
-        NOMINMAX
-        WIN32_LEAN_AND_MEAN
-        _CRT_SECURE_NO_WARNINGS
-        UNICODE
-        _UNICODE)
-    
-    # Добавляем линковку с WebView2
-    target_link_libraries(reaper_webview 
-        comctl32 
-        ole32 
-        version 
-        shlwapi
-        user32
-        msimg32
-        oleaut32
-        advapi32)
-    
-    # Копируем WebView2Loader.dll или используем статическую линковку
-    # Для начала попробуем найти статическую библиотеку
-    find_library(WEBVIEW2_LIB 
-        NAMES WebView2LoaderStatic.lib WebView2Loader.lib
-        PATHS ${CMAKE_CURRENT_SOURCE_DIR}/webview2-sdk/build/native)
-    
-    if(WEBVIEW2_LIB)
-        message(STATUS "Found WebView2 library: ${WEBVIEW2_LIB}")
-        target_link_libraries(reaper_webview ${WEBVIEW2_LIB})
-    else()
-        message(WARNING "WebView2 library not found, trying to link dynamically")
-        # Динамическая линковка через LoadLibrary
-        target_compile_definitions(reaper_webview PRIVATE USE_WEBVIEW2_LOADER_DYNAMIC)
-    endif()
-
-    # debug-вариант (идентичные дефайны/линковка + .dll суффикс)
-    set_target_properties(reaper_webview_debug PROPERTIES
-        SUFFIX ".dll"
-        CXX_STANDARD 20
-        CXX_STANDARD_REQUIRED YES
-        CXX_EXTENSIONS NO)
-    target_compile_definitions(reaper_webview_debug PRIVATE 
-        _WIN32_WINNT=0x0601
-        NOMINMAX
-        WIN32_LEAN_AND_MEAN
-        _CRT_SECURE_NO_WARNINGS
-        UNICODE
-        _UNICODE)
-    target_link_libraries(reaper_webview_debug 
-        comctl32 
-        ole32 
-        version 
-        shlwapi
-        user32
-        msimg32
-        oleaut32
-        advapi32)
-    if(WEBVIEW2_LIB)
-        target_link_libraries(reaper_webview_debug ${WEBVIEW2_LIB})
-    else()
-        target_compile_definitions(reaper_webview_debug PRIVATE USE_WEBVIEW2_LOADER_DYNAMIC)
-    endif()
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(RWV_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    set(RWV_EMBEDDED_HEADER "${RWV_GENERATED_DIR}/embedded_resources.h")
+    set(RWV_EMBEDDED_SOURCE "${RWV_GENERATED_DIR}/embedded_resources.cpp")
+    add_custom_command(
+        OUTPUT "${RWV_EMBEDDED_HEADER}" "${RWV_EMBEDDED_SOURCE}"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/compile_resources.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/resources/images" "${RWV_EMBEDDED_HEADER}" "${RWV_EMBEDDED_SOURCE}"
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/compile_resources.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/resources/images/search_prev.png"
+                "${CMAKE_CURRENT_SOURCE_DIR}/resources/images/search_next.png"
+        COMMENT "Embedding macOS PNG resources"
+        VERBATIM
+    )
+    list(APPEND RWV_SOURCES
+        "${RWV_EMBEDDED_SOURCE}"
+        "${RWV_WDL_DIR}/swell/swell-modstub.mm"
+    )
 endif()
 
-# Установка выходного директория
-set_target_properties(reaper_webview PROPERTIES 
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-set_target_properties(reaper_webview_debug PROPERTIES 
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+function(rwv_configure_target target_name enable_logging)
+    add_library(${target_name} MODULE ${RWV_SOURCES})
+
+    target_compile_features(${target_name} PRIVATE cxx_std_20)
+    target_include_directories(${target_name} PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include/reaper_webview"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows"
+        "${RWV_REAPER_SDK_DIR}"
+        "${RWV_WDL_DIR}"
+        "${RWV_WDL_DIR}/swell"
+    )
+    set_target_properties(${target_name} PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "${target_name}"
+        CXX_EXTENSIONS OFF
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+    )
+
+    if(enable_logging)
+        target_compile_definitions(${target_name} PRIVATE ENABLE_LOG)
+    endif()
+
+    if(APPLE)
+        target_include_directories(${target_name} PRIVATE "${RWV_GENERATED_DIR}")
+        target_compile_definitions(${target_name} PRIVATE
+            SWELL_PROVIDED_BY_APP
+            GA_PARENT=1
+            GA_ROOT=2
+            GA_ROOTOWNER=3
+        )
+        target_link_libraries(${target_name} PRIVATE
+            "-framework Cocoa"
+            "-framework WebKit"
+        )
+        set_target_properties(${target_name} PROPERTIES SUFFIX ".dylib" BUNDLE FALSE)
+    else()
+        set(webview2_include "${RWV_WEBVIEW2_SDK_DIR}/build/native/include")
+        if(NOT EXISTS "${webview2_include}/WebView2.h")
+            # Backward-compatible local layout used by older checkouts.
+            set(webview2_include "${RWV_DEPS_DIR}")
+        endif()
+        target_include_directories(${target_name} PRIVATE
+            "${webview2_include}"
+            "${RWV_WIL_DIR}"
+        )
+        target_compile_definitions(${target_name} PRIVATE
+            _WIN32_WINNT=0x0601
+            NOMINMAX
+            WIN32_LEAN_AND_MEAN
+            _CRT_SECURE_NO_WARNINGS
+            UNICODE
+            _UNICODE
+        )
+        target_link_libraries(${target_name} PRIVATE
+            comctl32 ole32 version shlwapi user32 msimg32 oleaut32 advapi32 windowscodecs
+        )
+        set_target_properties(${target_name} PROPERTIES SUFFIX ".dll")
+    endif()
+endfunction()
+
+rwv_configure_target(reaper_webview FALSE)
+rwv_configure_target(reaper_webview_debug TRUE)
+
+if(WIN32)
+    find_library(RWV_WEBVIEW2_LOADER_LIBRARY
+        NAMES WebView2LoaderStatic WebView2Loader
+        PATHS
+            "${RWV_WEBVIEW2_SDK_DIR}/build/native"
+            "${RWV_WEBVIEW2_SDK_DIR}/build/native/x64"
+            "${RWV_WEBVIEW2_SDK_DIR}/build/native/x86"
+        NO_DEFAULT_PATH
+    )
+    foreach(target_name IN ITEMS reaper_webview reaper_webview_debug)
+        if(RWV_WEBVIEW2_LOADER_LIBRARY)
+            target_link_libraries(${target_name} PRIVATE "${RWV_WEBVIEW2_LOADER_LIBRARY}")
+        else()
+            target_compile_definitions(${target_name} PRIVATE USE_WEBVIEW2_LOADER_DYNAMIC)
+        endif()
+    endforeach()
+endif()
+
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS version")
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures")
+endif()

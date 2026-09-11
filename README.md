@@ -47,7 +47,12 @@ Embed modern web content (Edge WebView2 on Windows / WKWebView on macOS) inside 
 * Windows (WebView2) и macOS (WKWebView)
 * Несколько инстансов: `wv_default`, `random`, свои `wv_*`
 * Переопределение заголовка вкладки / окна
-* Док / плавающее окно, минимальное контекстное меню
+* Док / плавающее окно с восстановлением размера и позиции
+* Расширенное контекстное меню с Copy / Cut / Paste и минимальный режим
+* Передача хоткеев в главную таблицу действий REAPER без перехвата ввода в HTML-полях
+* Глобальное управление пробросом в Preferences и сохраняемый toggle для каждого именованного instance в контекстном меню
+* Настраиваемая домашняя страница и опциональное восстановление открытых (в том числе docked) инстансов при запуске
+  * Если протокол домашней страницы не указан, автоматически используется `https://`.
 * Поиск по странице (Ctrl+F / Cmd+F) с подсветкой всех совпадений, счётчиком и циклической навигацией
 * Ограничение 5000 подсветок (macOS) + fallback-подсчёт
 * Логирование (debug таргет)
@@ -91,16 +96,12 @@ cp build/reaper_webview_debug.dylib "~/Library/Application Support/REAPER/UserPl
 Таргеты: `reaper_webview` (Release), `reaper_webview_debug` (логирование).
 
 ### Зависимости
-Минимум для Windows в `deps/`:
+WDL, REAPER Extension SDK и WIL подключены как git submodules по схеме референсного проекта. WebView2 SDK распространяется Microsoft через NuGet и автоматически загружается CMake в `deps/webview2-sdk/` при конфигурации Windows:
 ```
-WebView2.h
-WebView2EnvironmentOptions.h
-wil/ (опционально)
-```
-Прочее:
-```
-sdk/  (REAPER Extension SDK)
-WDL/  (WDL + SWELL + LICE)
+deps/reaper-sdk/     (git submodule: REAPER Extension SDK)
+deps/WDL/            (git submodule: WDL + SWELL + LICE)
+deps/wil/            (git submodule: Windows Implementation Library)
+deps/webview2-sdk/   (Microsoft WebView2 SDK NuGet package, downloaded by CMake)
 ```
 Определите `RWV_WITH_WEBVIEW2` в исходнике, который действительно требует WebView2.
 
@@ -109,21 +110,32 @@ Windows: нативный API WebView2.
 macOS: JS helper `window.__rwvFind` (ограничение 5000, fallback подсчёт, повторное построение только при устаревании кэша).
 
 ### Структура файлов
+```
+src/                    исходники расширения
+  platform/windows/     реализация WebView2
+  platform/macos/       реализация WKWebView
+include/reaper_webview/ заголовки расширения
+resources/images/       общие изображения
+resources/windows/      Windows RC-ресурсы
+cmake/                  вспомогательные скрипты конфигурации/генерации
+examples/               примеры ReaScript
+deps/                   сторонние SDK и исходники
+```
+
 | Слой | Файлы | Назначение |
 |------|-------|-----------|
-| Точка входа | `main.mm` | Регистрация, жизненный цикл |
-| API | `api.*` | Реализация `WEBVIEW_Navigate` |
-| Глобалы | `globals.*` | Инстансы, фокус |
-| Хелперы | `helpers.*` | Парсинг опций, утилиты |
-| Windows | `webview_win.cpp` | WebView2 + поиск |
-| macOS | `webview_darwin.mm` | WKWebView + JS поиск |
-| Include hub | `predef.h` | Централизация инклюдов |
-| Логирование | `log.h` | Debug логгер |
+| Точка входа | `src/main.mm` | Регистрация, жизненный цикл |
+| API | `src/api.mm` | Реализация `WEBVIEW_Navigate` |
+| Состояние | `src/globals.mm` | Инстансы, фокус |
+| Хелперы | `src/helpers.mm` | Парсинг опций, утилиты |
+| Настройки | `src/settings.mm` | Страница Preferences и сохранение параметров |
+| Хоткеи | `src/hotkeys.mm` | Передача сочетаний клавиш в REAPER |
+| Windows | `src/platform/windows/` | WebView2 + поиск |
+| macOS | `src/platform/macos/` | WKWebView + JS поиск |
+| Заголовки | `include/reaper_webview/` | Внутренние интерфейсы расширения |
 
 ### Roadmap (RU)
-* Добавление настроек WebView в GUI-окно настроек REAPER
-* Добавление возможности использования ReaRoute
-* Реализация в контекстном меню функций "копировать", "вырезать" и "вставить"
+* Маршрутизация аудио WebView в аудиограф REAPER/ReaRoute. Требует отдельного захвата PCM на каждой платформе; WebView2 и WKWebView не предоставляют прямой PCM-output API.
 
 ### Лицензия
 MIT (см. `LICENSE`).
@@ -145,8 +157,12 @@ Embeds a modern web engine (WebView2 / WKWebView) into REAPER: dockable / floati
 * Windows (WebView2) + macOS (WKWebView)
 * Multiple instances: `wv_default`, `random`, custom `wv_*`
 * Title override per instance & focus tracking
-* Dock / floating integration with REAPER docker
-* Minimal optional context menu
+* Dock / floating integration with placement restoration
+* Extended context menu with Copy / Cut / Paste and an optional minimal mode
+* REAPER shortcut forwarding without stealing input from HTML editors
+* Global forwarding control in Preferences plus a persisted context-menu toggle for each named instance
+* Configurable home page and optional startup restoration for open instances, including docked instances
+  * Home-page addresses without a protocol automatically use `https://`.
 * Unified find (Ctrl+F / Cmd+F) highlight‑all + counter + wrap
 * 5000 highlight cap (macOS) + fallback counting
 * Debug logging build target
@@ -190,16 +206,12 @@ cp build/reaper_webview_debug.dylib "~/Library/Application Support/REAPER/UserPl
 Targets: `reaper_webview` (Release), `reaper_webview_debug` (logging).
 
 ### Dependencies
-Minimum (Windows) in `deps/`:
+WDL, the REAPER Extension SDK, and WIL are git submodules, following the reference project's dependency layout. Microsoft distributes the WebView2 SDK through NuGet, so CMake downloads it automatically into `deps/webview2-sdk/` when configuring Windows:
 ```
-WebView2.h
-WebView2EnvironmentOptions.h
-wil/ (optional)
-```
-Other trees:
-```
-sdk/  (REAPER SDK)
-WDL/  (WDL + SWELL + LICE)
+deps/reaper-sdk/     (git submodule: REAPER Extension SDK)
+deps/WDL/            (git submodule: WDL + SWELL + LICE)
+deps/wil/            (git submodule: Windows Implementation Library)
+deps/webview2-sdk/   (Microsoft WebView2 SDK NuGet package, downloaded by CMake)
 ```
 Define `RWV_WITH_WEBVIEW2` before including `predef.h` only where WebView2/WIL needed.
 
@@ -211,21 +223,32 @@ Define `RWV_WITH_WEBVIEW2` before including `predef.h` only where WebView2/WIL n
 | Navigation | Native wrap | Local index + JS spans |
 
 ### File-Layout
+```
+src/                    extension sources
+  platform/windows/     WebView2 implementation
+  platform/macos/       WKWebView implementation
+include/reaper_webview/ extension headers
+resources/images/       shared images
+resources/windows/      Windows RC resources
+cmake/                  configure-time and generation helpers
+examples/               ReaScript examples
+deps/                   third-party SDKs and sources
+```
+
 | Layer | Files | Purpose |
 |-------|-------|---------|
-| Entry | `main.mm` | Plugin entry / lifecycle |
-| API | `api.*` | `WEBVIEW_Navigate` export |
-| Globals | `globals.*` | Instance registry / focus |
-| Helpers | `helpers.*` | Option parsing & utils |
-| Windows | `webview_win.cpp` | WebView2 + native find |
-| macOS | `webview_darwin.mm` | WKWebView + JS find |
-| Include Hub | `predef.h` | Aggregated includes |
-| Logging | `log.h` | Debug logger |
+| Entry | `src/main.mm` | Plugin entry / lifecycle |
+| API | `src/api.mm` | `WEBVIEW_Navigate` export |
+| State | `src/globals.mm` | Instance registry / focus |
+| Helpers | `src/helpers.mm` | Option parsing and utilities |
+| Settings | `src/settings.mm` | Preferences page and persisted options |
+| Hotkeys | `src/hotkeys.mm` | REAPER shortcut forwarding |
+| Windows | `src/platform/windows/` | WebView2 and native find |
+| macOS | `src/platform/macos/` | WKWebView and JS find |
+| Headers | `include/reaper_webview/` | Internal extension interfaces |
 
 ### Roadmap
-* Expose WebView-specific settings inside REAPER's preferences dialog
-* Support using ReaRoute within embedded webview contexts
-* Implement context menu actions: Copy, Cut, Paste
+* Route WebView audio into REAPER/ReaRoute. This requires platform-specific PCM capture because WebView2 and WKWebView don't expose a direct PCM-output API.
 
 ### License
 MIT (see `LICENSE`). Third‑party components keep original licenses.

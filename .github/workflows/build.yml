@@ -1,225 +1,213 @@
-name: Build WebView Plugin
+name: Build and release
 
 on:
   push:
-    branches:
-      - main
-    tags:
-      - 'v*'
+    branches: ["**"]
+    tags: ["v*"]
   pull_request:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
-  contents: write  # allow creating releases
-  actions: read
-  checks: read
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        os: [macos-latest, windows-latest]
-      fail-fast: false  # Не останавливать все jobs если одна упала
-    runs-on: ${{ matrix.os }}
-    continue-on-error: true  # Продолжать даже при ошибке
-
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 25
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        token: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Ensure Python (macOS)
-      if: runner.os == 'macOS'
-      run: python3 --version
-
-    - name: Install Windows dependencies
-      if: runner.os == 'Windows'
-      shell: pwsh
-      timeout-minutes: 10
-      run: |
-        # Скачиваем и распаковываем WebView2 SDK
-        Write-Host "Downloading WebView2 SDK..."
-        Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2" -OutFile "webview2.zip" -TimeoutSec 300
-        Expand-Archive -Path "webview2.zip" -DestinationPath "webview2-sdk" -Force
-        
-        # Скачиваем и распаковываем WIL
-        Write-Host "Downloading WIL..."
-        Invoke-WebRequest -Uri "https://github.com/microsoft/wil/archive/refs/heads/master.zip" -OutFile "wil.zip" -TimeoutSec 300
-        Expand-Archive -Path "wil.zip" -DestinationPath "wil" -Force
-        
-        # Копируем заголовочные файлы в нужные директории
-        New-Item -ItemType Directory -Path "deps" -Force
-        Copy-Item -Path "webview2-sdk/build/native/include/*" -Destination "deps/" -Recurse -Force
-        Copy-Item -Path "wil/wil-master/include/*" -Destination "deps/" -Recurse -Force
-
-    - name: Configure CMake (Unix)
-      if: runner.os != 'Windows'
-      run: cmake --preset macos-universal
-
-    - name: Check Windows dependencies
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        Write-Host "Checking WebView2 headers..."
-        if (Test-Path "deps/WebView2.h") {
-          Write-Host "✓ WebView2.h found"
-        } else {
-          Write-Host "✗ WebView2.h missing"
-          exit 1
-        }
-        
-        Write-Host "Checking WIL headers..."
-        if (Test-Path "deps/wil") {
-          Write-Host "✓ WIL headers found"
-        } else {
-          Write-Host "✗ WIL headers missing"
-          exit 1
-        }
-
-    - name: Configure CMake (Windows)
-      if: runner.os == 'Windows'
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_LOG=OFF
-
-    - name: Build (Unix)
-      if: runner.os != 'Windows'
-      run: cmake --build --preset macos-universal --target reaper_webview reaper_webview_debug
-
-    - name: Build (Windows)
-      if: runner.os == 'Windows'
-      run: cmake --build build --config Release --target reaper_webview reaper_webview_debug
-
-    # --- WINDOWS ARTIFACT ---
-    - name: Prepare Windows Artifact
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        $loader = "webview2-sdk/runtimes/win-x64/native/WebView2Loader.dll"
-        if (Test-Path $loader) {
-          Write-Host "Copying WebView2Loader.dll to build/Release/"
-          Copy-Item -Path $loader -Destination "build/Release/" -Force
-        } else {
-          Write-Host "WebView2Loader.dll not found (likely static linking). Skipping."
-        }
-        
-    - name: Upload Windows artifact
-      if: runner.os == 'Windows'
-      uses: actions/upload-artifact@v4
-      with:
-        name: reaper-webview-windows-x64
-        path: |
-          build/Release/reaper_webview.dll
-          build/Release/reaper_webview_debug.dll
-          build/Release/WebView2Loader.dll
-        if-no-files-found: warn
-        retention-days: 7
-
-    # --- MACOS ARTIFACT ---
-    - name: Prepare macOS Artifact
-      if: runner.os == 'macOS'
-      run: |
-        mv build/libreaper_webview.dylib build/reaper_webview.dylib 2>/dev/null || true
-        mv build/libreaper_webview_debug.dylib build/reaper_webview_debug.dylib 2>/dev/null || true
-
-    - name: Upload macOS artifact
-      if: runner.os == 'macOS'
-      uses: actions/upload-artifact@v4
-      with:
-        name: reaper-webview-macos-universal
-        path: |
-          build/reaper_webview.dylib
-          build/reaper_webview_debug.dylib
-        if-no-files-found: error
-        retention-days: 7
-
-  release-from-tag:
-    name: Create Release from Tag
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository (for CHANGELOG)
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
         with:
-          submodules: false
-          fetch-depth: 0
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
+          submodules: recursive
+
+      - name: Configure
+        run: cmake --preset windows-x64
+
+      - name: Build release and debug libraries
+        run: cmake --build --preset windows-x64 --config Release --target reaper_webview reaper_webview_debug --parallel
+
+      - name: Read project version
+        id: version
+        shell: pwsh
+        run: |
+          $text = Get-Content CMakeLists.txt -Raw
+          $match = [regex]::Match($text, 'project\(reaper_webview VERSION ([0-9]+\.[0-9]+\.[0-9]+)')
+          if (-not $match.Success) { throw 'Project version was not found' }
+          "value=$($match.Groups[1].Value)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Package Windows libraries
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path stage, packages -Force | Out-Null
+          Copy-Item -LiteralPath "build/Release/reaper_webview.dll" -Destination "stage/reaper_webview.dll"
+          Copy-Item -LiteralPath "build/Release/reaper_webview_debug.dll" -Destination "stage/reaper_webview_debug.dll"
+          Copy-Item -LiteralPath "deps/webview2-sdk/build/native/x64/WebView2Loader.dll" -Destination "stage/WebView2Loader.dll"
+          Copy-Item -LiteralPath "README.md" -Destination "stage/README.md"
+          Copy-Item -LiteralPath "LICENSE" -Destination "stage/LICENSE"
+
+          $checksumLines = foreach ($file in Get-ChildItem -LiteralPath stage -File) {
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+          $checksumLines | Set-Content -LiteralPath "stage/SHA256SUMS.txt" -Encoding ascii
+
+          $archive = "packages/Reaper-WebView-${{ steps.version.outputs.value }}-windows-x64.zip"
+          Compress-Archive -Path "stage/*" -DestinationPath $archive
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v7
         with:
           name: reaper-webview-windows-x64
-          path: artifacts/windows
+          path: packages/*.zip
+          if-no-files-found: error
 
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
+  macos:
+    name: macOS Universal
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake --preset macos-universal
+
+      - name: Build release and debug libraries
+        run: cmake --build --preset macos-universal --target reaper_webview reaper_webview_debug --parallel
+
+      - name: Read project version
+        id: version
+        shell: bash
+        run: |
+          version="$(sed -nE 's/^project\(reaper_webview VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt)"
+          test -n "$version"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Package macOS libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p stage packages
+          cp build/reaper_webview.dylib stage/reaper_webview.dylib
+          cp build/reaper_webview_debug.dylib stage/reaper_webview_debug.dylib
+          lipo stage/reaper_webview.dylib -verify_arch x86_64 arm64
+          lipo stage/reaper_webview_debug.dylib -verify_arch x86_64 arm64
+          codesign --force --sign - stage/reaper_webview.dylib
+          codesign --force --sign - stage/reaper_webview_debug.dylib
+          codesign --verify --strict stage/reaper_webview.dylib
+          codesign --verify --strict stage/reaper_webview_debug.dylib
+          cp README.md LICENSE stage/
+          (cd stage && shasum -a 256 reaper_webview.dylib reaper_webview_debug.dylib README.md LICENSE > SHA256SUMS.txt)
+          ditto -c -k --sequesterRsrc stage \
+            "packages/Reaper-WebView-${{ steps.version.outputs.value }}-macos-universal.zip"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v7
         with:
           name: reaper-webview-macos-universal
-          path: artifacts/macos
+          path: packages/*.zip
+          if-no-files-found: error
 
-      - name: Repackage artifacts
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Verify tag matches project version
+        shell: bash
         run: |
-          set -e
-          mkdir dist
-          cd artifacts/windows
-          zip -r ../../dist/reaper_webview_windows.zip .
-          cd ../../artifacts/macos
-          zip -r ../../dist/reaper_webview_macos.zip .
-          cd ../../dist
-          sha256sum * > SHA256SUMS.txt || shasum -a 256 * > SHA256SUMS.txt
+          project_version="$(sed -nE 's/^project\(reaper_webview VERSION ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' CMakeLists.txt)"
+          tag_version="${GITHUB_REF_NAME#v}"
+          tag_base="${tag_version%%-*}"
+          test -n "$project_version"
+          if [[ "$tag_base" != "$project_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match project version $project_version" >&2
+            exit 1
+          fi
 
-      - name: Generate Release Notes
+      - name: Build release notes from changelog
         id: notes
+        shell: bash
         run: |
-          set -e
-          TAG="${GITHUB_REF_NAME}" # e.g. v0.1.0
-          CHANGELOG_SECTION=""
-          if [ -f CHANGELOG.md ]; then
-            # Extract lines from the matching version header until next version header or EOF
-            # Supports headings like '## v0.1.0' optionally followed by status words.
-            CHANGELOG_SECTION=$(awk -v tag="$TAG" 'BEGIN{found=0} /^## / { if(found){ exit } } $0 ~ "^## "tag { found=1; next } found { print }' CHANGELOG.md | sed '/^---$/d')
-          fi
-          if [ -z "$CHANGELOG_SECTION" ]; then
-            CHANGELOG_SECTION="(No specific changelog section found for $TAG)"
-          fi
+          set -euo pipefail
+          awk -v tag="$GITHUB_REF_NAME" '
+            $0 ~ "^## " tag "([[:space:]]|$)" { found=1; next }
+            found && /^## / { exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > changelog-section.md
 
-          # Detect prerelease markers (Beta/Alpha) in the CHANGELOG header line for this tag
-          PRERELEASE=false
-          if grep -E "^## ${TAG} (Alpha|Beta)" CHANGELOG.md >/dev/null 2>&1; then
-            PRERELEASE=true
+          if [[ ! -s changelog-section.md ]]; then
+            echo "Changelog section for $GITHUB_REF_NAME is missing or empty" >&2
+            exit 1
           fi
 
           {
-            echo "release_body<<EOF"
-            echo "Reaper WebView Extension"
-            echo ""
-            echo "Tag: $TAG"
-            if [ "$PRERELEASE" = true ]; then echo "(Pre-release)"; fi
-            echo ""
-            echo "Changelog:"; echo ""; echo "$CHANGELOG_SECTION" | sed 's/^/  /'
-            echo ""
-            echo "Artifacts:"
-            echo "- reaper_webview_windows.zip (Release + Debug DLLs + optional WebView2Loader)"
-            echo "- reaper_webview_macos.zip (Universal Release + Debug dylibs)"
-            echo ""
-            echo "SHA256 sums included in SHA256SUMS.txt"
-            echo ""
-            echo "Install: copy the appropriate binary into REAPER UserPlugins (see README)."
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
+            echo "# Reaper WebView Extension $GITHUB_REF_NAME"
+            echo
+            cat changelog-section.md
+            echo
+            echo "## Installation"
+            echo
+            echo "Download the archive for your platform and copy its contents to the REAPER UserPlugins directory."
+          } > release-notes.md
 
-          echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
+          prerelease=false
+          if [[ "$GITHUB_REF_NAME" == *-* ]] || \
+             grep -Eq "^## ${GITHUB_REF_NAME}[[:space:]]+(Alpha|Beta|RC)([[:space:]]|$)" CHANGELOG.md; then
+            prerelease=true
+          fi
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Download Windows package
+        uses: actions/download-artifact@v8
         with:
-          name: Reaper WebView ${{ github.ref_name }}
-          body: ${{ steps.notes.outputs.release_body }}
-          draft: false
-          prerelease: ${{ steps.notes.outputs.prerelease }}
-          files: |
-            dist/reaper_webview_windows.zip
-            dist/reaper_webview_macos.zip
-            dist/SHA256SUMS.txt
+          name: reaper-webview-windows-x64
+          path: release-assets
+
+      - name: Download macOS package
+        uses: actions/download-artifact@v8
+        with:
+          name: reaper-webview-macos-universal
+          path: release-assets
+
+      - name: Create release checksums
+        shell: bash
+        run: (cd release-assets && sha256sum *.zip > SHA256SUMS.txt)
+
+      - name: Create or update GitHub Release
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.notes.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          prerelease_args=()
+          if [[ "$PRERELEASE" == "true" ]]; then prerelease_args=(--prerelease); fi
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "Reaper WebView $GITHUB_REF_NAME" \
+              --notes-file release-notes.md \
+              "${prerelease_args[@]}"
+            gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release-assets/* \
+              --verify-tag \
+              --title "Reaper WebView $GITHUB_REF_NAME" \
+              --notes-file release-notes.md \
+              "${prerelease_args[@]}"
+          fi

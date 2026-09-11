@@ -1,0 +1,34 @@
+// Reaper WebView Plugin
+// (c) Andrew "SadFrozz" Brodsky
+// 2025 and later
+// resource.rc
+
+
+#include "resource.h"
+#include <winres.h>
+
+IDR_PNG_SEARCH_PREV RCDATA "../images/search_prev.png"
+IDR_PNG_SEARCH_NEXT RCDATA "../images/search_next.png"
+
+IDD_RWV_PREFERENCES DIALOGEX 0, 0, 300, 164
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
+EXSTYLE WS_EX_CONTROLPARENT
+FONT 9, "Segoe UI"
+BEGIN
+    GROUPBOX        "Input and shortcuts", IDC_RWV_INPUT_GROUP, 8, 4, 284, 38
+    CONTROL         "Forward REAPER shortcuts while WebView is focused", IDC_RWV_FORWARD_HOTKEYS,
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 18, 15, 264, 12
+    CONTROL         "Show Copy, Cut and Paste in the custom context menu", IDC_RWV_CLIPBOARD_MENU,
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 18, 28, 264, 12
+    GROUPBOX        "New WebView instances", IDC_RWV_INSTANCES_GROUP, 8, 48, 284, 44
+    CONTROL         "Dock newly created instances by default", IDC_RWV_START_DOCKED,
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 18, 59, 264, 12
+    LTEXT           "Home page:", IDC_RWV_HOME_LABEL, 18, 76, 40, 10
+    EDITTEXT        IDC_RWV_HOME_PAGE, 60, 73, 222, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    GROUPBOX        "Startup restoration", IDC_RWV_RESTORE_GROUP, 8, 98, 284, 42
+    CONTROL         "Restore open instances on startup", IDC_RWV_RESTORE_INSTANCES,
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 18, 109, 264, 12
+    CONTROL         "Restore named instances only", IDC_RWV_RESTORE_NAMED,
+                    "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 28, 122, 254, 12
+    LTEXT           "Instance-specific API options override the global defaults above.", IDC_RWV_NOTE, 18, 146, 270, 12
+END

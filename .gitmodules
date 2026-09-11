@@ -1,0 +1,9 @@
+[submodule "deps/reaper-sdk"]
+	path = deps/reaper-sdk
+	url = https://github.com/justinfrankel/reaper-sdk.git
+[submodule "deps/WDL"]
+	path = deps/WDL
+	url = https://github.com/justinfrankel/WDL.git
+[submodule "deps/wil"]
+	path = deps/wil
+	url = https://github.com/microsoft/wil.git
